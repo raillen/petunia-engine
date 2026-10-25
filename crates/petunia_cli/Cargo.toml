@@ -1,0 +1,28 @@
+[package]
+name = "petunia_cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "The `petunia` command line: new, check, run, schema."
+
+[[bin]]
+name = "petunia"
+path = "src/main.rs"
+
+[features]
+# `window` pulls in winit, glutin and OpenGL. Build with `--no-default-features` for a fast,
+# headless `new`, `check` and `schema` (build-time lever, experiment S0).
+default = ["window"]
+window = ["dep:petunia_player"]
+
+[dependencies]
+petunia_commands.workspace = true
+petunia_player = { workspace = true, optional = true }
+petunia_project.workspace = true
+petunia_script.workspace = true
+petunia_schema.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

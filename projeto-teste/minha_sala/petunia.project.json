@@ -1,0 +1,6 @@
+{
+  "format_version": 1,
+  "name": "minha_sala",
+  "default_scene": "scenes/room.scene.json",
+  "scripting_language": "aipo"
+}

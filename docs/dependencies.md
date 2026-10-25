@@ -1,0 +1,80 @@
+# Registro de dependências
+
+**Revisão:** 2026-10-24 · Regra do `AGENTS.md`: toda dependência direta entra aqui **antes** de entrar no `Cargo.toml`. `cargo xtask check-dependencies` *(planejado)* vai exigir isso automaticamente.
+
+Versões: as resolvidas pelo `Cargo.lock` em 2026-10-24. O `Cargo.lock` completo tem **212 pacotes** (o do Petunia3D tem 379).
+
+## Resumo (TL;DR)
+
+8 dependências diretas do Cargo. Quatro fazem o trabalho de plataforma e ficam **atrás de adaptadores** (`petunia_render_gl` e `petunia_player`). As outras quatro são utilitários (serialização e erros). O editor soma **dependências do sistema** (Qt, CMake), listadas mais abaixo.
+
+## Registro
+
+| Dependência | Versão | Para que serve | Onde (adaptador) | Licença | Alternativa | Custo de remover |
+|---|---|---|---|---|---|---|
+| `serde` | 1.0.229 | Ler e gravar valores (`Vec3`, `Color`, projetos, schema) | Crates de domínio (derive) | MIT/Apache-2.0 | Escrever à mão | Alto: o formato de arquivos depende dela |
+| `serde_json` | 1.0.154 | Formato de texto dos projetos, comandos e schema | `petunia_world`, `petunia_schema`, `petunia_commands`, `petunia_project` | MIT/Apache-2.0 | `miniserde`, `simd-json` | Médio |
+| `thiserror` | 2.0.21 | Tipos de erro com mensagem | Todos os crates com erros | MIT/Apache-2.0 | Escrever `Display` à mão | Baixo |
+| `glow` | 0.18.0 | Chamadas OpenGL seguras o bastante | **`petunia_render_gl`** (único) | MIT/Apache-2.0/Zlib | `glium`, `wgpu` (plano B) | Médio: o renderer depende dela |
+| `winit` | 0.30.13 | Janela e eventos de teclado e mouse | **`petunia_player`** (único) | Apache-2.0 | SDL3 | Médio |
+| `glutin` | 0.32.3 | Criar o contexto OpenGL 3.3 | **`petunia_player`** (único) | Apache-2.0 | SDL3 | Médio |
+| `glutin-winit` | 0.5.0 | Liga o `glutin` ao `winit` | **`petunia_player`** (único) | MIT | Fazer à mão | Baixo |
+| `raw-window-handle` | 0.6.2 | Tipo comum entre janela e contexto | **`petunia_player`** (único) | MIT/Apache-2.0/Zlib | — | Baixo |
+
+## Observações
+
+- **`glutin` está há mais de um ano sem release** (0.32.3, 2025-04-30). Vigiar; plano B: binding de SDL3.
+- **Duplicações transitivas no `Cargo.lock`:** avisadas com `multiple-versions = "warn"` no `cargo deny check bans`:
+  - `thiserror` e `thiserror-impl`: 2.0.21 direta nossa e 1.0.69 puxada transitivamente por `sctk-adwaita` / `calloop` (via `winit`).
+  - `syn`: 3.0.9 direta via `serde_derive` / `thiserror 2` e 2.0.119 via `thiserror-impl 1.0.69`.
+  - `rustix` (0.38.44 e 1.1.5) e `linux-raw-sys` (0.4.15 e 0.12.1): puxadas por subsistemas Wayland e X11 do `winit`.
+  - `windows-sys` (0.52.0, 0.59.0, 0.61.2): puxadas por `glutin`, `winit` e `rustix`.
+- **Avisos e exceções em `deny.toml`:**
+  - `allow-wildcard-paths = true`: permite dependências de caminho relativas (`path = "crates/..."`) dentro do workspace sem exigir especificação artificial de `version` para pacotes locais (`publish = false`).
+  - `[advisories] ignore = ["RUSTSEC-2026-0192"]`: aviso informativo de que `ttf-parser 0.25.1` foi declarado sem manutenção ativa pelo autor upstream. É dependência indireta transitiva do `winit 0.30.13` (`winit` -> `sctk-adwaita` -> `ab_glyph` -> `owned_ttf_parser` -> `ttf-parser`) para fontes das decorações de janela em Wayland. Não há vulnerabilidade de segurança reportada nem correção disponível no `winit 0.30.x`.
+- **Tipos de biblioteca não aparecem** na API pública, no schema, nos saves nem no protocolo. `glam` **não** foi adotado: `petunia_math` tem tipos próprios (`Vec3`, `Color`, `Transform`).
+- **Licença dos pacotes:** todas permissivas. `deny.toml` permite só licenças permissivas; MPL-2.0 (`symphonia`, via Kira) fica fora até haver uma exceção registrada.
+
+## Dependências do sistema (editor Qt)
+
+Não são pacotes do Cargo. Ficam fora do `Cargo.lock`, e o editor só compila se existirem. O motor, o `petunia run` e a CLI **não dependem** delas.
+
+| Dependência | Versão medida aqui | Para que serve | Licença | Alternativa | Custo de remover |
+|---|---|---|---|---|---|
+| Qt 6 (`Widgets`, `OpenGLWidgets`) | 6.12.0 | Janela do editor, docas, diálogos e o viewport GL | LGPL-3.0 nos módulos usados, com **link dinâmico** (GERAL; conferir antes de distribuir) | Slint, egui, Qt/QML (CXX-Qt) | Alto: toda a pasta `editor/` |
+| CMake | 4.4.4 | Compilar `editor/` | BSD-3-Clause | Meson | Baixo |
+| Ninja | 1.13.2 | Gerador de build usado pelo script | Apache-2.0 | Make | Baixo |
+| Compilador C++20 | GCC 16.2.1 | Compilar `editor/` | GPL (ferramenta, não entra no produto) | Clang 23 (instalado) | Baixo |
+
+Só para o teste de fumaça (`scripts/editor-smoke.sh`), nunca no produto:
+
+| Ferramenta | Para que serve |
+|---|---|
+| `Xvfb` | Display virtual: o teste não aparece na sua tela |
+| `xdotool` | Simula clique e teclado na janela |
+| Mesa (`LIBGL_ALWAYS_SOFTWARE=1`) | OpenGL por software dentro do display virtual |
+
+Os crates `petunia_editor` e `petunia_editor_ffi` usam só as dependências registradas acima.
+
+## Aipo (Script Host, 2026-10-25)
+
+O crate `petunia_script` embute a linguagem **Aipo** ([DR-25](06-decisoes/registro-de-decisoes.md)). É projeto seu (MIT; reuso livre pelo `DR-01`), usado por **dependência de caminho** (`../aipo-lang/crates/...`), sem cópia de código. Só `petunia_script` depende dele; `petunia_editor`, `petunia_cli` e `petunia_player` chegam a ele por esse crate.
+
+| Crate | Para que serve | Recursos |
+|---|---|---|
+| `aipo-source`, `aipo-diagnostics`, `aipo-syntax`, `aipo-hir`, `aipo-sema`, `aipo-ir`, `aipo-bytecode` | Compilar e dar erros com linha e coluna | padrão |
+| `aipo-vm` | Executar, com orçamento de instruções | **sem** recursos padrão |
+| `aipo-runtime`, `aipo-stdlib` | Biblioteca padrão (com `sh`, `fs`, `env`, `io` **removidos** pelo host) | `aipo-stdlib` **sem** recursos padrão (sem `regex`) |
+| `aipo-host` | Capabilities e handles | padrão |
+| `aipo-formatter` | Botão Formatar do editor de código | padrão |
+
+Pacotes do crates.io que entraram com ela (LOCAL, `cargo tree -p petunia_script`): `byteorder` 1.5.0, `unicode-normalization` 0.1.26 e `tinyvec` 1.13.3. Os demais (`serde`, `serde_json`, `thiserror` e suas macros) já estavam no registro.
+
+**Custo de remover:** baixo. `petunia_script` é uma folha; sem ele o motor roda sem scripts.
+**Risco:** o build depende da pasta irmã `../aipo-lang`. Para distribuir, vira dependência git fixada por commit.
+
+## Candidatas ainda **não** adotadas
+
+Detalhes e evidências em [bibliotecas auxiliares](02-arquitetura/10-bibliotecas-auxiliares.md): `rapier3d` (física), `kira` (áudio), `renet` (rede), `cosmic-text` (texto), `accesskit` (acessibilidade), `mlua` (Luau), `gltf` (modelos).
+
+Cada uma só entra com sua fase e depois de passar no checklist de admissão.

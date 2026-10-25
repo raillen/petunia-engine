@@ -1,0 +1,742 @@
+//! The native functions behind the script API. They reach the game through a hidden global that
+//! holds a generational handle to the shared state, so there is no process-wide variable: two hosts
+//! in one process cannot see each other. Every world change goes through the command dispatcher, so
+//! it is validated like a change from the editor, a macro or the network.
+
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use aipo_host::Capability;
+use aipo_vm::{Value, Vm, VmError, VmFault};
+use petunia_commands::{CommandRecord, Dispatcher};
+use petunia_math::{Transform, Vec3};
+use petunia_world::{PersistentId, World};
+use serde_json::{Value as Json, json};
+
+use crate::api::CONTEXT_GLOBAL;
+use crate::convert::{display_text, json_to_value, value_to_json};
+
+/// The console keeps this many lines; older ones are dropped.
+const MAX_LOG_LINES: usize = 1000;
+/// A script queues at most this many events per call.
+const MAX_QUEUED_EVENTS: usize = 256;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LogLevel {
+    Debug,
+    Info,
+    Warning,
+    Error,
+}
+
+impl LogLevel {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Debug => "debug",
+            Self::Info => "info",
+            Self::Warning => "warning",
+            Self::Error => "error",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LogLine {
+    pub level: LogLevel,
+    pub tick: u64,
+    pub text: String,
+}
+
+/// An event a script asked for with `game.emit`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QueuedEvent {
+    pub name: String,
+    pub entity: u64,
+}
+
+/// What scripts share: the world, the dispatcher that changes it, and what they produced.
+pub struct GameState {
+    pub world: World,
+    pub dispatcher: Dispatcher,
+    pub seconds: f64,
+    pub commands_run: u64,
+    pub log: Vec<LogLine>,
+    pub events: Vec<QueuedEvent>,
+}
+
+impl GameState {
+    pub fn push_log(&mut self, level: LogLevel, text: String) {
+        if self.log.len() >= MAX_LOG_LINES {
+            self.log.remove(0);
+        }
+        self.log.push(LogLine {
+            level,
+            tick: self.world.tick(),
+            text,
+        });
+    }
+}
+
+/// The shared handle to the game state, stored in the VM as userdata.
+#[derive(Clone)]
+pub(crate) struct GameCell(pub Rc<RefCell<GameState>>);
+
+type Native = Result<Value, VmError>;
+
+fn internal(reason: &str) -> VmError {
+    VmError::Fault(VmFault::CorruptedBytecode {
+        offset: 0,
+        reason: reason.to_string(),
+    })
+}
+
+fn wrong_type(expected: &str, actual: &Value) -> VmError {
+    VmError::Fault(VmFault::TypeMismatch {
+        expected: expected.to_string(),
+        actual: actual.type_name().to_string(),
+    })
+}
+
+/// The game state, after checking the capability the call needs (`""` for none).
+fn context(vm: &mut Vm, permission: &str, operation: &str) -> Result<GameCell, VmError> {
+    let handle = match vm.get_global(CONTEXT_GLOBAL) {
+        Some(Value::HostHandle(handle)) => *handle,
+        _ => return Err(internal("o contexto do jogo não está disponível")),
+    };
+    if !permission.is_empty() {
+        let capability =
+            Capability::parse(permission).map_err(|_| internal("capability inválida"))?;
+        vm.host()
+            .require(&capability, operation)
+            .map_err(VmError::Fault)?;
+    }
+    vm.host()
+        .resolve_userdata::<GameCell>(handle)
+        .cloned()
+        .map_err(VmError::Fault)
+}
+
+fn entity_arg(args: &[Value], index: usize, operation: &str) -> Result<u64, VmError> {
+    match args.get(index) {
+        Some(Value::Int(id)) if *id >= 0 => Ok(*id as u64),
+        Some(other) => Err(wrong_type(
+            &format!("Int (id de objeto) em {operation}"),
+            other,
+        )),
+        None => Err(internal("faltou o argumento")),
+    }
+}
+
+fn text_arg(args: &[Value], index: usize, operation: &str) -> Result<String, VmError> {
+    match args.get(index) {
+        Some(Value::String(text)) => Ok(text.to_string()),
+        Some(other) => Err(wrong_type(&format!("String em {operation}"), other)),
+        None => Err(internal("faltou o argumento")),
+    }
+}
+
+fn float_arg(args: &[Value], index: usize, operation: &str) -> Result<f32, VmError> {
+    match args.get(index) {
+        Some(Value::Float(real)) if real.is_finite() => {
+            let cast = *real as f32;
+            if cast.is_finite() {
+                Ok(cast)
+            } else {
+                Err(wrong_type(
+                    &format!("Float finito em {operation}"),
+                    &Value::Float(*real),
+                ))
+            }
+        }
+        Some(Value::Int(whole)) => Ok(*whole as f32),
+        Some(Value::Byte(byte)) => Ok(f32::from(*byte)),
+        Some(other) => Err(wrong_type(&format!("Float em {operation}"), other)),
+        None => Err(internal("faltou o argumento")),
+    }
+}
+
+fn vec3_to_value(vector: Vec3) -> Value {
+    json_to_value(&json!({
+        "x": vector.x,
+        "y": vector.y,
+        "z": vector.z,
+    }))
+}
+
+fn read_transform(world: &World, entity: u64) -> Result<Transform, String> {
+    let handle = world
+        .handle_of(PersistentId(entity))
+        .map_err(|_| format!("o objeto {entity} não existe"))?;
+    let position = match world.get(handle, "Transform", "position") {
+        Ok(petunia_world::Value::Vec3(v)) => *v,
+        Ok(_) => return Err(format!("a coluna `position` de {entity} não é um Vec3")),
+        Err(err) => return Err(err.to_string()),
+    };
+    let rotation_degrees = match world.get(handle, "Transform", "rotation_degrees") {
+        Ok(petunia_world::Value::Vec3(v)) => *v,
+        Ok(_) => {
+            return Err(format!(
+                "a coluna `rotation_degrees` de {entity} não é um Vec3"
+            ));
+        }
+        Err(err) => return Err(err.to_string()),
+    };
+    let scale = match world.get(handle, "Transform", "scale") {
+        Ok(petunia_world::Value::Vec3(v)) => *v,
+        Ok(_) => return Err(format!("a coluna `scale` de {entity} não é um Vec3")),
+        Err(err) => return Err(err.to_string()),
+    };
+    Ok(Transform {
+        position,
+        rotation_degrees,
+        scale,
+    })
+}
+
+fn failure(message: impl Into<String>) -> Native {
+    Ok(Value::failure(message))
+}
+
+/// Runs a command through the dispatcher; a refusal is a recoverable `Failure` the script can
+/// handle, not a crash.
+fn run_command(cell: &GameCell, command: &str, payload: Json) -> Result<Json, String> {
+    let mut state = cell.0.borrow_mut();
+    let GameState {
+        world,
+        dispatcher,
+        commands_run,
+        ..
+    } = &mut *state;
+    *commands_run += 1;
+    dispatcher
+        .execute(world, &CommandRecord::new(command, payload))
+        .map_err(|error| error.to_string())
+}
+
+pub(crate) fn world_get(vm: &mut Vm, args: &[Value]) -> Native {
+    let cell = context(vm, "world.read", "world.get")?;
+    let entity = entity_arg(args, 0, "world.get")?;
+    let table = text_arg(args, 1, "world.get")?;
+    let column = text_arg(args, 2, "world.get")?;
+    let state = cell.0.borrow();
+    let Ok(handle) = state.world.handle_of(PersistentId(entity)) else {
+        return failure(format!("o objeto {entity} não existe"));
+    };
+    match state.world.get(handle, &table, &column) {
+        Ok(value) => Ok(json_to_value(&value.to_json())),
+        Err(error) => failure(error.to_string()),
+    }
+}
+
+pub(crate) fn world_row(vm: &mut Vm, args: &[Value]) -> Native {
+    let cell = context(vm, "world.read", "world.row")?;
+    let entity = entity_arg(args, 0, "world.row")?;
+    let table = text_arg(args, 1, "world.row")?;
+    let state = cell.0.borrow();
+    let Ok(handle) = state.world.handle_of(PersistentId(entity)) else {
+        return failure(format!("o objeto {entity} não existe"));
+    };
+    let snapshot = match state.world.snapshot(handle) {
+        Ok(snapshot) => snapshot,
+        Err(error) => return failure(error.to_string()),
+    };
+    let Some(values) = snapshot.rows.get(&table) else {
+        return failure(format!("o objeto {entity} não tem a tabela `{table}`"));
+    };
+    match state.world.row_to_json(&table, values) {
+        Ok(row) => Ok(json_to_value(&Json::Object(row))),
+        Err(error) => failure(error.to_string()),
+    }
+}
+
+pub(crate) fn world_has(vm: &mut Vm, args: &[Value]) -> Native {
+    let cell = context(vm, "world.read", "world.has")?;
+    let entity = entity_arg(args, 0, "world.has")?;
+    let table = text_arg(args, 1, "world.has")?;
+    let state = cell.0.borrow();
+    let has = state
+        .world
+        .handle_of(PersistentId(entity))
+        .ok()
+        .and_then(|handle| state.world.snapshot(handle).ok())
+        .is_some_and(|snapshot| snapshot.rows.contains_key(&table));
+    Ok(Value::Bool(has))
+}
+
+pub(crate) fn world_exists(vm: &mut Vm, args: &[Value]) -> Native {
+    let cell = context(vm, "world.read", "world.exists")?;
+    let entity = entity_arg(args, 0, "world.exists")?;
+    let exists = cell
+        .0
+        .borrow()
+        .world
+        .handle_of(PersistentId(entity))
+        .is_ok();
+    Ok(Value::Bool(exists))
+}
+
+pub(crate) fn world_find(vm: &mut Vm, args: &[Value]) -> Native {
+    let cell = context(vm, "world.read", "world.find")?;
+    let table = text_arg(args, 0, "world.find")?;
+    let state = cell.0.borrow();
+    let handles = match state.world.entities_with_table(&table) {
+        Ok(handles) => handles,
+        Err(error) => return failure(error.to_string()),
+    };
+    let mut ids: Vec<i64> = handles
+        .into_iter()
+        .filter_map(|handle| state.world.persistent_id(handle).ok())
+        .map(|id| id.0 as i64)
+        .collect();
+    ids.sort_unstable();
+    Ok(Value::list(
+        ids.into_iter().map(Value::Int).collect::<Vec<_>>(),
+    ))
+}
+
+pub(crate) fn world_set(vm: &mut Vm, args: &[Value]) -> Native {
+    let cell = context(vm, "world.write", "world.set")?;
+    let entity = entity_arg(args, 0, "world.set")?;
+    let table = text_arg(args, 1, "world.set")?;
+    let column = text_arg(args, 2, "world.set")?;
+    let Some(value) = args.get(3) else {
+        return Err(internal("faltou o argumento"));
+    };
+    let value = match value_to_json(value) {
+        Ok(json) => json,
+        Err(reason) => return failure(reason),
+    };
+    match run_command(
+        &cell,
+        "world.set",
+        json!({ "entity": entity, "table": table, "column": column, "value": value }),
+    ) {
+        Ok(_) => Ok(Value::None),
+        Err(message) => failure(message),
+    }
+}
+
+pub(crate) fn world_create(vm: &mut Vm, args: &[Value]) -> Native {
+    let cell = context(vm, "world.write", "world.create")?;
+    let Some(rows) = args.first() else {
+        return Err(internal("faltou o argumento"));
+    };
+    if !matches!(rows, Value::Dict(_)) {
+        return Err(wrong_type("Dict (tabelas) em world.create", rows));
+    }
+    let rows = match value_to_json(rows) {
+        Ok(json) => json,
+        Err(reason) => return failure(reason),
+    };
+    match run_command(&cell, "world.create", json!({ "rows": rows })) {
+        Ok(result) => match result.get("entity").and_then(Json::as_i64) {
+            Some(id) => Ok(Value::Int(id)),
+            None => failure("o motor não devolveu o id do objeto"),
+        },
+        Err(message) => failure(message),
+    }
+}
+
+pub(crate) fn world_remove(vm: &mut Vm, args: &[Value]) -> Native {
+    let cell = context(vm, "world.write", "world.remove")?;
+    let entity = entity_arg(args, 0, "world.remove")?;
+    match run_command(&cell, "world.remove", json!({ "entity": entity })) {
+        Ok(_) => Ok(Value::None),
+        Err(message) => failure(message),
+    }
+}
+
+pub(crate) fn game_tick(vm: &mut Vm, _args: &[Value]) -> Native {
+    let cell = context(vm, "game", "game.tick")?;
+    let tick = cell.0.borrow().world.tick();
+    Ok(Value::Int(tick as i64))
+}
+
+pub(crate) fn game_seconds(vm: &mut Vm, _args: &[Value]) -> Native {
+    let cell = context(vm, "game", "game.seconds")?;
+    let seconds = cell.0.borrow().seconds;
+    Ok(Value::Float(seconds))
+}
+
+pub(crate) fn game_emit(vm: &mut Vm, args: &[Value]) -> Native {
+    let cell = context(vm, "game", "game.emit")?;
+    let name = text_arg(args, 0, "game.emit")?;
+    let entity = entity_arg(args, 1, "game.emit")?;
+    let mut state = cell.0.borrow_mut();
+    if state.events.len() >= MAX_QUEUED_EVENTS {
+        return failure("eventos demais na fila neste quadro");
+    }
+    state.events.push(QueuedEvent { name, entity });
+    Ok(Value::None)
+}
+
+fn write_log(vm: &mut Vm, args: &[Value], level: LogLevel) -> Native {
+    let cell = context(vm, "", "log")?;
+    let text = args.iter().map(display_text).collect::<Vec<_>>().join(" ");
+    cell.0.borrow_mut().push_log(level, text);
+    Ok(Value::None)
+}
+
+pub(crate) fn log_debug(vm: &mut Vm, args: &[Value]) -> Native {
+    write_log(vm, args, LogLevel::Debug)
+}
+pub(crate) fn log_info(vm: &mut Vm, args: &[Value]) -> Native {
+    write_log(vm, args, LogLevel::Info)
+}
+pub(crate) fn log_warning(vm: &mut Vm, args: &[Value]) -> Native {
+    write_log(vm, args, LogLevel::Warning)
+}
+pub(crate) fn log_error(vm: &mut Vm, args: &[Value]) -> Native {
+    write_log(vm, args, LogLevel::Error)
+}
+
+// ---- transform.* -----------------------------------------------------------------------------
+
+pub(crate) fn transform_get_position(vm: &mut Vm, args: &[Value]) -> Native {
+    let cell = context(vm, "world.read", "transform.get_position")?;
+    let entity = entity_arg(args, 0, "transform.get_position")?;
+    let state = cell.0.borrow();
+    let Ok(handle) = state.world.handle_of(PersistentId(entity)) else {
+        return failure(format!("o objeto {entity} não existe"));
+    };
+    match state.world.get(handle, "Transform", "position") {
+        Ok(petunia_world::Value::Vec3(v)) => Ok(vec3_to_value(*v)),
+        Ok(_) => failure(format!("a coluna `position` de {entity} não é um Vec3")),
+        Err(err) => failure(err.to_string()),
+    }
+}
+
+pub(crate) fn transform_set_position(vm: &mut Vm, args: &[Value]) -> Native {
+    let cell = context(vm, "world.write", "transform.set_position")?;
+    let entity = entity_arg(args, 0, "transform.set_position")?;
+    let x = float_arg(args, 1, "transform.set_position")?;
+    let y = float_arg(args, 2, "transform.set_position")?;
+    let z = float_arg(args, 3, "transform.set_position")?;
+    match run_command(
+        &cell,
+        "world.set",
+        json!({
+            "entity": entity,
+            "table": "Transform",
+            "column": "position",
+            "value": { "x": x, "y": y, "z": z }
+        }),
+    ) {
+        Ok(_) => Ok(Value::None),
+        Err(message) => failure(message),
+    }
+}
+
+pub(crate) fn transform_move(vm: &mut Vm, args: &[Value]) -> Native {
+    let cell = context(vm, "world.write", "transform.move")?;
+    let entity = entity_arg(args, 0, "transform.move")?;
+    let dx = float_arg(args, 1, "transform.move")?;
+    let dy = float_arg(args, 2, "transform.move")?;
+    let dz = float_arg(args, 3, "transform.move")?;
+    let current = {
+        let state = cell.0.borrow();
+        match read_transform(&state.world, entity) {
+            Ok(transform) => transform.position,
+            Err(err) => return failure(err),
+        }
+    };
+    match run_command(
+        &cell,
+        "world.set",
+        json!({
+            "entity": entity,
+            "table": "Transform",
+            "column": "position",
+            "value": { "x": current.x + dx, "y": current.y + dy, "z": current.z + dz }
+        }),
+    ) {
+        Ok(_) => Ok(Value::None),
+        Err(message) => failure(message),
+    }
+}
+
+pub(crate) fn transform_move_x(vm: &mut Vm, args: &[Value]) -> Native {
+    let cell = context(vm, "world.write", "transform.move_x")?;
+    let entity = entity_arg(args, 0, "transform.move_x")?;
+    let delta = float_arg(args, 1, "transform.move_x")?;
+    let current = {
+        let state = cell.0.borrow();
+        match read_transform(&state.world, entity) {
+            Ok(transform) => transform.position,
+            Err(err) => return failure(err),
+        }
+    };
+    match run_command(
+        &cell,
+        "world.set",
+        json!({
+            "entity": entity,
+            "table": "Transform",
+            "column": "position",
+            "value": { "x": current.x + delta, "y": current.y, "z": current.z }
+        }),
+    ) {
+        Ok(_) => Ok(Value::None),
+        Err(message) => failure(message),
+    }
+}
+
+pub(crate) fn transform_move_y(vm: &mut Vm, args: &[Value]) -> Native {
+    let cell = context(vm, "world.write", "transform.move_y")?;
+    let entity = entity_arg(args, 0, "transform.move_y")?;
+    let delta = float_arg(args, 1, "transform.move_y")?;
+    let current = {
+        let state = cell.0.borrow();
+        match read_transform(&state.world, entity) {
+            Ok(transform) => transform.position,
+            Err(err) => return failure(err),
+        }
+    };
+    match run_command(
+        &cell,
+        "world.set",
+        json!({
+            "entity": entity,
+            "table": "Transform",
+            "column": "position",
+            "value": { "x": current.x, "y": current.y + delta, "z": current.z }
+        }),
+    ) {
+        Ok(_) => Ok(Value::None),
+        Err(message) => failure(message),
+    }
+}
+
+pub(crate) fn transform_move_z(vm: &mut Vm, args: &[Value]) -> Native {
+    let cell = context(vm, "world.write", "transform.move_z")?;
+    let entity = entity_arg(args, 0, "transform.move_z")?;
+    let delta = float_arg(args, 1, "transform.move_z")?;
+    let current = {
+        let state = cell.0.borrow();
+        match read_transform(&state.world, entity) {
+            Ok(transform) => transform.position,
+            Err(err) => return failure(err),
+        }
+    };
+    match run_command(
+        &cell,
+        "world.set",
+        json!({
+            "entity": entity,
+            "table": "Transform",
+            "column": "position",
+            "value": { "x": current.x, "y": current.y, "z": current.z + delta }
+        }),
+    ) {
+        Ok(_) => Ok(Value::None),
+        Err(message) => failure(message),
+    }
+}
+
+pub(crate) fn transform_get_rotation(vm: &mut Vm, args: &[Value]) -> Native {
+    let cell = context(vm, "world.read", "transform.get_rotation")?;
+    let entity = entity_arg(args, 0, "transform.get_rotation")?;
+    let state = cell.0.borrow();
+    let Ok(handle) = state.world.handle_of(PersistentId(entity)) else {
+        return failure(format!("o objeto {entity} não existe"));
+    };
+    match state.world.get(handle, "Transform", "rotation_degrees") {
+        Ok(petunia_world::Value::Vec3(v)) => Ok(vec3_to_value(*v)),
+        Ok(_) => failure(format!(
+            "a coluna `rotation_degrees` de {entity} não é um Vec3"
+        )),
+        Err(err) => failure(err.to_string()),
+    }
+}
+
+pub(crate) fn transform_set_rotation(vm: &mut Vm, args: &[Value]) -> Native {
+    let cell = context(vm, "world.write", "transform.set_rotation")?;
+    let entity = entity_arg(args, 0, "transform.set_rotation")?;
+    let x = float_arg(args, 1, "transform.set_rotation")?;
+    let y = float_arg(args, 2, "transform.set_rotation")?;
+    let z = float_arg(args, 3, "transform.set_rotation")?;
+    match run_command(
+        &cell,
+        "world.set",
+        json!({
+            "entity": entity,
+            "table": "Transform",
+            "column": "rotation_degrees",
+            "value": { "x": x, "y": y, "z": z }
+        }),
+    ) {
+        Ok(_) => Ok(Value::None),
+        Err(message) => failure(message),
+    }
+}
+
+pub(crate) fn transform_rotate(vm: &mut Vm, args: &[Value]) -> Native {
+    let cell = context(vm, "world.write", "transform.rotate")?;
+    let entity = entity_arg(args, 0, "transform.rotate")?;
+    let dx = float_arg(args, 1, "transform.rotate")?;
+    let dy = float_arg(args, 2, "transform.rotate")?;
+    let dz = float_arg(args, 3, "transform.rotate")?;
+    let current = {
+        let state = cell.0.borrow();
+        match read_transform(&state.world, entity) {
+            Ok(transform) => transform.rotation_degrees,
+            Err(err) => return failure(err),
+        }
+    };
+    match run_command(
+        &cell,
+        "world.set",
+        json!({
+            "entity": entity,
+            "table": "Transform",
+            "column": "rotation_degrees",
+            "value": { "x": current.x + dx, "y": current.y + dy, "z": current.z + dz }
+        }),
+    ) {
+        Ok(_) => Ok(Value::None),
+        Err(message) => failure(message),
+    }
+}
+
+pub(crate) fn transform_rotate_x(vm: &mut Vm, args: &[Value]) -> Native {
+    let cell = context(vm, "world.write", "transform.rotate_x")?;
+    let entity = entity_arg(args, 0, "transform.rotate_x")?;
+    let degrees = float_arg(args, 1, "transform.rotate_x")?;
+    let current = {
+        let state = cell.0.borrow();
+        match read_transform(&state.world, entity) {
+            Ok(transform) => transform.rotation_degrees,
+            Err(err) => return failure(err),
+        }
+    };
+    match run_command(
+        &cell,
+        "world.set",
+        json!({
+            "entity": entity,
+            "table": "Transform",
+            "column": "rotation_degrees",
+            "value": { "x": current.x + degrees, "y": current.y, "z": current.z }
+        }),
+    ) {
+        Ok(_) => Ok(Value::None),
+        Err(message) => failure(message),
+    }
+}
+
+pub(crate) fn transform_rotate_y(vm: &mut Vm, args: &[Value]) -> Native {
+    let cell = context(vm, "world.write", "transform.rotate_y")?;
+    let entity = entity_arg(args, 0, "transform.rotate_y")?;
+    let degrees = float_arg(args, 1, "transform.rotate_y")?;
+    let current = {
+        let state = cell.0.borrow();
+        match read_transform(&state.world, entity) {
+            Ok(transform) => transform.rotation_degrees,
+            Err(err) => return failure(err),
+        }
+    };
+    match run_command(
+        &cell,
+        "world.set",
+        json!({
+            "entity": entity,
+            "table": "Transform",
+            "column": "rotation_degrees",
+            "value": { "x": current.x, "y": current.y + degrees, "z": current.z }
+        }),
+    ) {
+        Ok(_) => Ok(Value::None),
+        Err(message) => failure(message),
+    }
+}
+
+pub(crate) fn transform_rotate_z(vm: &mut Vm, args: &[Value]) -> Native {
+    let cell = context(vm, "world.write", "transform.rotate_z")?;
+    let entity = entity_arg(args, 0, "transform.rotate_z")?;
+    let degrees = float_arg(args, 1, "transform.rotate_z")?;
+    let current = {
+        let state = cell.0.borrow();
+        match read_transform(&state.world, entity) {
+            Ok(transform) => transform.rotation_degrees,
+            Err(err) => return failure(err),
+        }
+    };
+    match run_command(
+        &cell,
+        "world.set",
+        json!({
+            "entity": entity,
+            "table": "Transform",
+            "column": "rotation_degrees",
+            "value": { "x": current.x, "y": current.y, "z": current.z + degrees }
+        }),
+    ) {
+        Ok(_) => Ok(Value::None),
+        Err(message) => failure(message),
+    }
+}
+
+pub(crate) fn transform_get_scale(vm: &mut Vm, args: &[Value]) -> Native {
+    let cell = context(vm, "world.read", "transform.get_scale")?;
+    let entity = entity_arg(args, 0, "transform.get_scale")?;
+    let state = cell.0.borrow();
+    let Ok(handle) = state.world.handle_of(PersistentId(entity)) else {
+        return failure(format!("o objeto {entity} não existe"));
+    };
+    match state.world.get(handle, "Transform", "scale") {
+        Ok(petunia_world::Value::Vec3(v)) => Ok(vec3_to_value(*v)),
+        Ok(_) => failure(format!("a coluna `scale` de {entity} não é um Vec3")),
+        Err(err) => failure(err.to_string()),
+    }
+}
+
+pub(crate) fn transform_set_scale(vm: &mut Vm, args: &[Value]) -> Native {
+    let cell = context(vm, "world.write", "transform.set_scale")?;
+    let entity = entity_arg(args, 0, "transform.set_scale")?;
+    let x = float_arg(args, 1, "transform.set_scale")?;
+    let y = float_arg(args, 2, "transform.set_scale")?;
+    let z = float_arg(args, 3, "transform.set_scale")?;
+    match run_command(
+        &cell,
+        "world.set",
+        json!({
+            "entity": entity,
+            "table": "Transform",
+            "column": "scale",
+            "value": { "x": x, "y": y, "z": z }
+        }),
+    ) {
+        Ok(_) => Ok(Value::None),
+        Err(message) => failure(message),
+    }
+}
+
+pub(crate) fn transform_forward(vm: &mut Vm, args: &[Value]) -> Native {
+    let cell = context(vm, "world.read", "transform.forward")?;
+    let entity = entity_arg(args, 0, "transform.forward")?;
+    let state = cell.0.borrow();
+    match read_transform(&state.world, entity) {
+        Ok(transform) => Ok(vec3_to_value(transform.forward())),
+        Err(err) => failure(err),
+    }
+}
+
+pub(crate) fn transform_right(vm: &mut Vm, args: &[Value]) -> Native {
+    let cell = context(vm, "world.read", "transform.right")?;
+    let entity = entity_arg(args, 0, "transform.right")?;
+    let state = cell.0.borrow();
+    match read_transform(&state.world, entity) {
+        Ok(transform) => Ok(vec3_to_value(transform.right())),
+        Err(err) => failure(err),
+    }
+}
+
+pub(crate) fn transform_up(vm: &mut Vm, args: &[Value]) -> Native {
+    let cell = context(vm, "world.read", "transform.up")?;
+    let entity = entity_arg(args, 0, "transform.up")?;
+    let state = cell.0.borrow();
+    match read_transform(&state.world, entity) {
+        Ok(transform) => Ok(vec3_to_value(transform.up())),
+        Err(err) => failure(err),
+    }
+}

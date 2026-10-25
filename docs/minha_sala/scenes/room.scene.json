@@ -1,0 +1,417 @@
+{
+  "format_version": 1,
+  "next_persistent_id": 12,
+  "entities": [
+    {
+      "id": 1,
+      "rows": {
+        "Brush": {
+          "color": {
+            "a": 1.0,
+            "b": 0.62,
+            "g": 0.58,
+            "r": 0.55
+          },
+          "detail": 16,
+          "shape": "box",
+          "size": {
+            "x": 24.0,
+            "y": 0.5,
+            "z": 24.0
+          }
+        },
+        "Name": {
+          "text": "Piso"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "rows": {
+        "Brush": {
+          "color": {
+            "a": 1.0,
+            "b": 0.72,
+            "g": 0.78,
+            "r": 0.8
+          },
+          "detail": 16,
+          "shape": "box",
+          "size": {
+            "x": 24.0,
+            "y": 4.0,
+            "z": 0.5
+          }
+        },
+        "Name": {
+          "text": "Parede norte"
+        },
+        "Transform": {
+          "position": {
+            "x": 0.0,
+            "y": 2.0,
+            "z": -12.0
+          },
+          "rotation_degrees": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scale": {
+            "x": 1.0,
+            "y": 1.0,
+            "z": 1.0
+          }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "rows": {
+        "Brush": {
+          "color": {
+            "a": 1.0,
+            "b": 0.72,
+            "g": 0.78,
+            "r": 0.8
+          },
+          "detail": 16,
+          "shape": "box",
+          "size": {
+            "x": 24.0,
+            "y": 4.0,
+            "z": 0.5
+          }
+        },
+        "Name": {
+          "text": "Parede sul"
+        },
+        "Transform": {
+          "position": {
+            "x": 0.0,
+            "y": 2.0,
+            "z": 12.0
+          },
+          "rotation_degrees": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scale": {
+            "x": 1.0,
+            "y": 1.0,
+            "z": 1.0
+          }
+        }
+      }
+    },
+    {
+      "id": 4,
+      "rows": {
+        "Brush": {
+          "color": {
+            "a": 1.0,
+            "b": 0.72,
+            "g": 0.78,
+            "r": 0.8
+          },
+          "detail": 16,
+          "shape": "box",
+          "size": {
+            "x": 0.5,
+            "y": 4.0,
+            "z": 24.0
+          }
+        },
+        "Name": {
+          "text": "Parede leste"
+        },
+        "Transform": {
+          "position": {
+            "x": 12.0,
+            "y": 2.0,
+            "z": 0.0
+          },
+          "rotation_degrees": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scale": {
+            "x": 1.0,
+            "y": 1.0,
+            "z": 1.0
+          }
+        }
+      }
+    },
+    {
+      "id": 5,
+      "rows": {
+        "Brush": {
+          "color": {
+            "a": 1.0,
+            "b": 0.72,
+            "g": 0.78,
+            "r": 0.8
+          },
+          "detail": 16,
+          "shape": "box",
+          "size": {
+            "x": 0.5,
+            "y": 4.0,
+            "z": 24.0
+          }
+        },
+        "Name": {
+          "text": "Parede oeste"
+        },
+        "Transform": {
+          "position": {
+            "x": -12.0,
+            "y": 2.0,
+            "z": 0.0
+          },
+          "rotation_degrees": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scale": {
+            "x": 1.0,
+            "y": 1.0,
+            "z": 1.0
+          }
+        }
+      }
+    },
+    {
+      "id": 6,
+      "rows": {
+        "Brush": {
+          "color": {
+            "a": 1.0,
+            "b": 0.3,
+            "g": 0.6,
+            "r": 0.9
+          },
+          "detail": 16,
+          "shape": "ramp",
+          "size": {
+            "x": 4.0,
+            "y": 1.5,
+            "z": 6.0
+          }
+        },
+        "Name": {
+          "text": "Rampa"
+        },
+        "Transform": {
+          "position": {
+            "x": -5.0,
+            "y": 0.75,
+            "z": -6.0
+          },
+          "rotation_degrees": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scale": {
+            "x": 1.0,
+            "y": 1.0,
+            "z": 1.0
+          }
+        }
+      }
+    },
+    {
+      "id": 7,
+      "rows": {
+        "Brush": {
+          "color": {
+            "a": 1.0,
+            "b": 0.85,
+            "g": 0.6,
+            "r": 0.4
+          },
+          "detail": 16,
+          "shape": "box",
+          "size": {
+            "x": 4.0,
+            "y": 1.5,
+            "z": 3.0
+          }
+        },
+        "Name": {
+          "text": "Plataforma"
+        },
+        "Transform": {
+          "position": {
+            "x": -5.0,
+            "y": 0.75,
+            "z": -10.5
+          },
+          "rotation_degrees": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scale": {
+            "x": 1.0,
+            "y": 1.0,
+            "z": 1.0
+          }
+        }
+      }
+    },
+    {
+      "id": 8,
+      "rows": {
+        "Brush": {
+          "color": {
+            "a": 1.0,
+            "b": 0.35,
+            "g": 0.3,
+            "r": 0.7
+          },
+          "detail": 16,
+          "shape": "cylinder",
+          "size": {
+            "x": 1.2,
+            "y": 4.0,
+            "z": 1.2
+          }
+        },
+        "Name": {
+          "text": "Pilar"
+        },
+        "Transform": {
+          "position": {
+            "x": 5.0,
+            "y": 2.0,
+            "z": -4.0
+          },
+          "rotation_degrees": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scale": {
+            "x": 1.0,
+            "y": 1.0,
+            "z": 1.0
+          }
+        }
+      }
+    },
+    {
+      "id": 9,
+      "rows": {
+        "Brush": {
+          "color": {
+            "a": 1.0,
+            "b": 0.3,
+            "g": 0.45,
+            "r": 0.6
+          },
+          "detail": 16,
+          "shape": "box",
+          "size": {
+            "x": 1.0,
+            "y": 1.0,
+            "z": 1.0
+          }
+        },
+        "Name": {
+          "text": "Caixa grande"
+        },
+        "Transform": {
+          "position": {
+            "x": -1.0,
+            "y": 0.5,
+            "z": 2.0
+          },
+          "rotation_degrees": {
+            "x": 0.0,
+            "y": 25.0,
+            "z": 0.0
+          },
+          "scale": {
+            "x": 3.6000001,
+            "y": 1.0,
+            "z": 1.0
+          }
+        }
+      }
+    },
+    {
+      "id": 10,
+      "rows": {
+        "Brush": {
+          "color": {
+            "a": 1.0,
+            "b": 0.28,
+            "g": 0.4,
+            "r": 0.55
+          },
+          "detail": 16,
+          "shape": "box",
+          "size": {
+            "x": 0.7,
+            "y": 0.7,
+            "z": 0.7
+          }
+        },
+        "Name": {
+          "text": "Caixa pequena"
+        },
+        "Transform": {
+          "position": {
+            "x": 6.0,
+            "y": 0.35,
+            "z": 5.0
+          },
+          "rotation_degrees": {
+            "x": 0.0,
+            "y": -15.0,
+            "z": 0.0
+          },
+          "scale": {
+            "x": 1.0,
+            "y": 1.0,
+            "z": 1.0
+          }
+        }
+      }
+    },
+    {
+      "id": 11,
+      "rows": {
+        "Name": {
+          "text": "Início do jogador"
+        },
+        "PlayerStart": {
+          "yaw_degrees": 0.0
+        },
+        "Transform": {
+          "position": {
+            "x": 0.0,
+            "y": 1.7,
+            "z": 9.0
+          },
+          "rotation_degrees": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "scale": {
+            "x": 1.0,
+            "y": 1.0,
+            "z": 1.0
+          }
+        }
+      }
+    }
+  ]
+}

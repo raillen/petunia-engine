@@ -1,0 +1,42 @@
+{
+  "id": "petunia-high-contrast",
+  "name": "Petunia High Contrast",
+  "colors": {
+    "bg_canvas": "#000000",
+    "bg_header": "#0a0a0a",
+    "bg_panel": "#121212",
+    "bg_panel_header": "#1a1a1a",
+    "bg_surface": "#1f1f1f",
+    "bg_surface_hover": "#2e2e2e",
+    "bg_surface_active": "#3d3d3d",
+    "text_primary": "#ffffff",
+    "text_secondary": "#e6e6e6",
+    "text_muted": "#b8b8b8",
+    "text_active": "#000000",
+    "accent_blue": "#00b0ff",
+    "accent_orange": "#ffb000",
+    "accent_hover": "#4dd0ff",
+    "accent_border": "#ffffff",
+    "border_subtle": "#6b6b6b",
+    "border_strong": "#a0a0a0",
+    "border_focus": "#ffd400",
+    "status_info": "#57c7ff",
+    "status_warning": "#ffd400",
+    "status_error": "#ff6b6b",
+    "status_success": "#6ee7a8"
+  },
+  "shell": {
+    "selection_active": "#ffd400",
+    "disabled": "#8a8a8a",
+    "hover_highlight": "#7ddcff",
+    "scrim": "#00000099",
+    "shadow": "#00000088",
+    "shadow_subtle": "#00000055",
+    "hud_surface": "#000000f2",
+    "hud_border": "#a0a0a0"
+  },
+  "font": {
+    "family": "proportional",
+    "size": 14.0
+  }
+}

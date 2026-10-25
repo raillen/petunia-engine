@@ -1,0 +1,62 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+publish = false
+
+# Dependency register: docs/dependencies.md (every direct dependency must be listed there).
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+glow = "0.18"
+winit = "0.30"
+glutin = "0.32"
+glutin-winit = "0.5"
+raw-window-handle = "0.6"
+
+petunia_math = { path = "crates/petunia_math" }
+petunia_world = { path = "crates/petunia_world" }
+petunia_schema = { path = "crates/petunia_schema" }
+petunia_commands = { path = "crates/petunia_commands" }
+petunia_project = { path = "crates/petunia_project" }
+petunia_editor = { path = "crates/petunia_editor" }
+petunia_editor_ffi = { path = "crates/petunia_editor_ffi" }
+petunia_input = { path = "crates/petunia_input" }
+petunia_render = { path = "crates/petunia_render" }
+petunia_render_gl = { path = "crates/petunia_render_gl" }
+petunia_player = { path = "crates/petunia_player" }
+petunia_sculpt = { path = "crates/petunia_sculpt" }
+petunia_script = { path = "crates/petunia_script" }
+
+[workspace.lints.rust]
+# Adapters that talk to C APIs (OpenGL, windowing) opt in with `#![allow(unsafe_code)]`.
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+# AGENTS.md section 2: production code never panics.
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+dbg_macro = "deny"
+indexing_slicing = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+
+[profile.dev]
+# Smaller target directory: the disk is nearly full.
+debug = "line-tables-only"
+
+# Meshing caves runs on every sculpting dab; unoptimized it is ~20x slower and the editor stutters.
+[profile.dev.package.petunia_sculpt]
+opt-level = 3
+
+[profile.release]
+lto = "thin"

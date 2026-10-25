@@ -1,0 +1,22 @@
+[package]
+name = "petunia_player"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Window and event loop adapter: opens a window with an OpenGL 3.3 context and runs the fly camera."
+
+[dependencies]
+petunia_input.workspace = true
+petunia_render.workspace = true
+petunia_render_gl.workspace = true
+petunia_script.workspace = true
+petunia_world.workspace = true
+glow.workspace = true
+glutin.workspace = true
+glutin-winit.workspace = true
+raw-window-handle.workspace = true
+winit.workspace = true
+
+[lints]
+workspace = true

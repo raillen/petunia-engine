@@ -1,0 +1,15 @@
+[package]
+name = "petunia_render_gl"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "OpenGL 3.3 core adapter for the renderer boundary. The only crate that touches the GPU API."
+
+[dependencies]
+petunia_math.workspace = true
+petunia_render.workspace = true
+glow.workspace = true
+
+[lints]
+workspace = true

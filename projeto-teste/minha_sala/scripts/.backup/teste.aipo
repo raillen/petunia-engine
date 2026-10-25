@@ -1,0 +1,9 @@
+# Script do objeto. O motor chama estas funções quando a coisa acontece.
+
+fn on_start(entity) {
+log.info("começou", entity)
+}
+
+fn on_update(entity, dt) {
+# roda todo quadro; `dt` são os segundos desde o quadro anterior
+}

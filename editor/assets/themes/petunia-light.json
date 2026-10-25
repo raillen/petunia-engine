@@ -1,0 +1,42 @@
+{
+  "id": "petunia-light",
+  "name": "Petunia Claro",
+  "colors": {
+    "bg_canvas": "#c9c9c9",
+    "bg_header": "#dedede",
+    "bg_panel": "#ebebeb",
+    "bg_panel_header": "#e2e2e2",
+    "bg_surface": "#ffffff",
+    "bg_surface_hover": "#dadada",
+    "bg_surface_active": "#cdcdcd",
+    "text_primary": "#1e1e1e",
+    "text_secondary": "#454545",
+    "text_muted": "#666666",
+    "text_active": "#ffffff",
+    "accent_blue": "#0b7d93",
+    "accent_orange": "#d45a00",
+    "accent_hover": "#0a6b7e",
+    "accent_border": "#0a6b7e",
+    "border_subtle": "#cbcbcb",
+    "border_strong": "#a6a6a6",
+    "border_focus": "#0b7d93",
+    "status_info": "#1f6fb2",
+    "status_warning": "#8a5f00",
+    "status_error": "#c42b37",
+    "status_success": "#2f7d4f"
+  },
+  "shell": {
+    "selection_active": "#0b7d93",
+    "disabled": "#a6a6a6",
+    "hover_highlight": "#0b7d93",
+    "scrim": "#00000066",
+    "shadow": "#00000033",
+    "shadow_subtle": "#0000001f",
+    "hud_surface": "#ffffffee",
+    "hud_border": "#c8c8c8"
+  },
+  "font": {
+    "family": "proportional",
+    "size": 14.0
+  }
+}

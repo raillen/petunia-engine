@@ -1,0 +1,10 @@
+[package]
+name = "petunia_input"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Input by named actions, never raw keys. Bindings are data and remappable."
+
+[lints]
+workspace = true

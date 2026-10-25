@@ -1,0 +1,15 @@
+[package]
+name = "petunia_render"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Renderer boundary: camera, matrices, meshes and the frame extracted from the world. No GPU code."
+
+[dependencies]
+petunia_math.workspace = true
+petunia_world.workspace = true
+petunia_sculpt.workspace = true
+
+[lints]
+workspace = true

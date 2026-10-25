@@ -1,0 +1,22 @@
+//! Renderer boundary.
+//!
+//! This crate knows how to turn the world into a [`RenderFrame`] (what to draw, from where)
+//! and how to build meshes and matrices. It contains **no GPU code**: the OpenGL adapter lives
+//! in `petunia_render_gl`, so a different backend can replace it without touching the world.
+
+mod camera;
+mod fly;
+mod frame;
+mod grid;
+mod mesh;
+mod pick;
+mod sculpt;
+
+pub use camera::{Camera, Mat4, model_matrix, multiply};
+pub use fly::FlyCamera;
+pub use frame::{DrawItem, OverlayItem, RenderFrame, Shape, extract_frame, start_camera};
+pub use grid::{GRID_LIFT, GridLine, axis_lines, grid_lines};
+pub use mesh::{MeshData, MeshError, build_mesh};
+pub use petunia_sculpt::{ChunkMesh, SurfaceMesh};
+pub use pick::{Ray, SurfaceHit, mesh_points, pick_entity, pick_surface, ray_through};
+pub use sculpt::{SculptCache, SculptItem, SculptVolume, extract_sculpt_volumes, hit_sculpt};

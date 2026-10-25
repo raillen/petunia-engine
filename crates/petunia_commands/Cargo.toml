@@ -1,0 +1,20 @@
+[package]
+name = "petunia_commands"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Validated commands and queries with undo/redo. Commands are data records plus registered functions."
+
+[dependencies]
+petunia_schema.workspace = true
+petunia_world.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+petunia_math.workspace = true
+
+[lints]
+workspace = true
