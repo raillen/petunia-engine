@@ -509,6 +509,27 @@ void MainWindow::buildMenus() {
     create->addAction(randomCaveAction_);
 
     QMenu* operations = menus_->addMenu(QStringLiteral("&Operações"));
+    QMenu* collision = operations->addMenu(QStringLiteral("Colisão"));
+    collision->setIcon(PetuniaIcons::get(QStringLiteral("bounding_box")));
+    const QList<QPair<QString, QString>> colliderShapes = {
+        {QStringLiteral("box"), QStringLiteral("Adicionar colisão: caixa")},
+        {QStringLiteral("sphere"), QStringLiteral("Adicionar colisão: esfera")},
+        {QStringLiteral("capsule"), QStringLiteral("Adicionar colisão: cápsula")},
+        {QStringLiteral("convex"), QStringLiteral("Adicionar colisão: convexa (pela malha)")},
+    };
+    for (const auto& [shape, label] : colliderShapes) {
+        QAction* action = collision->addAction(label);
+        action->setToolTip(QStringLiteral("Uma colisão com nome no objeto selecionado, ajustada a ele; um objeto pode ter várias"));
+        connect(action, &QAction::triggered, this, [this, shape = shape] {
+            perform(QStringLiteral("collider.add"), QJsonObject{{"shape", shape}});
+        });
+        colliderActions_.append(action);
+    }
+    QAction* fitCollider = collision->addAction(QStringLiteral("Ajustar a colisão ao objeto"));
+    fitCollider->setToolTip(QStringLiteral("A colisão selecionada volta a envolver o objeto"));
+    connect(fitCollider, &QAction::triggered, this, [this] { perform(QStringLiteral("collider.fit"), {}); });
+    colliderActions_.append(fitCollider);
+    operations->addSeparator();
     operations->addAction(toolActions_[4]);
     operations->addAction(toolActions_[5]);
     operations->addAction(toolActions_[6]);
@@ -1193,6 +1214,9 @@ void MainWindow::onSnapshot() {
     for (QAction* action : aboveActions_) {
         action->setEnabled(project);
         action->setChecked(action->data().toString() == above);
+    }
+    for (QAction* action : std::as_const(colliderActions_)) {
+        action->setEnabled(selected);
     }
     for (QAction* action : {carveAction_, hollowAction_, editPivotAction_}) {
         action->setEnabled(selected);

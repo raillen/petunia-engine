@@ -21,6 +21,7 @@ Versões: as resolvidas pelo `Cargo.lock` em 2026-10-25. O `Cargo.lock` completo
 | `glutin-winit` | 0.5.0 | Liga o `glutin` ao `winit` | **`petunia_player`** (único) | MIT | Fazer à mão | Baixo |
 | `raw-window-handle` | 0.6.2 | Tipo comum entre janela e contexto | **`petunia_player`** (único) | MIT/Apache-2.0/Zlib | — | Baixo |
 | `glam` | 0.27.0 | Vetores e matrizes do código de malha copiado do Petunia3D. Aprovada em 2026-10-25 (DR-22) com a condição de ficar só dentro do crate | **`petunia_mesh`** (único; nunca na API, no schema, nos arquivos nem na rede) | MIT/Apache-2.0 | `petunia_math` (reescrever ~10,9 mil linhas de legado) | Médio: o legado inteiro usa |
+| `rapier3d` | 0.36.1 (com `enhanced-determinism`) | Corpos rígidos, colisões, raios, gatilhos. **Escolhida por você em 2026-10-25** (DR-27: "Já com corpos físicos", "Também malha convexa já"); já era a recomendação do DR-08. Traz `parry3d` (geometria), `glamx`/`glam` 0.33 e `nalgebra` | **`petunia_physics`** (único; tipos do Rapier nunca saem do crate) | Apache-2.0 | Jolt (C++), solver próprio | Médio: o adaptador tem ~900 linhas; a API pública e os arquivos não mudam |
 | `manifold-rust` | 0.13.1 | Booleanos de malha (fundir, cortar, interseção). **Aprovada por você em 2026-10-25** (DR-22) | **`petunia_mesh`** (único, `legacy/boolean.rs`) | Apache-2.0 | Escrever CSG robusto (meses) | Médio: só `boolean.rs` a troca |
 
 ## Observações

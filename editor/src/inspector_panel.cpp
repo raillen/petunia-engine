@@ -84,8 +84,22 @@ QString propertyLabel(const QString& table, const QString& column) {
         {QStringLiteral("faceted"), QStringLiteral("Facetada")},
         {QStringLiteral("cell_size"), QStringLiteral("Célula")},
         {QStringLiteral("base"), QStringLiteral("Base")},
+        {QStringLiteral("name"), QStringLiteral("Nome")},
+        {QStringLiteral("center"), QStringLiteral("Centro")},
+        {QStringLiteral("radius"), QStringLiteral("Raio")},
+        {QStringLiteral("trigger"), QStringLiteral("Gatilho")},
+        {QStringLiteral("friction"), QStringLiteral("Atrito")},
+        {QStringLiteral("restitution"), QStringLiteral("Quique")},
+        {QStringLiteral("kind"), QStringLiteral("Tipo")},
+        {QStringLiteral("mass"), QStringLiteral("Massa")},
+        {QStringLiteral("gravity_scale"), QStringLiteral("Gravidade")},
+        {QStringLiteral("linear_damping"), QStringLiteral("Freio")},
+        {QStringLiteral("angular_damping"), QStringLiteral("Freio do giro")},
+        {QStringLiteral("lock_rotation"), QStringLiteral("Sem girar")},
     };
-    Q_UNUSED(table);
+    if (table == QLatin1String("Collider") && column == QLatin1String("height")) {
+        return QStringLiteral("Altura");
+    }
     if (const auto found = common.constFind(column); found != common.constEnd()) {
         return found.value();
     }
@@ -274,6 +288,27 @@ void InspectorPanel::rebuild(const QJsonObject& description) {
         add->setMenu(menu);
         content_->addWidget(add);
     }
+    // Named colliders (DR-27): each is its own entity, listed under the object in the hierarchy.
+    if (!tableNames.contains(QStringLiteral("Collider"))) {
+        auto* addCollider = new QPushButton(QStringLiteral("Adicionar colisão"));
+        addCollider->setProperty("role", QStringLiteral("addRow"));
+        addCollider->setIcon(PetuniaIcons::get(QStringLiteral("bounding_box")));
+        addCollider->setAccessibleName(QStringLiteral("Adicionar uma colisão a este objeto"));
+        addCollider->setToolTip(QStringLiteral("Uma forma de colisão com nome, já ajustada ao objeto; um objeto pode ter várias"));
+        auto* shapes = new QMenu(addCollider);
+        const QList<QPair<QString, QString>> kinds = {{QStringLiteral("box"), QStringLiteral("Caixa")},
+                                                      {QStringLiteral("sphere"), QStringLiteral("Esfera")},
+                                                      {QStringLiteral("capsule"), QStringLiteral("Cápsula (personagens)")},
+                                                      {QStringLiteral("convex"), QStringLiteral("Convexa (pela malha)")}};
+        for (const auto& [shape, label] : kinds) {
+            connect(shapes->addAction(label), &QAction::triggered, this, [this, shape = shape] {
+                runOperation(QStringLiteral("collider.add"), QJsonObject{{"shape", shape}});
+            });
+        }
+        addCollider->setMenu(shapes);
+        content_->addWidget(addCollider);
+    }
+
     content_->addStretch(1);
 }
 
@@ -316,6 +351,16 @@ QWidget* InspectorPanel::makeSection(const QString& tableName, const QJsonArray&
     connect(remove, &QAction::triggered, this, [this, tableName] {
         runCommand(QStringLiteral("row.remove"), QJsonObject{{"entity", static_cast<double>(entity_)}, {"table", tableName}});
     });
+    if (tableName == QLatin1String("Collider")) {
+        // Removing the row would leave an empty entity: a collider is deleted as a whole.
+        remove->setText(QStringLiteral("Excluir esta colisão"));
+        disconnect(remove, nullptr, this, nullptr);
+        connect(remove, &QAction::triggered, this, [this] {
+            runCommand(QStringLiteral("world.remove"), QJsonObject{{"entity", static_cast<double>(entity_)}});
+        });
+        QAction* fit = menu->addAction(PetuniaIcons::get(QStringLiteral("frame_selection")), QStringLiteral("Ajustar ao objeto"));
+        connect(fit, &QAction::triggered, this, [this] { runOperation(QStringLiteral("collider.fit"), {}); });
+    }
     more->setMenu(menu);
     headerLayout->addWidget(more);
     sectionLayout->addWidget(header);
@@ -335,6 +380,10 @@ QWidget* InspectorPanel::makeSection(const QString& tableName, const QJsonArray&
         auto field = std::make_unique<Field>();
         field->table = tableName;
         field->column = column.value("name").toString();
+        // Which object a collider belongs to is set when it is created; not an editable number.
+        if (tableName == QLatin1String("Collider") && field->column == QLatin1String("owner")) {
+            continue;
+        }
         field->current = column.value("value");
         QWidget* editor = makeEditor(tableName, column, field.get());
         field->show(field->current);
@@ -511,6 +560,14 @@ void InspectorPanel::commitValue(Field* field, const QJsonValue& value) {
 
 void InspectorPanel::cancelValue() {
     bridge_->call(QStringLiteral("gesture.cancel"));
+    emit edited();
+}
+
+void InspectorPanel::runOperation(const QString& operation, const QJsonObject& fields) {
+    const Reply reply = bridge_->call(operation, fields);
+    if (!reply.ok) {
+        emit editFailed(reply.explanation());
+    }
     emit edited();
 }
 

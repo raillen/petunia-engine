@@ -8,6 +8,7 @@
 //! This crate knows nothing about windows, Qt or the GPU.
 
 mod brush_ops;
+mod colliders;
 mod failure;
 mod floors;
 mod gizmo;

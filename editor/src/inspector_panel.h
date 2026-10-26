@@ -54,6 +54,8 @@ private:
     void commitValue(Field* field, const QJsonValue& value);
     void cancelValue();
     void runCommand(const QString& command, const QJsonObject& payload);
+    // An editor operation that is not a plain command (`collider.add`, `collider.fit`).
+    void runOperation(const QString& operation, const QJsonObject& fields);
 
     EngineBridge* bridge_;
     QVBoxLayout* content_;

@@ -23,7 +23,7 @@ São **24 decisões**. Estados possíveis:
 | **DR-05** | Modelo de dados | PROPOSTA (compatível com "ECS enxuto") | Tabelas próprias, atrás de interface pequena |
 | DR-06 | Linguagens | **HERDADA** (Luau ou Aipo, uma por projeto) | Padrão Aipo; confirmar com S1 e S2 |
 | DR-07 | Programação visual | **HERDADA** (Gameplay IR) + detalhes **PROPOSTOS** | IR + Event Sheet + grafos especializados |
-| DR-08 | Física | PROPOSTA | Cinemática e consultas primeiro; Rapier; XPBD para cordas |
+| DR-08 | Física | **EM PARTE ACEITA** (DR-27) | Cinemática e consultas primeiro; Rapier; XPBD para cordas |
 | DR-09 | Online | PROPOSTA (**escopo novo**) | Sala + autoridade do servidor |
 | DR-10 | Formatos | **HERDADA** (texto difável; GLB) + detalhes **PROPOSTOS** | Pasta de texto no desenvolvimento; ZIP ao exportar |
 | DR-11 | Relação com Petunia3D, Poppy e nome | **ABERTA** | Produtos separados; ponte por GLB e `petunia-libs` |
@@ -41,6 +41,7 @@ São **24 decisões**. Estados possíveis:
 | **DR-23** | Pintura e animação do Petunia3D | PROPOSTA | Reprodução e IK sim; autoria e pintura de textura não; só o pincel de mundo ([análise](../01-pesquisa/07-pintura-e-animacao.md)) |
 | **DR-25** | Script Host: Aipo embutida, sem acesso ao sistema | **ACEITA** (2026-10-25, a seu pedido) | Aipo por dependência de caminho; módulos `sh`/`fs`/`env`/`io` **removidos**; permissões fixas; orçamento por chamada ([doc](../03-linguagens-e-api/05-script-host.md)) |
 | **DR-26** | Layout e design da janela do editor | **ACEITA** (2026-10-25, a seu pedido; revista) | Medidas do Unity com piso da WCAG; menus no `≡`; paleta `Ctrl+K`; workspaces Cena e Código ([design](../02-arquitetura/15-design-da-interface.md)) |
+| **DR-27** | Colisão e corpos físicos | **ACEITA** (2026-10-25, suas escolhas) | Colisões com nome como entidades; `RigidBody`; Rapier em `petunia_physics`; API `collision.*` e `physics.*` ([física](../02-arquitetura/06-fisica-e-cordas.md)) |
 | **DR-24** | Workspaces e prioridades antes da API | **EM PARTE ACEITA** (andares, cavernas B) | Mapa (com Jogar), Pintura sem UV, Animação, Efeitos por nós; antes da API: andares, cavernas, terreno, prefabs, Jogar ([análise](../02-arquitetura/14-workspaces-e-prioridades.md)) |
 
 ---
@@ -472,6 +473,23 @@ Números, opções e o que mudaria a recomendação: [pintura e animação](../0
 **Correção:** extrudar um brush deve ser um único gesto reversível: cancelar ou clicar sem arrastar não deixa um objeto; confirmar gera um único passo de desfazer. Corrigir somente defeitos reproduzidos com testes, sem redefinir silenciosamente a extrusão de brush como edição de malha.
 
 **LOCAL:** infraestrutura de seleção e destaque em `crates/petunia_editor/src/mesh_tool.rs`; a ferramenta atual cria o brush em `face_drag_begin` antes da confirmação. Evidência de execução será registrada após os testes. Sem dependências novas.
+
+---
+
+## DR-27 — Colisão e corpos físicos · ACEITA (2026-10-25)
+
+**Pedido:** "sistema de colisão… redimensionarmos e editarmos a colisão… múltiplas colisões nomeadas no objeto… acessadas via API de maneira fácil".
+
+**Suas escolhas** (perguntadas antes de implementar): **"Filhos nomeados"** (formato), **"Também malha convexa já"** (formas), **"Já com corpos físicos"** (comportamento).
+
+**Decisão:**
+
+1. Cada colisão é **uma entidade** com a tabela `Collider` (`owner`, `name`, `shape`, centro, rotação, tamanho, raio, altura, gatilho, atrito, quique). Um objeto pode ter quantas quiser. É o mesmo padrão dos traços de caverna.
+2. Corpo físico na tabela `RigidBody` do próprio objeto; sem ela, um objeto com colisões é estático.
+3. Motor: **Rapier 0.36.1** com determinismo reforçado, só dentro de `petunia_physics` (DR-08 já recomendava). A validação (números finitos, tamanhos, volume da convexa, limites) é **nossa**, antes do Rapier.
+4. Scripts: `collision.list/get/set/overlaps`, `physics.raycast/raycast_from/velocity/set_velocity/impulse`, `on_collision` e `on_collision_end`.
+
+**Reabrir se:** o experimento S6 mostrar que o Rapier não cabe no orçamento, ou se camadas de colisão pedirem outro formato.
 
 ---
 

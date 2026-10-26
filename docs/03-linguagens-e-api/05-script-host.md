@@ -29,9 +29,36 @@ fn on_update(entity, dt) {
 | `world` | `set`, `create`, `remove` | `world.write` |
 | `game` | `tick`, `seconds`, `emit` | `game` |
 | `log` | `debug`, `info`, `warning`, `error` (e `print`) | nenhuma |
+| `transform` | posição, rotação, escala, mover, girar, frente/direita/cima | `world.read` / `world.write` |
+| `collision` | `list`, `get`, `overlaps` | `world.read` |
+| `collision` | `set` (muda uma coluna de uma colisão; a física se refaz no quadro seguinte) | `world.write` |
+| `physics` | `raycast`, `raycast_from` (ignora o próprio objeto), `velocity` | `world.read` |
+| `physics` | `set_velocity`, `impulse` | `world.write` |
 | biblioteca padrão da Aipo | `math`, `string`, `json`, listas, dicionários, `random` com semente, `time` (sem relógio), `task`… | nenhuma |
 
 A tabela está em **um lugar só** (`api.rs`) e gera o que o compilador aceita, as funções nativas e a ajuda do editor; um teste confere que as três coincidem. Um erro como `world.fnd` aparece **no editor, antes de jogar**.
+
+### Colisão e física (DR-27)
+
+```aipo
+fn on_update(entity, dt) {
+    // Olha 1,2 m para baixo a partir do próprio objeto (as colisões dele são ignoradas).
+    let chao = physics.raycast_from(entity, {"x": 0.0, "y": -1.0, "z": 0.0}, 1.2)
+    if game.tick() % 60 == 0 {
+        log.info("colisões", collision.list(entity))
+    }
+}
+
+fn on_collision(entity, outro, minha, dele) {
+    if minha == "pés" {
+        physics.impulse(entity, {"x": 0.0, "y": 4.0, "z": 0.0})
+    }
+}
+```
+
+- Um objeto pode ter **várias colisões com nome**; o script as acha pelo nome (`"pés"`, `"corpo"`).
+- `on_collision(entity, outro, minha, dele)` e `on_collision_end(...)` são chamados quando duas colisões começam ou deixam de se tocar (gatilhos também).
+- Sem colisões ou corpos no mundo, `physics.*` e `collision.overlaps` devolvem uma falha que explica: "a física não está ligada".
 
 ## O que um script **não** pode
 
@@ -85,7 +112,7 @@ Há um teste que tenta `sh.run`, `fs.read_text`, `env.get` e `io.println` e conf
 | **Recarregar scripts com o jogo rodando** no `petunia run` | Hoje só o editor recarrega; o jogo lê na abertura |
 | Limite de **memória** por script | Só há limite de instruções |
 | Manifesto e aprovação de **mods** (permissões por mod) | O conjunto de permissões é fixo |
-| Eventos de entrada (tecla, gatilho) e colisão | Dependem da física e do controlador |
+| Eventos de **entrada** (tecla) | A colisão já existe (`on_collision`); entrada depende do controlador |
 | Depurador (pontos de parada, passo a passo) | Fase 8 |
 | Mensagens do compilador **em português** | Vêm em inglês da Aipo |
 | A Aipo como **dependência por caminho** (`../aipo-lang`) | Para distribuir, vira dependência fixada por commit |
