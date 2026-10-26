@@ -14,7 +14,11 @@
 #include <QApplication>
 #include <QCloseEvent>
 #include <QDockWidget>
+#include <QColorDialog>
+#include <QDialog>
+#include <QFormLayout>
 #include <QFrame>
+#include <QSlider>
 #include <QHBoxLayout>
 #include <QFileDialog>
 #include <QInputDialog>
@@ -25,6 +29,8 @@
 #include <QMessageBox>
 #include <QPushButton>
 #include <QSettings>
+#include <QShortcut>
+#include <QStackedWidget>
 #include <QStatusBar>
 #include <QTabWidget>
 #include <QTimer>
@@ -33,6 +39,7 @@
 #include <QVBoxLayout>
 
 #include "appearance.h"
+#include "command_palette.h"
 #include "code_panel.h"
 #include "engine_bridge.h"
 #include "hierarchy_panel.h"
@@ -42,6 +49,7 @@
 #include "panel_title_bar.h"
 #include "petunia_theme.h"
 #include "shell/petunia_pie_menu.h"
+#include "shell/petunia_segmented.h"
 #include "viewport_header.h"
 #include "viewport_widget.h"
 #include "wheel_guard.h"
@@ -55,17 +63,24 @@ MainWindow::MainWindow() : bridge_(std::make_unique<EngineBridge>()) {
 
     viewport_ = new ViewportWidget(bridge_.get(), this);
     header_ = new ViewportHeader(this);
-    auto* center = new QWidget(this);
-    auto* centerLayout = new QVBoxLayout(center);
-    centerLayout->setContentsMargins(0, 0, 0, 0);
-    centerLayout->setSpacing(0);
-    centerLayout->addWidget(header_);
-    centerLayout->addWidget(viewport_, 1);
-    setCentralWidget(center);
+    auto* scenePage = new QWidget(this);
+    sceneLayout_ = new QVBoxLayout(scenePage);
+    sceneLayout_->setContentsMargins(0, 0, 0, 0);
+    sceneLayout_->setSpacing(0);
+    sceneLayout_->addWidget(header_);
+    sceneLayout_->addWidget(viewport_, 1);
+    code_ = new CodePanel(bridge_.get(), this);
+    pages_ = new QStackedWidget(this);
+    pages_->addWidget(scenePage);
+    pages_->addWidget(code_);
+    setCentralWidget(pages_);
+    // A thin margin of the window color around the panels: they read as separate cards.
+    setContentsMargins(PetuniaTheme::instance().scaled(5), 0, PetuniaTheme::instance().scaled(5), 0);
 
     buildActions();
     buildMenus();
     buildAppBar();
+    buildToolPalette();
     buildSculptBar();
     buildDocks();
 
@@ -99,6 +114,15 @@ MainWindow::MainWindow() : bridge_(std::make_unique<EngineBridge>()) {
             updateCameraLabel();
         }
     });
+    connect(header_, &ViewportHeader::editModeRequested, this, [this](bool on) {
+        if (viewport_->isEditMode() != on) {
+            toggleEditMode();
+        }
+    });
+    connect(header_, &ViewportHeader::componentModeRequested, this, &MainWindow::setComponentMode);
+    connect(viewport_, &ViewportWidget::editModeChanged, header_, &ViewportHeader::showEditMode);
+    connect(viewport_, &ViewportWidget::componentModeChanged, header_, &ViewportHeader::showComponentMode);
+    connect(viewport_, &ViewportWidget::editModeToggleRequested, this, &MainWindow::toggleEditMode);
     connect(viewport_, &ViewportWidget::renderFailed, this, [this](const QString& message) {
         statusBar()->showMessage(message);
     });
@@ -125,9 +149,15 @@ MainWindow::MainWindow() : bridge_(std::make_unique<EngineBridge>()) {
     });
     applyAppearance();
     restoreGeometry(settings.value("window/geometry").toByteArray());
-    restoreState(settings.value("window/state").toByteArray());
+    workspaceStates_.insert(QStringLiteral("scene"), settings.value("window/workspace/scene").toByteArray());
+    workspaceStates_.insert(QStringLiteral("code"), settings.value("window/workspace/code").toByteArray());
+    if (workspaceStates_.value(QStringLiteral("scene")).isEmpty() || !restoreState(workspaceStates_.value(QStringLiteral("scene")))) {
+        applyDefaultDocks(QStringLiteral("scene"));
+    }
+    setFullMenus(settings.value("appearance/fullMenus", false).toBool());
 
     bridge_->refresh();
+    applyOutlineStyle();
     statusBar()->showMessage(
         QStringLiteral("Abra um projeto (Ctrl+O) ou crie o projeto de exemplo (Ctrl+N)."));
 }
@@ -170,6 +200,19 @@ void MainWindow::buildActions() {
     deleteAction_->setShortcut(QKeySequence::Delete);
     clearSelectionAction_ = make(QStringLiteral("Limpar seleção"), QStringLiteral("Deixa de selecionar o objeto"));
     clearSelectionAction_->setShortcut(QKeySequence(Qt::Key_Escape));
+
+    editModeAction_ = make(QStringLiteral("Modo de edição"), QStringLiteral("Alterna entre Modo Objeto e Modo Edição de Malha (Tab)"));
+    editModeAction_->setCheckable(true);
+    editModeAction_->setShortcut(QKeySequence(Qt::Key_Tab));
+    vertexModeAction_ = make(QStringLiteral("Vértices"), QStringLiteral("Selecionar vértices da malha (1)"));
+    vertexModeAction_->setCheckable(true);
+    vertexModeAction_->setShortcut(QKeySequence(Qt::Key_1));
+    edgeModeAction_ = make(QStringLiteral("Arestas"), QStringLiteral("Selecionar arestas da malha (2)"));
+    edgeModeAction_->setCheckable(true);
+    edgeModeAction_->setShortcut(QKeySequence(Qt::Key_2));
+    faceModeAction_ = make(QStringLiteral("Faces"), QStringLiteral("Selecionar faces da malha (3)"));
+    faceModeAction_->setCheckable(true);
+    faceModeAction_->setShortcut(QKeySequence(Qt::Key_3));
 
     struct ShapeInfo {
         const char* shape;
@@ -228,13 +271,15 @@ void MainWindow::buildActions() {
         const char* label;
         const char* icon;
         Qt::Key key;
-    } views[6] = {{"front", "Vista de frente", "view_front", Qt::Key_1},
+    } views[8] = {{"front", "Vista de frente", "view_front", Qt::Key_1},
                   {"back", "Vista de trás", "view_back", Qt::Key_2},
                   {"left", "Vista da esquerda", "view_left", Qt::Key_3},
                   {"right", "Vista da direita", "view_right", Qt::Key_4},
                   {"top", "Vista de cima", "view_top", Qt::Key_5},
-                  {"bottom", "Vista de baixo", "view_bottom", Qt::Key_6}};
-    for (int index = 0; index < 6; ++index) {
+                  {"bottom", "Vista de baixo", "view_bottom", Qt::Key_6},
+                  {"isometric", "Vista isométrica verdadeira (35,264°)", "view_front", Qt::Key_7},
+                  {"game_2_1", "Vista isométrica de jogo 2:1 (30°)", "view_front", Qt::Key_8}};
+    for (int index = 0; index < 8; ++index) {
         viewActions_[index] = make(QString::fromUtf8(views[index].label), QStringLiteral("Olha para a seleção (ou a cena) nesta direção"));
         viewActions_[index]->setShortcut(QKeySequence(Qt::ALT | views[index].key));
         viewActions_[index]->setData(QString::fromUtf8(views[index].name));
@@ -255,8 +300,15 @@ void MainWindow::buildActions() {
     reducedMotionAction_->setCheckable(true);
     primitivesMenuAction_ = make(QStringLiteral("Menu de primitivas…"), QStringLiteral("Menu radial para criar formas (Shift+A)"));
     primitivesMenuAction_->setShortcut(QKeySequence(Qt::SHIFT | Qt::Key_A));
-    codeAction_ = make(QStringLiteral("Editor de código"), QStringLiteral("Abre o editor de scripts e põe o cursor nele (F4)"));
+    codeAction_ = make(QStringLiteral("Workspace Código"), QStringLiteral("Os scripts do projeto, com o cursor no editor (F4)"));
     codeAction_->setShortcut(QKeySequence(Qt::Key_F4));
+    codeAction_->setProperty("iconName", QStringLiteral("script"));
+    sceneAction_ = make(QStringLiteral("Workspace Cena"), QStringLiteral("A cena 3D com a hierarquia e o inspetor (F3)"));
+    sceneAction_->setShortcut(QKeySequence(Qt::Key_F3));
+    sceneAction_->setProperty("iconName", QStringLiteral("cube"));
+    paletteAction_ = make(QStringLiteral("Buscar comando…"), QStringLiteral("Acha qualquer comando pelo nome e executa (Ctrl+K)"));
+    paletteAction_->setShortcuts({QKeySequence(Qt::CTRL | Qt::Key_K), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_P)});
+    paletteAction_->setShortcutContext(Qt::ApplicationShortcut);
     caveAction_ = make(QStringLiteral("Caverna"), QStringLiteral("Um bloco de rocha com um primeiro túnel; esculpa com a ferramenta Esculpir (B)"));
     caveAction_->setProperty("iconName", QStringLiteral("generate_volume"));
     randomCaveAction_ = make(QStringLiteral("Caverna aleatória"), QStringLiteral("Um bloco de rocha com salas e túneis sinuosos gerados por uma semente; tudo vira traços editáveis"));
@@ -278,6 +330,12 @@ void MainWindow::buildActions() {
     shortcutsAction_ = make(QStringLiteral("Atalhos do teclado"), QStringLiteral("Mostra os atalhos"));
     shortcutsAction_->setShortcut(QKeySequence::HelpContents);
     aboutAction_ = make(QStringLiteral("Sobre o Petunia Editor"), QStringLiteral("Versão e estado do projeto"));
+    preferencesAction_ = make(QStringLiteral("Preferências…"), QStringLiteral("Tema, densidade e o contorno da seleção (Ctrl+,)"));
+    preferencesAction_->setShortcut(QKeySequence::Preferences);
+    if (preferencesAction_->shortcut().isEmpty()) {
+        preferencesAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Comma));
+    }
+    preferencesAction_->setProperty("iconName", QStringLiteral("settings"));
 
     connect(newAction_, &QAction::triggered, this, &MainWindow::chooseNewSample);
     connect(openAction_, &QAction::triggered, this, &MainWindow::chooseOpen);
@@ -292,7 +350,16 @@ void MainWindow::buildActions() {
     connect(redoAction_, &QAction::triggered, this, [this] { perform(QStringLiteral("edit.redo"), {}); });
     connect(duplicateAction_, &QAction::triggered, this, [this] { perform(QStringLiteral("edit.duplicate"), {}); });
     connect(deleteAction_, &QAction::triggered, this, [this] { perform(QStringLiteral("edit.delete"), {}); });
-    connect(clearSelectionAction_, &QAction::triggered, this, [this] { perform(QStringLiteral("selection.set"), {}); });
+    connect(clearSelectionAction_, &QAction::triggered, this, [this] {
+        if (viewport_->isEditMode()) {
+            viewport_->setEditMode(false);
+        }
+        perform(QStringLiteral("selection.set"), {});
+    });
+    connect(editModeAction_, &QAction::triggered, this, &MainWindow::toggleEditMode);
+    connect(vertexModeAction_, &QAction::triggered, this, [this] { setComponentMode(ComponentMode::Vertex); });
+    connect(edgeModeAction_, &QAction::triggered, this, [this] { setComponentMode(ComponentMode::Edge); });
+    connect(faceModeAction_, &QAction::triggered, this, [this] { setComponentMode(ComponentMode::Face); });
     for (QAction* action : shapeActions_) {
         connect(action, &QAction::triggered, this, [this, action] {
             perform(QStringLiteral("create.brush"), QJsonObject{{"shape", action->data().toString()}});
@@ -361,11 +428,17 @@ void MainWindow::buildActions() {
         }
     });
     connect(codeAction_, &QAction::triggered, this, [this] {
-        codeDock_->show();
-        codeDock_->raise();
-        // Room to write: the bottom panels start short, enough for a table, not for code.
-        resizeDocks({codeDock_}, {qMax(codeDock_->height(), 380)}, Qt::Vertical);
+        switchWorkspace(QStringLiteral("code"));
         code_->focusEditor();
+    });
+    connect(sceneAction_, &QAction::triggered, this, [this] {
+        switchWorkspace(QStringLiteral("scene"));
+        viewport_->setFocus();
+    });
+    connect(paletteAction_, &QAction::triggered, this, [this] {
+        if (palette_ != nullptr) {
+            palette_->open();
+        }
     });
     connect(caveAction_, &QAction::triggered, this, [this] {
         perform(QStringLiteral("create.cave"), QJsonObject{});
@@ -397,6 +470,7 @@ void MainWindow::buildActions() {
         perform(QStringLiteral("transform.set"), QJsonObject{{"edit_pivot", on}}, false);
     });
     connect(aboutAction_, &QAction::triggered, this, &MainWindow::showAbout);
+    connect(preferencesAction_, &QAction::triggered, this, &MainWindow::showPreferences);
 }
 
 void MainWindow::buildMenus() {
@@ -416,6 +490,13 @@ void MainWindow::buildMenus() {
     edit->addAction(duplicateAction_);
     edit->addAction(deleteAction_);
     edit->addAction(clearSelectionAction_);
+    edit->addSeparator();
+    edit->addAction(preferencesAction_);
+    edit->addSeparator();
+    edit->addAction(editModeAction_);
+    edit->addAction(vertexModeAction_);
+    edit->addAction(edgeModeAction_);
+    edit->addAction(faceModeAction_);
 
     QMenu* create = menus_->addMenu(QStringLiteral("&Criar"));
     create->addAction(primitivesMenuAction_);
@@ -444,19 +525,41 @@ void MainWindow::buildMenus() {
     operations->addAction(floorDownAction_);
 
     QMenu* tools = menus_->addMenu(QStringLiteral("&Ferramentas"));
-    tools->addAction(codeAction_);
-    tools->addSeparator();
     for (QAction* action : toolActions_) {
         tools->addAction(action);
     }
 
     QMenu* view = menus_->addMenu(QStringLiteral("E&xibir"));
     viewMenu_ = view;
+    view->addAction(paletteAction_);
+    view->addSeparator();
+    view->addAction(sceneAction_);
+    view->addAction(codeAction_);
+    view->addSeparator();
     view->addAction(focusAction_);
     view->addAction(resetCameraAction_);
     QMenu* viewsMenu = view->addMenu(QStringLiteral("Vistas"));
     for (QAction* action : viewActions_) {
         viewsMenu->addAction(action);
+    }
+    QMenu* projectionMenu = view->addMenu(QStringLiteral("Projeção"));
+    auto* projectionGroup = new QActionGroup(projectionMenu);
+    const QList<QPair<QString, QString>> projectionModes = {
+        {QStringLiteral("perspective"), QStringLiteral("Perspectiva")},
+        {QStringLiteral("orthographic"), QStringLiteral("Ortográfica")},
+    };
+    for (const auto& [mode, label] : projectionModes) {
+        QAction* action = projectionMenu->addAction(label);
+        action->setCheckable(true);
+        action->setData(mode);
+        projectionGroup->addAction(action);
+        projectionActions_.append(action);
+        connect(action, &QAction::triggered, this, [this, mode = mode] {
+            if (perform(QStringLiteral("camera.projection"), QJsonObject{{"mode", mode}}, false).ok) {
+                viewport_->update();
+            }
+            updateCameraLabel();
+        });
     }
     QMenu* aboveMenu = view->addMenu(QStringLiteral("Objetos acima do andar"));
     auto* aboveGroup = new QActionGroup(this);
@@ -508,6 +611,13 @@ void MainWindow::buildMenus() {
         });
     }
     view->addAction(reducedMotionAction_);
+    fullMenusAction_ = view->addAction(QStringLiteral("Menus por extenso na barra"));
+    fullMenusAction_->setCheckable(true);
+    fullMenusAction_->setToolTip(QStringLiteral("Mostra Arquivo, Editar, Criar… como palavras em vez do botão ≡"));
+    connect(fullMenusAction_, &QAction::toggled, this, [this](bool on) {
+        setFullMenus(on);
+        QSettings().setValue("appearance/fullMenus", on);
+    });
     view->addSeparator();
     // Dock toggles are added once the docks exist (buildDocks).
 
@@ -522,73 +632,228 @@ void MainWindow::buildAppBar() {
     bar->setAttribute(Qt::WA_StyledBackground);
     bar->setAccessibleName(QStringLiteral("Barra principal"));
     auto* layout = new QHBoxLayout(bar);
-    layout->setContentsMargins(4, 3, 8, 3);
+    layout->setContentsMargins(4, 4, 4, 4);
     layout->setSpacing(2);
 
-    auto rule = [bar, layout] {
-        auto* line = new QFrame(bar);
-        line->setProperty("role", QStringLiteral("vrule"));
-        line->setFixedWidth(1);
-        layout->addWidget(line);
-    };
     auto button = [this, bar, layout](QAction* action, const QString& iconName) {
         auto* tool = new QToolButton(bar);
         tool->setDefaultAction(action);
         tool->setProperty("role", QStringLiteral("appTool"));
         tool->setToolButtonStyle(Qt::ToolButtonIconOnly);
-        tool->setIconSize(QSize(18, 18));
+        tool->setIconSize(QSize(16, 16));
         tool->setAutoRaise(true);
         setActionIcon(action, iconName);
         layout->addWidget(tool);
         return tool;
     };
 
-    menus_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+    // The menus behind one button (JetBrains "new UI"); "Menus por extenso" shows them as words.
+    hamburger_ = new QToolButton(bar);
+    hamburger_->setProperty("role", QStringLiteral("appTool"));
+    hamburger_->setPopupMode(QToolButton::InstantPopup);
+    hamburger_->setIconSize(QSize(16, 16));
+    hamburger_->setToolTip(QStringLiteral("Menus (F10 ou Alt+\\; Alt+letra abre um menu direto)"));
+    hamburger_->setAccessibleName(QStringLiteral("Menus"));
+    auto* all = new QMenu(hamburger_);
+    for (QAction* action : menus_->actions()) {
+        if (QMenu* menu = action->menu()) {
+            all->addMenu(menu);
+        }
+    }
+    hamburger_->setMenu(all);
+    iconButtons_.append({hamburger_, QStringLiteral("list_view")});
+    hamburger_->setIcon(PetuniaIcons::get(QStringLiteral("list_view")));
+    layout->addWidget(hamburger_);
     layout->addWidget(menus_);
-    rule();
+    menus_->hide();
+    for (const QKeySequence& keys : {QKeySequence(Qt::Key_F10), QKeySequence(Qt::ALT | Qt::Key_Backslash)}) {
+        auto* open = new QShortcut(keys, this);
+        connect(open, &QShortcut::activated, this, [this] {
+            if (hamburger_->isVisible()) {
+                hamburger_->showMenu();
+            } else if (!menus_->actions().isEmpty()) {
+                menus_->setActiveAction(menus_->actions().constFirst());
+            }
+        });
+    }
+    // Alt+letter opens that menu, as a menu bar would.
+    for (QAction* action : menus_->actions()) {
+        QMenu* menu = action->menu();
+        const QKeySequence mnemonic = QKeySequence::mnemonic(action->text());
+        if (menu == nullptr || mnemonic.isEmpty()) {
+            continue;
+        }
+        auto* shortcut = new QShortcut(mnemonic, this);
+        connect(shortcut, &QShortcut::activated, this, [this, menu] {
+            menu->popup(hamburger_->mapToGlobal(QPoint(0, hamburger_->height() + 2)));
+        });
+        menuShortcuts_.append(shortcut);
+    }
 
-    // The tools, grouped: transform, faces, sculpting. Then the primitives list.
+    projectLabel_ = new QLabel(bar);
+    projectLabel_->setProperty("role", QStringLiteral("caption"));
+    projectLabel_->setAccessibleName(QStringLiteral("Projeto aberto"));
+    projectLabel_->setContentsMargins(6, 0, 6, 0);
+    layout->addWidget(projectLabel_);
+    layout->addStretch(1);
+
+    workspaces_ = new PetuniaSegmented(bar);
+    workspaces_->setItems({{QStringLiteral("scene"), QStringLiteral("Cena"), QStringLiteral("Workspace Cena: a cena 3D, a hierarquia e o inspetor (F3)"), QStringLiteral("cube")},
+                           {QStringLiteral("code"), QStringLiteral("Código"), QStringLiteral("Workspace Código: os scripts do projeto (F4)"), QStringLiteral("script")}});
+    workspaces_->setGroupLabel(QStringLiteral("Workspaces"));
+    workspaces_->setCurrent(QStringLiteral("scene"));
+    for (QPushButton* segment : workspaces_->buttons()) {
+        segment->setProperty("role", QStringLiteral("workspace"));
+    }
+    connect(workspaces_, &PetuniaSegmented::activated, this, [this](const QString& id) {
+        (id == QLatin1String("code") ? codeAction_ : sceneAction_)->trigger();
+    });
+    layout->addWidget(workspaces_);
+    layout->addStretch(1);
+
+    // The command search, visible so it is not a secret shortcut.
+    auto* search = new QPushButton(bar);
+    search->setProperty("role", QStringLiteral("search"));
+    search->setToolTip(paletteAction_->toolTip());
+    search->setAccessibleName(QStringLiteral("Buscar comando"));
+    search->setMinimumWidth(PetuniaTheme::instance().scaled(200));
+    auto* searchLayout = new QHBoxLayout(search);
+    searchLayout->setContentsMargins(8, 0, 4, 0);
+    searchLayout->setSpacing(6);
+    auto* searchIcon = new QLabel(search);
+    searchIcon->setAttribute(Qt::WA_TransparentForMouseEvents);
+    auto* searchText = new QLabel(QStringLiteral("Buscar comando"), search);
+    searchText->setAttribute(Qt::WA_TransparentForMouseEvents);
+    searchText->setProperty("role", QStringLiteral("muted"));
+    auto* keycap = new QLabel(QStringLiteral("Ctrl K"), search);
+    keycap->setAttribute(Qt::WA_TransparentForMouseEvents);
+    keycap->setProperty("role", QStringLiteral("keycap"));
+    searchLayout->addWidget(searchIcon);
+    searchLayout->addWidget(searchText, 1);
+    searchLayout->addWidget(keycap);
+    auto paintSearchIcon = [searchIcon] {
+        searchIcon->setPixmap(PetuniaIcons::get(QStringLiteral("search"), PetuniaTheme::instance().textMuted().name()).pixmap(14, 14));
+    };
+    paintSearchIcon();
+    connect(&PetuniaTheme::instance(), &PetuniaTheme::changed, searchIcon, paintSearchIcon);
+    connect(search, &QPushButton::clicked, paletteAction_, &QAction::trigger);
+    layout->addWidget(search);
+    layout->addSpacing(6);
+
+    button(undoAction_, QStringLiteral("undo"));
+    button(redoAction_, QStringLiteral("redo"));
+    button(saveAction_, QStringLiteral("save"));
+
+    // Icons used by the menus and the palette.
+    setActionIcon(duplicateAction_, QStringLiteral("duplicate"));
+    setActionIcon(deleteAction_, QStringLiteral("trash"));
+    setActionIcon(focusAction_, QStringLiteral("frame_selection"));
+    setActionIcon(codeAction_, QStringLiteral("script"));
+    setActionIcon(sceneAction_, QStringLiteral("cube"));
+    setActionIcon(paletteAction_, QStringLiteral("search"));
+    setActionIcon(preferencesAction_, QStringLiteral("settings"));
+    setActionIcon(newAction_, QStringLiteral("new_file"));
+    setActionIcon(openAction_, QStringLiteral("open_project"));
+    setActionIcon(caveAction_, QStringLiteral("generate_volume"));
+    for (QAction* action : viewActions_) {
+        setActionIcon(action, action->property("iconName").toString());
+    }
+    setMenuWidget(bar);
+
+    QList<QMenu*> roots;
+    for (QAction* action : menus_->actions()) {
+        if (QMenu* menu = action->menu()) {
+            roots.append(menu);
+        }
+    }
+    palette_ = new CommandPalette(this, roots);
+}
+
+void MainWindow::setFullMenus(bool on) {
+    menus_->setVisible(on);
+    hamburger_->setVisible(!on);
+    // With the words visible, the menu bar answers Alt+letter itself.
+    for (QShortcut* shortcut : std::as_const(menuShortcuts_)) {
+        shortcut->setEnabled(!on);
+    }
+    if (fullMenusAction_ != nullptr && fullMenusAction_->isChecked() != on) {
+        const QSignalBlocker blocker(fullMenusAction_);
+        fullMenusAction_->setChecked(on);
+    }
+}
+
+void MainWindow::buildToolPalette() {
+    auto* palette = new QFrame(viewport_);
+    palette->setObjectName(QStringLiteral("PetuniaToolPalette"));
+    palette->setAccessibleName(QStringLiteral("Ferramentas"));
+    auto* layout = new QVBoxLayout(palette);
+    layout->setContentsMargins(3, 3, 3, 3);
+    layout->setSpacing(2);
+    auto rule = [palette, layout] {
+        auto* line = new QFrame(palette);
+        line->setProperty("role", QStringLiteral("hrule"));
+        line->setFixedHeight(1);
+        layout->addWidget(line);
+    };
+    // Transform · faces · sculpting, then the primitives.
     for (int index = 0; index < 8; ++index) {
         if (index == 4 || index == 6) {
-            layout->addSpacing(6);
+            rule();
         }
-        button(toolActions_[index], toolActions_[index]->property("iconName").toString());
+        auto* tool = new QToolButton(palette);
+        tool->setDefaultAction(toolActions_[index]);
+        tool->setProperty("role", QStringLiteral("appTool"));
+        tool->setIconSize(QSize(16, 16));
+        tool->setFixedSize(28, 28);
+        setActionIcon(toolActions_[index], toolActions_[index]->property("iconName").toString());
+        layout->addWidget(tool);
     }
-    layout->addSpacing(6);
-    auto* primitives = new QToolButton(bar);
+    rule();
+    auto* primitives = new QToolButton(palette);
     primitives->setProperty("role", QStringLiteral("appTool"));
-    primitives->setPopupMode(QToolButton::InstantPopup);
-    primitives->setIconSize(QSize(18, 18));
-    primitives->setToolTip(QStringLiteral("Primitivas: cria um objeto na frente da câmera (Shift+A)"));
-    primitives->setAccessibleName(QStringLiteral("Primitivas"));
+    primitives->setIconSize(QSize(16, 16));
+    primitives->setFixedSize(28, 28);
+    primitives->setToolTip(QStringLiteral("Criar primitiva na frente da câmera (Shift+A)"));
+    primitives->setAccessibleName(QStringLiteral("Criar primitiva"));
     auto* menu = new QMenu(primitives);
     for (QAction* action : shapeActions_) {
         setActionIcon(action, action->property("iconName").toString());
         menu->addAction(action);
     }
-    primitives->setMenu(menu);
+    // The column is narrow: the list opens to its right, not over the tools.
+    connect(primitives, &QToolButton::clicked, this, [primitives, menu] {
+        menu->popup(primitives->mapToGlobal(QPoint(primitives->width() + 6, 0)));
+    });
     iconButtons_.append({primitives, QStringLiteral("add_primitive")});
     primitives->setIcon(PetuniaIcons::get(QStringLiteral("add_primitive")));
     layout->addWidget(primitives);
-    rule();
+    palette->adjustSize();
+    palette->move(8, 8);
+    palette->show();
+}
 
-    layout->addSpacing(2);
-    layout->addWidget(header_->transformControls());
-    layout->addStretch(1);
-
-    button(undoAction_, QStringLiteral("undo"));
-    button(redoAction_, QStringLiteral("redo"));
-    rule();
-    button(saveAction_, QStringLiteral("save"));
-
-    // Icons used by the menus only.
-    setActionIcon(duplicateAction_, QStringLiteral("duplicate"));
-    setActionIcon(deleteAction_, QStringLiteral("trash"));
-    setActionIcon(focusAction_, QStringLiteral("frame_selection"));
-    for (QAction* action : viewActions_) {
-        setActionIcon(action, action->property("iconName").toString());
+void MainWindow::switchWorkspace(const QString& id) {
+    if (id == workspace_) {
+        workspaces_->setCurrent(id);
+        return;
     }
-    setMenuWidget(bar);
+    workspaceStates_.insert(workspace_, saveState());
+    workspace_ = id;
+    pages_->setCurrentIndex(id == QLatin1String("code") ? 1 : 0);
+    const QByteArray state = workspaceStates_.value(id);
+    if (state.isEmpty() || !restoreState(state)) {
+        applyDefaultDocks(id);
+    }
+    workspaces_->setCurrent(id);
+}
+
+// First visit of a workspace: the scene shows the hierarchy, the inspector and the bottom tabs; the
+// code shows only the API reference next to the editor.
+void MainWindow::applyDefaultDocks(const QString& id) {
+    const bool code = id == QLatin1String("code");
+    for (QDockWidget* dock : std::as_const(docks_)) {
+        dock->setVisible(code ? dock == apiDock_ : dock != apiDock_);
+    }
 }
 
 void MainWindow::buildSculptBar() {
@@ -598,9 +863,7 @@ void MainWindow::buildSculptBar() {
     sculptBar_->setMovable(false);
     sculptBar_->setFloatable(false);
     sculptBar_->setAccessibleName(QStringLiteral("Opções de esculpir"));
-    if (auto* centerLayout = qobject_cast<QVBoxLayout*>(centralWidget()->layout())) {
-        centerLayout->insertWidget(1, sculptBar_);
-    }
+    sceneLayout_->insertWidget(1, sculptBar_);
     sculptBar_->hide();
 
     sculptBar_->addWidget(new QLabel(QStringLiteral(" Modo ")));
@@ -738,7 +1001,14 @@ void MainWindow::buildDocks() {
     auto addDock = [this](const QString& title, QWidget* widget, Qt::DockWidgetArea area) {
         auto* dock = new QDockWidget(title, this);
         dock->setObjectName(title);
-        dock->setWidget(widget);
+        // A body with rounded lower corners; the title bar has the upper ones: one card.
+        auto* body = new QWidget(dock);
+        body->setObjectName(QStringLiteral("PetuniaDockBody"));
+        body->setAttribute(Qt::WA_StyledBackground);
+        auto* bodyLayout = new QVBoxLayout(body);
+        bodyLayout->setContentsMargins(0, 0, 0, 4);
+        bodyLayout->addWidget(widget);
+        dock->setWidget(body);
         dock->setAccessibleName(title);
         if (area == Qt::BottomDockWidgetArea) {
             // The tabs on top already name the bottom panels: no second title.
@@ -761,17 +1031,13 @@ void MainWindow::buildDocks() {
     diagnostics_ = new DiagnosticsPanel(bridge_.get(), this);
     history_ = new HistoryPanel(bridge_.get(), this);
     api_ = new ApiPanel(bridge_.get(), this);
-    code_ = new CodePanel(bridge_.get(), this);
 
     QDockWidget* hierarchyDock = addDock(QStringLiteral("Hierarquia"), hierarchy_, Qt::LeftDockWidgetArea);
     QDockWidget* inspectorDock = addDock(QStringLiteral("Inspetor"), inspector_, Qt::RightDockWidgetArea);
+    apiDock_ = addDock(QStringLiteral("Referência da API"), api_, Qt::RightDockWidgetArea);
     QDockWidget* diagnosticsDock = addDock(QStringLiteral("Diagnósticos"), diagnostics_, Qt::BottomDockWidgetArea);
     QDockWidget* historyDock = addDock(QStringLiteral("Histórico"), history_, Qt::BottomDockWidgetArea);
-    QDockWidget* apiDock = addDock(QStringLiteral("API"), api_, Qt::BottomDockWidgetArea);
-    codeDock_ = addDock(QStringLiteral("Código"), code_, Qt::BottomDockWidgetArea);
     tabifyDockWidget(diagnosticsDock, historyDock);
-    tabifyDockWidget(historyDock, apiDock);
-    tabifyDockWidget(apiDock, codeDock_);
     diagnosticsDock->raise();
 
     auto* createMenu = new QMenu(hierarchy_);
@@ -783,10 +1049,10 @@ void MainWindow::buildDocks() {
     createMenu->addAction(randomCaveAction_);
     hierarchy_->setCreateMenu(createMenu);
 
-    hierarchyDock->setMinimumWidth(220);
-    inspectorDock->setMinimumWidth(320);
-    resizeDocks({hierarchyDock, inspectorDock}, {250, 380}, Qt::Horizontal);
-    resizeDocks({diagnosticsDock}, {200}, Qt::Vertical);
+    hierarchyDock->setMinimumWidth(200);
+    inspectorDock->setMinimumWidth(280);
+    resizeDocks({hierarchyDock, inspectorDock, apiDock_}, {240, 340, 340}, Qt::Horizontal);
+    resizeDocks({diagnosticsDock}, {160}, Qt::Vertical);
 
     for (QDockWidget* dock : std::as_const(docks_)) {
         viewMenu_->addAction(dock->toggleViewAction());
@@ -853,6 +1119,9 @@ bool MainWindow::createSampleAt(const QString& path, const QString& name, bool i
 }
 
 void MainWindow::selectEntity(quint64 entity) {
+    if (viewport_->isEditMode() && bridge_->selection() != entity) {
+        viewport_->setEditMode(false);
+    }
     perform(QStringLiteral("selection.set"), QJsonObject{{"entity", static_cast<double>(entity)}}, false);
 }
 
@@ -890,6 +1159,9 @@ void MainWindow::onSnapshot() {
     setWindowTitle(project ? QStringLiteral("%1[*] — Petunia Editor").arg(info.value("name").toString())
                            : QStringLiteral("Petunia Editor"));
     setWindowModified(project && info.value("dirty").toBool());
+    projectLabel_->setText(project ? info.value("name").toString() + (info.value("dirty").toBool() ? QStringLiteral("  •") : QString())
+                                   : QStringLiteral("Nenhum projeto"));
+    projectLabel_->setToolTip(project && info.value("dirty").toBool() ? QStringLiteral("Alterações não salvas (Ctrl+S salva)") : QString());
 
     saveAction_->setEnabled(project);
     undoAction_->setEnabled(snapshot.value("can_undo").toBool());
@@ -935,6 +1207,10 @@ void MainWindow::onSnapshot() {
     for (QAction* action : {duplicateAction_, deleteAction_, focusAction_, clearSelectionAction_}) {
         action->setEnabled(selected);
     }
+    if (!selected && viewport_->isEditMode()) {
+        viewport_->setEditMode(false);
+    }
+    syncEditMode();
 
     hierarchy_->reload();
     inspector_->reload();
@@ -947,7 +1223,7 @@ void MainWindow::onSnapshot() {
     }
 
     const QJsonObject diagnostics = snapshot.value("diagnostics").toObject();
-    countLabel_->setText(project ? QStringLiteral("Objetos: %1   Erros: %2   Avisos: %3")
+    countLabel_->setText(project ? QStringLiteral("%1 objetos · %2 erros · %3 avisos")
                                        .arg(snapshot.value("object_count").toInt())
                                        .arg(diagnostics.value("errors").toInt())
                                        .arg(diagnostics.value("warnings").toInt())
@@ -962,10 +1238,18 @@ void MainWindow::updateCameraLabel() {
         return;
     }
     const QJsonObject camera = reply.result.toObject();
-    cameraLabel_->setText(QStringLiteral("   Câmera: %1, %2, %3")
+    cameraLabel_->setText(QStringLiteral("   câmera %1, %2, %3")
                               .arg(camera.value("x").toDouble(), 0, 'f', 1)
                               .arg(camera.value("y").toDouble(), 0, 'f', 1)
                               .arg(camera.value("z").toDouble(), 0, 'f', 1));
+    const QString projectionMode = camera.value(QStringLiteral("projection_mode")).toString();
+    if (!projectionMode.isEmpty()) {
+        for (QAction* action : std::as_const(projectionActions_)) {
+            if (action->data().toString() == projectionMode) {
+                action->setChecked(true);
+            }
+        }
+    }
 }
 
 // ---- appearance, help, closing ------------------------------------------------------------
@@ -1001,6 +1285,116 @@ void MainWindow::refreshIcons() {
     }
 }
 
+void MainWindow::applyOutlineStyle() {
+    QSettings settings;
+    const QColor color(settings.value("viewport/outlineColor", QStringLiteral("#ff9e1a")).toString());
+    const double width = qBound(1.0, settings.value("viewport/outlineWidth", 2.0).toDouble(), 8.0);
+    const QColor valid = color.isValid() ? color : QColor(QStringLiteral("#ff9e1a"));
+    perform(QStringLiteral("viewport.outline_style"),
+            QJsonObject{{"color", QJsonObject{{"r", valid.redF()}, {"g", valid.greenF()}, {"b", valid.blueF()}}},
+                        {"width", width}},
+            false);
+    viewport_->update();
+}
+
+void MainWindow::showPreferences() {
+    QDialog dialog(this);
+    dialog.setWindowTitle(QStringLiteral("Preferências"));
+    dialog.setMinimumWidth(PetuniaTheme::instance().scaled(380));
+    auto* layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(16, 14, 16, 14);
+    layout->setSpacing(10);
+    auto section = [&](const QString& title) {
+        auto* label = new QLabel(title, &dialog);
+        label->setProperty("role", QStringLiteral("title"));
+        layout->addWidget(label);
+        auto* form = new QFormLayout;
+        form->setHorizontalSpacing(12);
+        form->setVerticalSpacing(8);
+        layout->addLayout(form);
+        return form;
+    };
+
+    QFormLayout* appearance = section(QStringLiteral("Aparência"));
+    auto* themeBox = new QComboBox(&dialog);
+    for (const Appearance::ThemeInfo& info : Appearance::themes()) {
+        themeBox->addItem(info.name, info.id);
+    }
+    themeBox->setCurrentIndex(qMax(0, themeBox->findData(themeId_)));
+    appearance->addRow(QStringLiteral("Tema"), themeBox);
+    auto* densityBox = new QComboBox(&dialog);
+    densityBox->addItems({QStringLiteral("Compacta"), QStringLiteral("Padrão"), QStringLiteral("Confortável")});
+    densityBox->setCurrentIndex(densityIndex_);
+    densityBox->setToolTip(QStringLiteral("Altura dos controles e tamanho do texto: 24, 28 ou 32 px"));
+    appearance->addRow(QStringLiteral("Densidade"), densityBox);
+    connect(themeBox, &QComboBox::activated, this, [this, themeBox](int index) {
+        themeId_ = themeBox->itemData(index).toString();
+        applyAppearance();
+    });
+    connect(densityBox, &QComboBox::activated, this, [this](int index) {
+        densityIndex_ = index;
+        applyAppearance();
+    });
+
+    QFormLayout* outline = section(QStringLiteral("Contorno da seleção"));
+    QSettings settings;
+    auto* colorButton = new QPushButton(&dialog);
+    colorButton->setAccessibleName(QStringLiteral("Cor do contorno da seleção"));
+    auto paint = [colorButton](const QColor& color) {
+        const QColor text = color.lightnessF() > 0.55 ? Qt::black : Qt::white;
+        colorButton->setText(color.name(QColor::HexRgb).toUpper());
+        colorButton->setStyleSheet(QStringLiteral("background-color: %1; color: %2;").arg(color.name(), text.name()));
+    };
+    paint(QColor(settings.value("viewport/outlineColor", QStringLiteral("#ff9e1a")).toString()));
+    outline->addRow(QStringLiteral("Cor"), colorButton);
+    auto* widthRow = new QHBoxLayout;
+    auto* widthSlider = new QSlider(Qt::Horizontal, &dialog);
+    widthSlider->setRange(1, 8);
+    widthSlider->setValue(qBound(1, qRound(settings.value("viewport/outlineWidth", 2.0).toDouble()), 8));
+    widthSlider->setAccessibleName(QStringLiteral("Espessura do contorno da seleção, em pixels"));
+    auto* widthValue = new QLabel(&dialog);
+    widthValue->setMinimumWidth(40);
+    widthValue->setText(QStringLiteral("%1 px").arg(widthSlider->value()));
+    widthRow->addWidget(widthSlider, 1);
+    widthRow->addWidget(widthValue);
+    outline->addRow(QStringLiteral("Espessura"), widthRow);
+    auto* reset = new QPushButton(QStringLiteral("Restaurar padrão"), &dialog);
+    reset->setProperty("role", QStringLiteral("quiet"));
+    outline->addRow(QString(), reset);
+
+    connect(colorButton, &QPushButton::clicked, this, [this, paint, &dialog] {
+        const QColor current(QSettings().value("viewport/outlineColor", QStringLiteral("#ff9e1a")).toString());
+        const QColor chosen = QColorDialog::getColor(current, &dialog, QStringLiteral("Cor do contorno da seleção"));
+        if (chosen.isValid()) {
+            QSettings().setValue("viewport/outlineColor", chosen.name(QColor::HexRgb));
+            paint(chosen);
+            applyOutlineStyle();
+        }
+    });
+    connect(widthSlider, &QSlider::valueChanged, this, [this, widthValue](int value) {
+        widthValue->setText(QStringLiteral("%1 px").arg(value));
+        QSettings().setValue("viewport/outlineWidth", value);
+        applyOutlineStyle();
+    });
+    connect(reset, &QPushButton::clicked, this, [this, paint, widthSlider] {
+        QSettings().setValue("viewport/outlineColor", QStringLiteral("#ff9e1a"));
+        paint(QColor(QStringLiteral("#ff9e1a")));
+        widthSlider->setValue(2);
+        applyOutlineStyle();
+    });
+
+    layout->addStretch(1);
+    auto* close = new QPushButton(QStringLiteral("Fechar"), &dialog);
+    close->setProperty("role", QStringLiteral("primary"));
+    close->setDefault(true);
+    connect(close, &QPushButton::clicked, &dialog, &QDialog::accept);
+    auto* buttons = new QHBoxLayout;
+    buttons->addStretch(1);
+    buttons->addWidget(close);
+    layout->addLayout(buttons);
+    dialog.exec();
+}
+
 void MainWindow::showShortcuts() {
     QMessageBox::information(
         this, QStringLiteral("Atalhos do teclado"),
@@ -1009,8 +1403,8 @@ void MainWindow::showShortcuts() {
             "Setas: mover a câmera · PageUp/PageDown: subir e descer · Shift: mais rápido<br>"
             "Segure o botão direito: girar a câmera e voar com W A S D (Q desce, E sobe)<br>"
             "Roda do mouse: aproximar e afastar · Clique esquerdo: selecionar<br>"
-            "Cubo de navegação (canto superior direito): face, aresta ou canto mudam a vista<br>"
-            "Alt+1 a Alt+6: vistas frente, trás, esquerda, direita, topo, baixo<br><br>"
+            "Cubo de navegação (canto superior direito): arrastar orbita; face, aresta ou canto mudam a vista; seta/rótulo abrem projeção<br>"
+            "Alt+1 a Alt+8: vistas frente, trás, esquerda, direita, topo, baixo, isométrica, isométrica 2:1<br><br>"
             "<b>Ferramentas</b><br>"
             "V selecionar e transformar (gizmo universal) · G mover · R girar · S escalar<br>"
             "Toque duas vezes em G, R ou S: modo livre (o mouse muda o valor; X Y Z restringem; digite um número)<br>"
@@ -1019,6 +1413,7 @@ void MainWindow::showShortcuts() {
             "B esculpir caverna (arraste cava; com Ctrl adiciona rocha) · [ e ] raio do pincel<br>"
             "No gizmo: seta = eixo, quadrado = plano, centro = tela; Ctrl inverte o snap; Esc cancela<br><br>"
             "<b>Edição</b><br>"
+            "Tab modo edição de malha · 1 vértice · 2 aresta · 3 face<br>"
             "Ctrl+Z desfazer · Ctrl+Shift+Z refazer<br>"
             "Ctrl+D duplicar · Delete excluir · Esc limpar seleção<br>"
             "Ctrl+1 caixa · Ctrl+2 rampa · Ctrl+3 cilindro<br>"
@@ -1049,6 +1444,80 @@ void MainWindow::showPrimitivesPie() {
     pie->popup(viewportArea.contains(cursor) ? cursor : viewportArea.center());
 }
 
+void MainWindow::toggleEditMode() {
+    if (!bridge_->hasProject()) {
+        return;
+    }
+    if (viewport_->isEditMode()) {
+        if (bridge_->hasSelection()) {
+            bridge_->call(QStringLiteral("mesh.select"), QJsonObject{
+                {QStringLiteral("entity"), static_cast<double>(bridge_->selection())},
+                {QStringLiteral("mode"), QStringLiteral("clear")}
+            });
+        }
+        viewport_->setEditMode(false);
+        syncEditMode();
+        statusBar()->showMessage(QStringLiteral("Modo Objeto"), 2000);
+        viewport_->update();
+        return;
+    }
+
+    if (!bridge_->hasSelection()) {
+        statusBar()->showMessage(QStringLiteral("Selecione um objeto para editar malha (Tab)"), 3000);
+        return;
+    }
+
+    const quint64 entity = bridge_->selection();
+    const Reply reply = bridge_->call(QStringLiteral("mesh.convert"), QJsonObject{
+        {QStringLiteral("entity"), static_cast<double>(entity)}
+    });
+    if (reply.ok) {
+        bridge_->refresh();
+    } else if (reply.code != QLatin1String("EDITOR_ALREADY_A_MESH")) {
+        showFailure(reply, true);
+        return;
+    }
+
+    viewport_->setEditMode(true);
+    syncEditMode();
+    statusBar()->showMessage(QStringLiteral("Modo Edição: 1 Vértice, 2 Aresta, 3 Face"), 3000);
+    viewport_->update();
+}
+
+void MainWindow::setComponentMode(ComponentMode mode) {
+    if (!viewport_->isEditMode()) {
+        return;
+    }
+    viewport_->setComponentMode(mode);
+    syncEditMode();
+    const QString name = (mode == ComponentMode::Vertex) ? QStringLiteral("Vértices (1)")
+                       : (mode == ComponentMode::Edge)   ? QStringLiteral("Arestas (2)")
+                                                         : QStringLiteral("Faces (3)");
+    statusBar()->showMessage(QStringLiteral("Seleção de %1").arg(name), 2000);
+}
+
+void MainWindow::syncEditMode() {
+    const bool inEdit = viewport_->isEditMode();
+    header_->showEditMode(inEdit);
+    header_->showComponentMode(viewport_->componentMode());
+    if (editModeAction_) {
+        editModeAction_->setChecked(inEdit);
+        editModeAction_->setEnabled(bridge_->hasSelection());
+    }
+    if (vertexModeAction_) {
+        vertexModeAction_->setEnabled(inEdit);
+        vertexModeAction_->setChecked(viewport_->componentMode() == ComponentMode::Vertex);
+    }
+    if (edgeModeAction_) {
+        edgeModeAction_->setEnabled(inEdit);
+        edgeModeAction_->setChecked(viewport_->componentMode() == ComponentMode::Edge);
+    }
+    if (faceModeAction_) {
+        faceModeAction_->setEnabled(inEdit);
+        faceModeAction_->setChecked(viewport_->componentMode() == ComponentMode::Face);
+    }
+}
+
 void MainWindow::showAbout() {
     QMessageBox::about(
         this, QStringLiteral("Sobre o Petunia Editor"),
@@ -1066,7 +1535,9 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     }
     QSettings settings;
     settings.setValue("window/geometry", saveGeometry());
-    settings.setValue("window/state", saveState());
+    workspaceStates_.insert(workspace_, saveState());
+    settings.setValue("window/workspace/scene", workspaceStates_.value(QStringLiteral("scene")));
+    settings.setValue("window/workspace/code", workspaceStates_.value(QStringLiteral("code")));
     event->accept();
 }
 

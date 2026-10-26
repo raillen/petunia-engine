@@ -18,6 +18,13 @@ winit = "0.30"
 glutin = "0.32"
 glutin-winit = "0.5"
 raw-window-handle = "0.6"
+# Only inside petunia_mesh (legacy geometry from Petunia3D); never in a public API, file or protocol.
+glam = { version = "=0.27.0", default-features = false, features = ["std"] }
+# Mesh booleans (union, difference, intersection). Only inside petunia_mesh.
+manifold-rust = { version = "=0.13.1", default-features = false }
+# Rigid bodies and collision (DR-08, DR-27). Only inside petunia_physics; never in a public API,
+# file or protocol. Enhanced determinism: the same input gives the same steps on every machine.
+rapier3d = { version = "=0.36.1", default-features = false, features = ["dim3", "f32", "std", "enhanced-determinism"] }
 
 petunia_math = { path = "crates/petunia_math" }
 petunia_world = { path = "crates/petunia_world" }
@@ -32,6 +39,8 @@ petunia_render_gl = { path = "crates/petunia_render_gl" }
 petunia_player = { path = "crates/petunia_player" }
 petunia_sculpt = { path = "crates/petunia_sculpt" }
 petunia_script = { path = "crates/petunia_script" }
+petunia_mesh = { path = "crates/petunia_mesh" }
+petunia_physics = { path = "crates/petunia_physics" }
 
 [workspace.lints.rust]
 # Adapters that talk to C APIs (OpenGL, windowing) opt in with `#![allow(unsafe_code)]`.
@@ -56,6 +65,14 @@ debug = "line-tables-only"
 
 # Meshing caves runs on every sculpting dab; unoptimized it is ~20x slower and the editor stutters.
 [profile.dev.package.petunia_sculpt]
+opt-level = 3
+
+# Mesh editing runs on every drag step of an inset or bevel preview; unoptimized, a boolean on a
+# mesh of 2.6 thousand vertices took 164 ms instead of 30 ms (measured 2026-10-25).
+[profile.dev.package.petunia_mesh]
+opt-level = 3
+
+[profile.dev.package.manifold-rust]
 opt-level = 3
 
 [profile.release]

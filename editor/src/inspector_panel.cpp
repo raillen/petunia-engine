@@ -6,6 +6,7 @@
 #include <QColorDialog>
 #include <QComboBox>
 #include <QGridLayout>
+#include <QHash>
 #include <QHBoxLayout>
 #include <QJsonArray>
 #include <QLabel>
@@ -65,9 +66,29 @@ QString columnTitle(const QString& table, const QString& column) {
 // snake_case ("rotation_degrees"); the inspector shows something a person reads at a glance.
 // The raw name stays in the tooltip, because scripts use it.
 QString propertyLabel(const QString& table, const QString& column) {
+    // Units go in the field (m, °), not in the label: the label column stays narrow.
+    static const QHash<QString, QString> common = {
+        {QStringLiteral("text"), QStringLiteral("Nome")},
+        {QStringLiteral("position"), QStringLiteral("Posição")},
+        {QStringLiteral("rotation_degrees"), QStringLiteral("Rotação")},
+        {QStringLiteral("scale"), QStringLiteral("Escala")},
+        {QStringLiteral("pivot"), QStringLiteral("Pivô")},
+        {QStringLiteral("shape"), QStringLiteral("Forma")},
+        {QStringLiteral("size"), QStringLiteral("Tamanho")},
+        {QStringLiteral("detail"), QStringLiteral("Detalhe")},
+        {QStringLiteral("color"), QStringLiteral("Cor")},
+        {QStringLiteral("elevation"), QStringLiteral("Altura do piso")},
+        {QStringLiteral("height"), QStringLiteral("Pé-direito")},
+        {QStringLiteral("file"), QStringLiteral("Arquivo")},
+        {QStringLiteral("enabled"), QStringLiteral("Ativo")},
+        {QStringLiteral("faceted"), QStringLiteral("Facetada")},
+        {QStringLiteral("cell_size"), QStringLiteral("Célula")},
+        {QStringLiteral("base"), QStringLiteral("Base")},
+    };
     Q_UNUSED(table);
-    // TODO(human): Portuguese names for the columns people see most (position, rotation_degrees,
-    // scale, pivot, size, detail, color, shape, text...). Columns not listed keep the fallback below.
+    if (const auto found = common.constFind(column); found != common.constEnd()) {
+        return found.value();
+    }
     QString label = column;
     label.replace(QLatin1Char('_'), QLatin1Char(' '));
     if (!label.isEmpty()) {
@@ -243,7 +264,8 @@ void InspectorPanel::rebuild(const QJsonObject& description) {
         auto* menu = new QMenu(add);
         for (const QJsonValue& name : addable) {
             const QString tableName = name.toString();
-            QAction* action = menu->addAction(PetuniaIcons::get(TableIcons::forTable(tableName)), tableName);
+            QAction* action = menu->addAction(PetuniaIcons::get(TableIcons::forTable(tableName)),
+                                              QStringLiteral("%1  (%2)").arg(TableIcons::displayName(tableName), tableName));
             connect(action, &QAction::triggered, this, [this, tableName] {
                 runCommand(QStringLiteral("row.create"),
                            QJsonObject{{"entity", static_cast<double>(entity_)}, {"table", tableName}});
@@ -266,7 +288,7 @@ QWidget* InspectorPanel::makeSection(const QString& tableName, const QJsonArray&
     header->setAttribute(Qt::WA_StyledBackground);
     header->setAttribute(Qt::WA_Hover);
     auto* headerLayout = new QHBoxLayout(header);
-    headerLayout->setContentsMargins(4, 2, 4, 2);
+    headerLayout->setContentsMargins(4, 0, 4, 0);
     headerLayout->setSpacing(2);
 
     const bool folded = collapsed_.contains(tableName);
@@ -275,7 +297,8 @@ QWidget* InspectorPanel::makeSection(const QString& tableName, const QJsonArray&
     fold->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     fold->setIcon(PetuniaIcons::get(folded ? QStringLiteral("chevron_right") : QStringLiteral("chevron_down")));
     fold->setIconSize(QSize(12, 12));
-    fold->setText(tableName);
+    fold->setText(TableIcons::displayName(tableName));
+    fold->setToolTip(QStringLiteral("Tabela %1 (nome usado nos scripts)").arg(tableName));
     fold->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     fold->setAccessibleName(QStringLiteral("Mostrar ou esconder a tabela %1").arg(tableName));
     fold->setAccessibleDescription(folded ? QStringLiteral("recolhida") : QStringLiteral("aberta"));
@@ -289,7 +312,7 @@ QWidget* InspectorPanel::makeSection(const QString& tableName, const QJsonArray&
     more->setToolTip(QStringLiteral("Mais ações da tabela %1").arg(tableName));
     more->setAccessibleName(more->toolTip());
     auto* menu = new QMenu(more);
-    QAction* remove = menu->addAction(PetuniaIcons::get(QStringLiteral("trash")), QStringLiteral("Remover tabela %1").arg(tableName));
+    QAction* remove = menu->addAction(PetuniaIcons::get(QStringLiteral("trash")), QStringLiteral("Remover %1").arg(TableIcons::displayName(tableName).toLower()));
     connect(remove, &QAction::triggered, this, [this, tableName] {
         runCommand(QStringLiteral("row.remove"), QJsonObject{{"entity", static_cast<double>(entity_)}, {"table", tableName}});
     });
@@ -301,7 +324,7 @@ QWidget* InspectorPanel::makeSection(const QString& tableName, const QJsonArray&
     body->setObjectName(QStringLiteral("PetuniaSectionBody"));
     body->setAttribute(Qt::WA_StyledBackground);
     auto* grid = new QGridLayout(body);
-    grid->setContentsMargins(10, 2, 8, 10);
+    grid->setContentsMargins(12, 0, 8, 8);
     grid->setHorizontalSpacing(8);
     grid->setVerticalSpacing(4);
     // The values get the room: the label column is as wide as its longest label.

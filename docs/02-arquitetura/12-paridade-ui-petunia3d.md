@@ -4,7 +4,7 @@
 
 ## Resumo (TL;DR)
 
-**Atualização (2026-10-25):** o trilho à esquerda saiu; as ferramentas e as primitivas estão na barra de cima ([DR-26](../06-decisoes/registro-de-decisoes.md), [layout](11-editor.md#layout-da-janela)). As linhas abaixo que falam do trilho valem para essa barra.
+**Atualização (2026-10-25):** o trilho à esquerda saiu; as ferramentas e as primitivas estão numa coluna dentro do viewport. Vieram do Petunia3D também o controle segmentado e a ideia da paleta de comandos ([design](15-design-da-interface.md)) ([DR-26](../06-decisoes/registro-de-decisoes.md), [layout](11-editor.md#layout-da-janela)). As linhas abaixo que falam do trilho valem para essa barra.
 
 Da lista de decisões de interface do Petunia3D (`QT-00` a `QT-16`, 20 linhas), esta etapa trouxe a **base visual e de entrada**: tema, ícones, campos numéricos e XYZ, trilho de ferramentas, gizmo, snap e vistas. Das **20 linhas** da lista: 7 feitas, 6 parciais, 4 planejadas e 3 fora de escopo.
 

@@ -32,6 +32,9 @@ class PetuniaNavCube {
     void setCamera(const QVector3D &right, const QVector3D &up, const QVector3D &forward);
     void setGeometry(const QPointF &center, double unit);
     void setOrtho(bool ortho) { m_ortho = ortho; }
+    bool isOrtho() const { return m_ortho; }
+    const QPointF &center() const { return m_center; }
+    double discRadius() const { return 2.3 * m_unit + 12.0; }
 
     /// Retângulo que contém tudo o que o cubo desenha (para hit de região).
     QRectF bounds() const;
@@ -41,6 +44,9 @@ class PetuniaNavCube {
     void paint(QPainter &painter, const Hit &hover, bool active) const;
 
     static QString faceLabel(int preset);
+    QRectF homeRect() const;
+    QRectF menuRect() const;
+    QRectF labelRect() const;
 
   private:
     struct Face {
@@ -54,8 +60,6 @@ class PetuniaNavCube {
     double depth(const QVector3D &world) const;
     bool faceVisible(const Face &face) const { return depth(face.normal) > 0.04; }
     QPolygonF facePolygon(const Face &face) const;
-    QRectF homeRect() const;
-    QRectF menuRect() const;
     QPointF compassPoint(int index) const;
     void paintCompass(QPainter &painter, const Hit &hover) const;
     void paintFace(QPainter &painter, const Face &face, bool hovered) const;

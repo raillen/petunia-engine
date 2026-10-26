@@ -239,6 +239,7 @@ impl EditorSession {
             "face.end" => self.face_drag_end(),
             "face.cancel" => self.face_drag_cancel(),
             "brush.carve" => self.carve_selection(),
+            op if op.starts_with("mesh.") => self.mesh_request(op, request),
             "brush.hollow" => self.hollow_selection(),
             "floor.step" => {
                 let delta = request.get("delta").and_then(Json::as_i64).unwrap_or(0);
@@ -252,6 +253,13 @@ impl EditorSession {
                     .and_then(Json::as_u64)
                     .ok_or_else(|| Failure::bad_request("falta o campo `entity` (número)"))?;
                 self.floor_select(entity)
+            }
+            "viewport.outline_style" => {
+                let color = match request.get("color") {
+                    Some(value) => Some(crate::tools::outline_color(value)?),
+                    None => None,
+                };
+                self.set_outline_style(color, optional_number(request, "width"))
             }
             "viewport.overlay" => {
                 Ok(self.viewport_overlay(number(request, "width")?, number(request, "height")?))
@@ -273,6 +281,19 @@ impl EditorSession {
             "gizmo.end" => self.gizmo_end(),
             "gizmo.cancel" => self.gizmo_cancel(),
             "camera.view" => self.camera_view(text(request, "name")?),
+            "camera.orbit" => {
+                let delta_x = number(request, "dx")?;
+                let delta_y = number(request, "dy")?;
+                self.camera_orbit(delta_x, delta_y)
+            }
+            "camera.projection" => {
+                let mode = request.get("mode").and_then(Json::as_str);
+                let height = request
+                    .get("height")
+                    .and_then(Json::as_f64)
+                    .map(|value| value as f32);
+                self.camera_projection(mode, height)
+            }
 
             "selection.set" => self.select(request.get("entity").and_then(Json::as_u64)),
             "selection.pick" => self.pick(

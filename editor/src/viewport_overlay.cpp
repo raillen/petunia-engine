@@ -1,6 +1,10 @@
 #include "viewport_overlay.h"
 
+#include <cmath>
+
 #include <QJsonArray>
+#include <QKeyEvent>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -241,17 +245,17 @@ void ViewportOverlay::paintEvent(QPaintEvent*) {
 
 NavCubeWidget::NavCubeWidget(EngineBridge* bridge, QWidget* parent) : QWidget(parent), bridge_(bridge) {
     setMouseTracking(true);
+    setFocusPolicy(Qt::StrongFocus);
     setAttribute(Qt::WA_NoSystemBackground);
-    setToolTip(QStringLiteral("Clique numa face, aresta ou canto para olhar dali; nas letras para girar; na casa para voltar"));
+    setToolTip(QStringLiteral("Clique numa face, aresta ou canto para olhar dali; nas letras para girar; na casa para voltar; arraste ou use as setas para orbitar; Espaço/Enter abre a projeção"));
     setAccessibleName(QStringLiteral("Cubo de navegação"));
-    layoutCube();
-    const QRectF bounds = cube_.bounds();
-    setFixedSize(int(bounds.width()) + 4, int(bounds.height()) + 4);
-    layoutCube();
+    setAccessibleDescription(QStringLiteral("Arraste com o botão esquerdo para orbitar. Use as setas do teclado para orbitar e Espaço ou Enter para abrir o menu de projeção."));
+    setFixedSize(140, 144);
+    layout_cube();
 }
 
-void NavCubeWidget::layoutCube() {
-    cube_.setGeometry(QPointF(width() / 2.0, height() / 2.0), kNavUnit);
+void NavCubeWidget::layout_cube() {
+    cube_.setGeometry(QPointF(width() / 2.0, (height() - 6.0) / 2.0), kNavUnit);
 }
 
 void NavCubeWidget::setCamera(const QJsonObject& camera) {
@@ -259,68 +263,258 @@ void NavCubeWidget::setCamera(const QJsonObject& camera) {
         return;
     }
     cube_.setCamera(vector(camera.value("right")), vector(camera.value("up")), vector(camera.value("forward")));
+    const QString projection_mode = camera.value(QStringLiteral("projection_mode")).toString();
+    if (!projection_mode.isEmpty()) {
+        cube_.setOrtho(projection_mode == QLatin1String("orthographic"));
+    }
     update();
 }
 
 void NavCubeWidget::paintEvent(QPaintEvent*) {
-    layoutCube();
+    layout_cube();
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
     // The cube was drawn for Petunia3D's dark canvas; a translucent disc keeps its labels
     // readable over a bright sky or floor.
     const PetuniaTheme& theme = PetuniaTheme::instance();
+    const bool active = underMouse() || hasFocus();
+    painter.setPen(hasFocus() ? QPen(theme.accentPrimary(), 1.5) : Qt::NoPen);
+    painter.setBrush(withAlpha(theme.bgCanvas(), active ? 0.62 : 0.45));
+    const double disc_radius = cube_.discRadius();
+    painter.drawEllipse(cube_.center(), disc_radius, disc_radius);
     painter.setPen(Qt::NoPen);
-    painter.setBrush(withAlpha(theme.bgCanvas(), underMouse() ? 0.62 : 0.45));
-    const QRectF bounds = cube_.bounds();
-    painter.drawEllipse(bounds.center(), bounds.width() / 2.0 - 4.0, bounds.height() / 2.0 - 4.0);
-    painter.setBrush(Qt::NoBrush);
-    cube_.paint(painter, hover_, underMouse());
+    cube_.paint(painter, hover_, active);
 }
 
 void NavCubeWidget::mouseMoveEvent(QMouseEvent* event) {
+    constexpr double drag_threshold = 4.0;
+    if (has_left_press_ && (event->buttons() & Qt::LeftButton)) {
+        const double delta_x = event->position().x() - press_position_.x();
+        const double delta_y = event->position().y() - press_position_.y();
+        const double distance = std::hypot(delta_x, delta_y);
+        if (!is_dragging_ && distance > drag_threshold) {
+            is_dragging_ = true;
+            hover_ = {};
+            setCursor(Qt::ClosedHandCursor);
+            update();
+        }
+        if (is_dragging_) {
+            const double move_delta_x = event->position().x() - last_drag_position_.x();
+            const double move_delta_y = event->position().y() - last_drag_position_.y();
+            last_drag_position_ = event->position();
+            if (move_delta_x != 0.0 || move_delta_y != 0.0) {
+                invoke_command(QStringLiteral("camera.orbit"),
+                               QJsonObject{{"dx", move_delta_x}, {"dy", move_delta_y}});
+            }
+            event->accept();
+            return;
+        }
+    }
+
     const PetuniaNavCube::Hit hit = cube_.hitTest(event->position());
     if (hit.id != hover_.id || hit.type != hover_.type) {
         hover_ = hit;
         setCursor(hit.type == PetuniaNavCube::Hit::Type::None ? Qt::ArrowCursor : Qt::PointingHandCursor);
         update();
     }
-}
-
-void NavCubeWidget::leaveEvent(QEvent* event) {
-    hover_ = {};
-    update();
-    QWidget::leaveEvent(event);
+    event->accept();
 }
 
 void NavCubeWidget::mousePressEvent(QMouseEvent* event) {
     if (event->button() != Qt::LeftButton) {
+        QWidget::mousePressEvent(event);
         return;
     }
-    const PetuniaNavCube::Hit hit = cube_.hitTest(event->position());
+    has_left_press_ = true;
+    press_position_ = event->position();
+    last_drag_position_ = event->position();
+    pressed_hit_ = cube_.hitTest(event->position());
+    is_dragging_ = false;
+    event->accept();
+}
+
+void NavCubeWidget::mouseReleaseEvent(QMouseEvent* event) {
+    if (event->button() != Qt::LeftButton || !has_left_press_) {
+        QWidget::mouseReleaseEvent(event);
+        return;
+    }
+    has_left_press_ = false;
+
+    constexpr double drag_threshold = 4.0;
+    const double release_delta_x = event->position().x() - press_position_.x();
+    const double release_delta_y = event->position().y() - press_position_.y();
+    const double release_distance = std::hypot(release_delta_x, release_delta_y);
+
+    const bool had_drag = is_dragging_ || (release_distance > drag_threshold);
+    is_dragging_ = false;
+
+    const PetuniaNavCube::Hit release_hit = cube_.hitTest(event->position());
+    hover_ = release_hit;
+    setCursor(release_hit.type == PetuniaNavCube::Hit::Type::None ? Qt::ArrowCursor : Qt::PointingHandCursor);
+    update();
+
+    if (had_drag) {
+        event->accept();
+        return;
+    }
+
+    const bool same_target = (release_hit.type == pressed_hit_.type &&
+                              release_hit.id == pressed_hit_.id &&
+                              release_hit.preset == pressed_hit_.preset &&
+                              release_hit.type != PetuniaNavCube::Hit::Type::None);
+    if (same_target) {
+        handle_hit(release_hit, event->globalPosition().toPoint());
+    }
+    event->accept();
+}
+
+void NavCubeWidget::invoke_command(const QString& operation, const QJsonObject& fields) {
+    if (bridge_ == nullptr) {
+        return;
+    }
+    const Reply reply = bridge_->call(operation, fields);
+    if (reply.ok) {
+        emit viewChanged();
+    } else {
+        emit operationFailed(reply.explanation());
+    }
+}
+
+void NavCubeWidget::handle_hit(const PetuniaNavCube::Hit& hit, const QPoint& global_position) {
     using Type = PetuniaNavCube::Hit::Type;
     static const char* presets[7] = {"", "front", "back", "right", "left", "top", "bottom"};
-    Reply reply;
     switch (hit.type) {
         case Type::Preset:
             if (hit.preset >= 1 && hit.preset <= 6) {
-                reply = bridge_->call(QStringLiteral("camera.view"), QJsonObject{{"name", QLatin1String(presets[hit.preset])}});
+                invoke_command(QStringLiteral("camera.view"),
+                               QJsonObject{{"name", QLatin1String(presets[hit.preset])}});
             }
             break;
         case Type::Direction:
-            reply = bridge_->call(QStringLiteral("camera.view_direction"),
-                                  QJsonObject{{"x", hit.direction.x()}, {"y", hit.direction.y()}, {"z", hit.direction.z()}});
+            invoke_command(QStringLiteral("camera.view_direction"),
+                           QJsonObject{{"x", hit.direction.x()}, {"y", hit.direction.y()}, {"z", hit.direction.z()}});
             break;
         case Type::Yaw:
-            reply = bridge_->call(QStringLiteral("camera.yaw"), QJsonObject{{"degrees", hit.yawDegrees}});
+            invoke_command(QStringLiteral("camera.yaw"),
+                           QJsonObject{{"degrees", hit.yawDegrees}});
             break;
         case Type::Home:
-            reply = bridge_->call(QStringLiteral("camera.reset"));
+            invoke_command(QStringLiteral("camera.reset"));
             break;
         case Type::Menu:
+            show_projection_menu(global_position);
+            break;
         case Type::None:
+            break;
+    }
+}
+
+void NavCubeWidget::show_projection_menu(const QPoint& global_position) {
+    QMenu menu(this);
+    menu.setAccessibleName(QStringLiteral("Menu de projeção"));
+
+    auto* perspective_action = menu.addAction(QStringLiteral("Perspectiva"));
+    perspective_action->setCheckable(true);
+    perspective_action->setChecked(!cube_.isOrtho());
+
+    auto* orthographic_action = menu.addAction(QStringLiteral("Ortográfica"));
+    orthographic_action->setCheckable(true);
+    orthographic_action->setChecked(cube_.isOrtho());
+
+    menu.addSeparator();
+
+    auto* isometric_action = menu.addAction(QStringLiteral("Isométrica verdadeira (35,264°)"));
+    auto* game_isometric_action = menu.addAction(QStringLiteral("Isométrica de jogo 2:1 (30°)"));
+
+    QAction* selected_action = menu.exec(global_position);
+    if (selected_action == nullptr || bridge_ == nullptr) {
+        return;
+    }
+
+    if (selected_action == perspective_action || selected_action == orthographic_action) {
+        const bool orthographic = selected_action == orthographic_action;
+        const Reply reply = bridge_->call(QStringLiteral("camera.projection"),
+                                          QJsonObject{{"mode", orthographic ? QStringLiteral("orthographic")
+                                                                           : QStringLiteral("perspective")}});
+        if (reply.ok) {
+            cube_.setOrtho(orthographic);
+            update();
+            emit viewChanged();
+        } else {
+            emit operationFailed(reply.explanation());
+        }
+    } else if (selected_action == isometric_action) {
+        invoke_command(QStringLiteral("camera.view"),
+                       QJsonObject{{"name", QStringLiteral("isometric")}});
+    } else if (selected_action == game_isometric_action) {
+        invoke_command(QStringLiteral("camera.view"),
+                       QJsonObject{{"name", QStringLiteral("game_2_1")}});
+    }
+}
+
+void NavCubeWidget::keyPressEvent(QKeyEvent* event) {
+    constexpr double key_orbit_step = 15.0;
+    switch (event->key()) {
+        case Qt::Key_Left:
+            invoke_command(QStringLiteral("camera.orbit"),
+                           QJsonObject{{"dx", -key_orbit_step}, {"dy", 0.0}});
+            break;
+        case Qt::Key_Right:
+            invoke_command(QStringLiteral("camera.orbit"),
+                           QJsonObject{{"dx", key_orbit_step}, {"dy", 0.0}});
+            break;
+        case Qt::Key_Up:
+            invoke_command(QStringLiteral("camera.orbit"),
+                           QJsonObject{{"dx", 0.0}, {"dy", -key_orbit_step}});
+            break;
+        case Qt::Key_Down:
+            invoke_command(QStringLiteral("camera.orbit"),
+                           QJsonObject{{"dx", 0.0}, {"dy", key_orbit_step}});
+            break;
+        case Qt::Key_Space:
+        case Qt::Key_Return:
+        case Qt::Key_Enter:
+            event->accept();
+            show_projection_menu(mapToGlobal(QPoint(width() / 2, height())));
+            return;
+        default:
+            QWidget::keyPressEvent(event);
             return;
     }
-    if (reply.ok) {
-        emit viewChanged();
+    event->accept();
+}
+
+void NavCubeWidget::keyReleaseEvent(QKeyEvent* event) {
+    switch (event->key()) {
+        case Qt::Key_Left:
+        case Qt::Key_Right:
+        case Qt::Key_Up:
+        case Qt::Key_Down:
+        case Qt::Key_Space:
+        case Qt::Key_Return:
+        case Qt::Key_Enter:
+            event->accept();
+            return;
+        default:
+            QWidget::keyReleaseEvent(event);
+            return;
     }
+}
+
+void NavCubeWidget::focusInEvent(QFocusEvent* event) {
+    update();
+    QWidget::focusInEvent(event);
+}
+
+void NavCubeWidget::focusOutEvent(QFocusEvent* event) {
+    update();
+    QWidget::focusOutEvent(event);
+}
+
+void NavCubeWidget::leaveEvent(QEvent* event) {
+    if (!is_dragging_) {
+        hover_ = {};
+        update();
+    }
+    QWidget::leaveEvent(event);
 }

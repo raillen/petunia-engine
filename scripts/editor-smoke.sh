@@ -8,7 +8,7 @@
 #   radial menu, duplicate, create a box, walk with the arrow keys, look around with the right button,
 #   go up a floor (creates the floors) and build a box there, come back down, create a cave and
 #   carve it with the sculpting tool, dig a tunnel with the path tool, save, open the history tab,
-#   open the code editor (F4), create a script, type it (auto-indent) and save it.
+#   open the Código workspace (F4), create a script, type it (auto-indent) and save it.
 # It then CHECKS the saved scene (the dragged crate must have moved to x = 4.5 on the 0.5 m grid
 # and must have gained the PlayerStart table)
 # and writes one picture. This is a smoke test (does it run, draw and edit?), not a pixel-exact
@@ -22,7 +22,7 @@ set -euo pipefail
 editor="${PETUNIA_EDITOR_BIN:-/tmp/petunia-editor-build/petunia-editor}"
 output="${1:-/tmp/petunia-shot/smoke.png}"
 workdir="$(mktemp -d /tmp/petunia-smoke.XXXXXX)"
-display=":97"
+display="${PETUNIA_EDITOR_DISPLAY:-:97}"
 mkdir -p "$(dirname "$output")"
 
 cleanup() {
@@ -36,24 +36,24 @@ Xvfb "$display" -screen 0 1440x900x24 +extension GLX >/dev/null 2>&1 &
 xvfb_pid=$!
 sleep 1
 
-env -u WAYLAND_DISPLAY DISPLAY="$display" XDG_CONFIG_HOME="$workdir/config" \
+env -u WAYLAND_DISPLAY DISPLAY="$display" XDG_CONFIG_HOME="$workdir/config" XDG_CACHE_HOME="$workdir/cache" \
     QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 QT_LOGGING_RULES='qt.qpa.*=false' \
     "$editor" --sample "$workdir/sala" --screenshot "$output" --screenshot-delay 38000 2>/dev/null &
 editor_pid=$!
 sleep 3
 
 export DISPLAY="$display"
-xdotool mousemove 800 410 click 1;               sleep 0.6   # select the big crate (#9)
-xdotool mousemove 549 17 click 1;                sleep 0.6   # Move tool (top bar; G on the keyboard)
-xdotool mousemove 843 409;                       sleep 0.5   # over the middle of the X arrow
+xdotool mousemove 835 440 click 1;               sleep 0.6   # select the center of the big crate (#9)
+xdotool mousemove 275 121 click 1;               sleep 0.6   # Move tool (tool column in the viewport; G on the keyboard)
+xdotool mousemove 875 431;                       sleep 0.5   # over the middle of the X arrow
 xdotool mousedown 1                                          # drag the arrow to the right
-for x in 863 883 903 923 943 958; do xdotool mousemove "$x" 409; sleep 0.15; done
+for x in 895 915 935 955 975 990; do xdotool mousemove "$x" 431; sleep 0.15; done
 xdotool mouseup 1;                               sleep 0.6
 # Regression: choosing a table in "Adicionar tabela" rebuilds the inspector from inside that
 # button's menu. Deleting a widget inside its own signal used to crash Qt (SIGSEGV).
-xdotool mousemove 1180 330; for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do xdotool click 5; sleep 0.05; done; sleep 0.4
-xdotool mousemove 1050 523 click 1;              sleep 0.6   # open the "Adicionar tabela" menu
-xdotool key Down Down Return;                    sleep 0.8   # choose PlayerStart (list: Floor, PlayerStart)
+xdotool mousemove 1185 600; for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do xdotool click 5; sleep 0.05; done; sleep 0.4
+xdotool mousemove 1185 457 click 1;              sleep 0.6   # open the "Adicionar tabela" menu
+xdotool key Down Down Down Return;               sleep 0.8   # choose PlayerStart (list: Floor, Mesh, PlayerStart)
 xdotool mousemove 600 450; xdotool key shift+a;  sleep 0.8   # radial menu of primitives
 xdotool key 2;                                   sleep 0.8   # item 2: a ramp, on the current floor
 xdotool key ctrl+d;                              sleep 0.6   # duplicate it (the copy is selected)
@@ -63,7 +63,7 @@ xdotool mousemove 700 300 mousedown 3 mousemove_relative 70 0 mouseup 3; sleep 0
 xdotool key ctrl+Prior;                          sleep 0.6   # up a floor: creates Térreo and Andar 1
 xdotool key ctrl+1;                              sleep 0.6   # a box on floor 1
 xdotool key ctrl+Next;                           sleep 0.6   # back down (the box turns into a ghost)
-xdotool key alt+c; sleep 0.6; xdotool key Up Up Return; sleep 1.0   # Criar > Caverna (the item before the random one)
+xdotool key alt+c; sleep 0.6; xdotool key Up Up Return; sleep 1.0   # Alt+C opens Criar (the menus are behind ≡) > Caverna
 xdotool mousemove 600 380; xdotool key b;        sleep 0.6   # sculpting tool
 xdotool mousedown 1                                          # drag across the cave: carve
 for x in 620 640 660 680 700 720; do xdotool mousemove "$x" 380; sleep 0.25; done
@@ -74,10 +74,19 @@ xdotool mousemove 660 360 click 1;               sleep 0.5
 xdotool mousemove 740 420 click 1;               sleep 0.5
 xdotool key Return;                              sleep 0.8
 xdotool key v;                                   sleep 0.3   # back to select
+xdotool mousemove 990 431 click 1;               sleep 0.5   # select crate #9 at its new position
+xdotool key Tab;                                 sleep 0.6   # enter Edit Mode (converts crate to editable mesh)
+xdotool key 1;                                   sleep 0.4   # switch to vertex mode
+xdotool mousemove 990 431 click 1;               sleep 0.4   # pick component
+xdotool key 2;                                   sleep 0.4   # switch to edge mode
+xdotool mousemove 990 431 click 1;               sleep 0.4   # pick component
+xdotool key 3;                                   sleep 0.4   # switch to face mode
+xdotool mousemove 990 431 click 1;               sleep 0.4   # pick component
+xdotool key Tab;                                 sleep 0.6   # exit Edit Mode (remains a mesh)
 xdotool key ctrl+s;                              sleep 0.6   # save the scene
-xdotool mousemove 393 610 click 1;               sleep 0.4   # open the history tab
-xdotool key F4;                                  sleep 1.2   # the code editor opens
-xdotool mousemove 441 465 click 1;               sleep 1.0   # Novo
+xdotool mousemove 385 649 click 1;               sleep 0.4   # open the history tab
+xdotool key F4;                                  sleep 1.2   # the Código workspace opens
+xdotool mousemove 186 53 click 1;                sleep 1.0   # + (new script) in the Scripts list
 xdotool type --delay 40 smoke; xdotool key Return; sleep 1.0
 xdotool key ctrl+a; xdotool key Delete;          sleep 0.3
 xdotool type --delay 25 "fn on_update(entity, dt) {"; xdotool key Return
@@ -117,6 +126,11 @@ import os
 script_path = sys.argv[1].replace(".scene.json", ".script.aipo")
 scripted = os.path.exists(script_path) and "fn on_update(entity, dt) {\n    log.info(" in open(script_path).read()
 print("verificação: script escrito no editor de código e salvo em scripts/ ->", "ok" if scripted else "FALHOU")
-sys.exit(0 if (moved and added and on_cursor and built_up and carved and dug and scripted) else 1)
+converted_to_mesh = any(
+    e["rows"].get("Name", {}).get("text") == "Caixa" and "Mesh" in e["rows"] and "Brush" not in e["rows"]
+    for e in scene["entities"]
+)
+print("verificação: modo de edição (Tab) converteu caixa para malha editável ->", "ok" if converted_to_mesh else "FALHOU")
+sys.exit(0 if (moved and added and on_cursor and built_up and carved and dug and scripted and converted_to_mesh) else 1)
 PY
 echo "imagem: $output (e $output.viewport.png); cena salva: $output.scene.json"

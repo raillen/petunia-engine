@@ -203,6 +203,8 @@ pub struct GlRenderer {
     meshes: HashMap<MeshKey, GpuMesh>,
     /// One buffer per sculpted chunk, by the chunk's mesh id (new on every re-mesh).
     sculpt_meshes: HashMap<u64, GpuMesh>,
+    /// One buffer per editable mesh, by the polygon mesh's fingerprint (new on every edit).
+    edit_meshes: HashMap<u64, GpuMesh>,
     grid_pass: GridPass,
     overlay_pass: OverlayPass,
 }
@@ -236,6 +238,7 @@ impl GlRenderer {
             uniforms,
             meshes: HashMap::new(),
             sculpt_meshes: HashMap::new(),
+            edit_meshes: HashMap::new(),
             grid_pass,
             overlay_pass,
         })
@@ -308,6 +311,24 @@ impl GlRenderer {
                 delete_mesh(&self.gl, &mesh);
             }
         }
+        // The same for editable meshes: every edit has a new fingerprint.
+        let drawn: std::collections::HashSet<u64> = frame
+            .items
+            .iter()
+            .filter(|item| item.shape == Shape::Mesh)
+            .map(|item| item.mesh_fingerprint)
+            .collect();
+        let stale: Vec<u64> = self
+            .edit_meshes
+            .keys()
+            .filter(|fingerprint| !drawn.contains(fingerprint))
+            .copied()
+            .collect();
+        for fingerprint in stale {
+            if let Some(mesh) = self.edit_meshes.remove(&fingerprint) {
+                delete_mesh(&self.gl, &mesh);
+            }
+        }
         if frame.show_grid {
             self.draw_grid(&view_projection, camera, frame.grid_height);
         }
@@ -336,6 +357,9 @@ impl GlRenderer {
 
     /// Draws one object with the main program (bound by the caller), building its mesh once.
     fn draw_item(&mut self, item: &DrawItem) -> Result<(), RenderError> {
+        if item.shape == Shape::Mesh {
+            return self.draw_edit_mesh(item);
+        }
         let key = MeshKey::of(item);
         if !self.meshes.contains_key(&key) {
             if self.meshes.len() >= MAX_CACHED_MESHES {
@@ -495,11 +519,40 @@ impl GlRenderer {
         }
     }
 
+    /// Draws an editable mesh, uploading its triangles the first time its fingerprint is seen.
+    fn draw_edit_mesh(&mut self, item: &DrawItem) -> Result<(), RenderError> {
+        let Some(data) = &item.mesh else {
+            return Ok(());
+        };
+        if data.indices.is_empty() {
+            return Ok(());
+        }
+        if !self.edit_meshes.contains_key(&item.mesh_fingerprint) {
+            let uploaded = upload_mesh(&self.gl, data)?;
+            self.edit_meshes.insert(item.mesh_fingerprint, uploaded);
+        }
+        let Some(mesh) = self.edit_meshes.get(&item.mesh_fingerprint) else {
+            return Ok(());
+        };
+        self.draw_mesh(
+            mesh,
+            &item.transform,
+            item.color,
+            item.selected,
+            item.hovered,
+            false,
+        );
+        Ok(())
+    }
+
     fn clear_meshes(&mut self) {
         for (_, mesh) in self.meshes.drain() {
             delete_mesh(&self.gl, &mesh);
         }
         for (_, mesh) in self.sculpt_meshes.drain() {
+            delete_mesh(&self.gl, &mesh);
+        }
+        for (_, mesh) in self.edit_meshes.drain() {
             delete_mesh(&self.gl, &mesh);
         }
     }

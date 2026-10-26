@@ -116,18 +116,53 @@ void HistoryPanel::reload() {
 // ---- ApiPanel -----------------------------------------------------------------------------
 
 ApiPanel::ApiPanel(EngineBridge* bridge, QWidget* parent) : QTreeWidget(parent), bridge_(bridge) {
-    setAccessibleName(QStringLiteral("API da engine"));
-    setColumnCount(4);
-    setHeaderLabels({"Nome", "Resumo", "Estado", "Desfazer"});
-    setAlternatingRowColors(true);
-    header()->setSectionResizeMode(QHeaderView::Interactive);
-    header()->resizeSection(0, 180);
-    header()->resizeSection(1, 420);
-    header()->resizeSection(2, 110);
+    setAccessibleName(QStringLiteral("Referência da API"));
+    // Two columns fit a side panel; state, undo and parameters are in each row's tooltip.
+    setColumnCount(2);
+    setHeaderLabels({"Nome", "Resumo"});
+    setIndentation(12);
+    header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    header()->setStretchLastSection(true);
 }
 
 void ApiPanel::reload() {
     clear();
+    // What a script calls comes first: this panel sits next to the code editor.
+    const Reply scriptReply = bridge_->call(QStringLiteral("script.api"));
+    const QJsonObject scriptApi = scriptReply.result.toObject();
+    QHash<QString, QTreeWidgetItem*> modules;
+    for (const QJsonValue& value : scriptApi.value("functions").toArray()) {
+        const QJsonObject function = value.toObject();
+        const QString module = function.value("module").toString();
+        QTreeWidgetItem*& group = modules[module];
+        if (group == nullptr) {
+            group = new QTreeWidgetItem({QStringLiteral("%1 (script)").arg(module)});
+            group->setFirstColumnSpanned(true);
+            addTopLevelItem(group);
+            group->setExpanded(true);
+        }
+        auto* item = new QTreeWidgetItem({QStringLiteral("%1.%2").arg(module, function.value("name").toString()),
+                                          function.value("summary").toString()});
+        item->setToolTip(0, QStringLiteral("%1\nPermissão: %2\nExemplo: %3")
+                                .arg(function.value("signature").toString(), function.value("permission").toString(),
+                                     function.value("example").toString()));
+        item->setToolTip(1, item->toolTip(0));
+        group->addChild(item);
+    }
+    const QJsonArray handlers = scriptApi.value("handlers").toArray();
+    if (!handlers.isEmpty()) {
+        auto* group = new QTreeWidgetItem({QStringLiteral("Funções que o motor chama")});
+        group->setFirstColumnSpanned(true);
+        addTopLevelItem(group);
+        for (const QJsonValue& value : handlers) {
+            const QJsonObject handler = value.toObject();
+            auto* item = new QTreeWidgetItem({handler.value("name").toString(), handler.value("help").toString()});
+            item->setToolTip(1, handler.value("help").toString());
+            group->addChild(item);
+        }
+        group->setExpanded(true);
+    }
+
     const Reply reply = bridge_->call(QStringLiteral("schema.get"));
     const QJsonObject schema = reply.result.toObject();
 
@@ -137,10 +172,10 @@ void ApiPanel::reload() {
         addTopLevelItem(group);
         for (const QJsonValue& value : entries) {
             const QJsonObject entry = value.toObject();
-            auto* item = new QTreeWidgetItem(
-                {entry.value("id").toString(), entry.value("summary").toString(),
-                 statusLabel(entry.value("status").toString()),
-                 command ? reversibilityLabel(entry.value("reversibility").toString()) : QStringLiteral("—")});
+            auto* item = new QTreeWidgetItem({entry.value("id").toString(), entry.value("summary").toString()});
+            const QString facts = QStringLiteral("Estado: %1 · Desfazer: %2")
+                                      .arg(statusLabel(entry.value("status").toString()),
+                                           command ? reversibilityLabel(entry.value("reversibility").toString()) : QStringLiteral("—"));
             QStringList parameters;
             for (const QJsonValue& param : entry.value("params").toArray()) {
                 const QJsonObject parameter = param.toObject();
@@ -149,14 +184,16 @@ void ApiPanel::reload() {
                                        parameter.value("required").toBool() ? QStringLiteral("*") : QString(),
                                        parameter.value("kind").toString());
             }
-            item->setToolTip(0, QStringLiteral("Parâmetros: %1\nExemplo: %2")
-                                    .arg(parameters.join(QStringLiteral(", ")), entry.value("example").toString()));
+            item->setToolTip(0, QStringLiteral("%1\nParâmetros: %2\nExemplo: %3")
+                                    .arg(facts, parameters.join(QStringLiteral(", ")), entry.value("example").toString()));
+            item->setToolTip(1, item->toolTip(0));
             group->addChild(item);
         }
-        group->setExpanded(true);
+        // The engine tables are for reference; the script functions above stay open.
+        group->setExpanded(false);
     };
-    addGroup(QStringLiteral("Comandos (mudam o mundo)"), schema.value("commands").toArray(), true);
-    addGroup(QStringLiteral("Consultas (só leem)"), schema.value("queries").toArray(), false);
+    addGroup(QStringLiteral("Comandos do motor (mudam o mundo)"), schema.value("commands").toArray(), true);
+    addGroup(QStringLiteral("Consultas do motor (só leem)"), schema.value("queries").toArray(), false);
     const QJsonArray events = schema.value("events").toArray();
     if (!events.isEmpty()) {
         addGroup(QStringLiteral("Eventos"), events, false);

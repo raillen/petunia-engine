@@ -10,7 +10,7 @@ São **24 decisões**. Estados possíveis:
 - **PROPOSTA:** recomendação minha, aguardando você ou um experimento.
 - **ABERTA:** falta informação sua.
 
-`DR-01` (licença do código), `DR-02` (filosofia própria + bibliotecas), `DR-20` (Rust) e `DR-21` (ponte do editor) foram **decididas** em 2026-10-24. `DR-22` (nível 1) está feita; `DR-22` (níveis 2 e 3) e `DR-23` aguardam você. **`DR-11` (nome e relação com os outros projetos) segue aberta, mas não trava o código da fase 1.** As demais podem esperar os experimentos.
+`DR-01` (licença do código), `DR-02` (filosofia própria + bibliotecas), `DR-20` (Rust) e `DR-21` (ponte do editor) foram **decididas** em 2026-10-24. `DR-22` (níveis 1 e 3) está feita; o nível 2 está em parte; `DR-23` aguarda você. **`DR-11` (nome e relação com os outros projetos) segue aberta, mas não trava o código da fase 1.** As demais podem esperar os experimentos.
 
 ## Painel
 
@@ -37,10 +37,10 @@ São **24 decisões**. Estados possíveis:
 | **DR-19** | Idioma da documentação | PROPOSTA | Inglês canônico + pt-BR sincronizado, ao iniciar a implementação |
 | DR-20 | Linguagem do núcleo (7 candidatas) | **DECIDIDA** (2026-10-24) | **Rust**; S0 mede de novo a cada fase |
 | DR-21 | Ponte entre o editor Qt e o motor | **DECIDIDA** (2026-10-24) | **Qt Widgets + JSON sobre interface C**; CXX-Qt fica para depois |
-| **DR-22** | Edição de primitivas e malha para mapas | **Nível 1 FEITO**; nível 2 PROPOSTO; nível 3 **aguarda você** | Brushes agora, alças de face a seguir; malha só se a necessidade aparecer ([análise](../02-arquitetura/13-primitivas-e-edicao-de-malha.md)) |
+| **DR-22** | Edição de primitivas e malha para mapas | **Níveis 1 e 3 FEITOS** (nível 3: 2026-10-25, a seu pedido); nível 2 em parte | Brushes paramétricos + malha editável guardada na cena (booleanos, inset, loop cut, bevel…); falta a interface ([análise](../02-arquitetura/13-primitivas-e-edicao-de-malha.md)) |
 | **DR-23** | Pintura e animação do Petunia3D | PROPOSTA | Reprodução e IK sim; autoria e pintura de textura não; só o pincel de mundo ([análise](../01-pesquisa/07-pintura-e-animacao.md)) |
 | **DR-25** | Script Host: Aipo embutida, sem acesso ao sistema | **ACEITA** (2026-10-25, a seu pedido) | Aipo por dependência de caminho; módulos `sh`/`fs`/`env`/`io` **removidos**; permissões fixas; orçamento por chamada ([doc](../03-linguagens-e-api/05-script-host.md)) |
-| **DR-26** | Layout da janela do editor | **ACEITA** (2026-10-25, a seu pedido) | Uma barra no topo; laterais na altura toda; inspetor em seções; sem botão Jogar até existir o modo ([layout](../02-arquitetura/11-editor.md#layout-da-janela)) |
+| **DR-26** | Layout e design da janela do editor | **ACEITA** (2026-10-25, a seu pedido; revista) | Medidas do Unity com piso da WCAG; menus no `≡`; paleta `Ctrl+K`; workspaces Cena e Código ([design](../02-arquitetura/15-design-da-interface.md)) |
 | **DR-24** | Workspaces e prioridades antes da API | **EM PARTE ACEITA** (andares, cavernas B) | Mapa (com Jogar), Pintura sem UV, Animação, Efeitos por nós; antes da API: andares, cavernas, terreno, prefabs, Jogar ([análise](../02-arquitetura/14-workspaces-e-prioridades.md)) |
 
 ---
@@ -352,20 +352,31 @@ Pool e fade (herdados, `LOCAL`) valem em todas.
 
 ---
 
-## DR-22 — Edição de primitivas e malha para construir mapas · nível 1 FEITO
+## DR-22 — Edição de primitivas e malha para construir mapas · níveis 1 e 3 FEITOS
 
-**Decisão tomada (2026-10-24):** a engine passa a ter **brushes paramétricos** (caixa, rampa, cilindro, cone, esfera, escada) com gizmo de mover, girar e escalar, snap à grade e desfazer por gesto. Está implementado e testado.
+**Nível 1 (decidido e feito em 2026-10-24):** **brushes paramétricos** (caixa, rampa, cilindro, cone, esfera, escada) com gizmo de mover, girar e escalar, snap à grade e desfazer por gesto.
 
-**Proposta, aguardando você:** o que vem depois.
+**Nível 2 (em parte):** empurrar/puxar, extrudar, cavar e tornar oco existem. Faltam cortar com plano, arranjo e espelhar.
 
-| Nível | Recomendação |
-|---|---|
-| 2. Edição de brushes (alças de face, cortar, arranjo, espelhar) | **Fazer a seguir** (~1,5 mil linhas, estimativa; sem dependência nova) |
-| 3. Edição de malha (vértice, aresta, face) | **Não agora.** Opção A (importar GLB) até a necessidade aparecer; depois opção B (subconjunto de 11,6 mil linhas) |
+**Nível 3 (decidido por você em 2026-10-25).** Pedido: "falta você trazer do petunia3d operações booleanas, inset, loopcut e etc…". Respostas à pergunta de modelo de dados:
 
-**Motivo da cautela no nível 3:** o subconjunto do crate `mesh` tem 11.612 linhas, e a engine inteira tem cerca de 8,6 mil. É uma decisão de manutenção. Detalhes, medidas e plano em [primitivas e edição de malha](../02-arquitetura/13-primitivas-e-edicao-de-malha.md).
+- **Malha:** "A: malha pronta". Cada operação troca a malha inteira, e o `Ctrl+Z` restaura a anterior. A variante "A + booleano vivo depois" **não** foi escolhida.
+- **Biblioteca:** "Sim, aprovo" o `manifold-rust` 0.13.1. O `glam` fica só dentro do crate, nunca na API nem nos arquivos.
 
-**Reabrir se:** os usuários da engine precisarem esculpir malhas dentro do editor, ou se o Petunia3D deixar de ser o modelador deles.
+| Ponto | Escolha | Motivo |
+|---|---|---|
+| O que trazer | Subconjunto do crate `mesh` do Petunia3D **com** booleanos; **sem** UV, desenho (`poly_pen`, curvas, varredura) e `shape_ops` | O pedido foi booleanos, inset, loop cut "e etc."; UV e desenho não pesam em construir mapas |
+| Como guardar | **A malha pronta** numa tabela `Mesh` (tipo de valor `mesh`), não a lista de operações | O que você vê é o que fica salvo; mudar um algoritmo nunca altera um trabalho antigo; o desfazer comum já funciona |
+| Formato no arquivo | Uma linha de texto por vértice e por face | Diferenças legíveis (DR-10) |
+| Booleanos | `manifold-rust` 0.13.1 (Rust puro, Apache-2.0, sem `unsafe`), a mesma do Petunia3D | Booleano robusto em malhas é um projeto de meses; é assunto comum, atrás de adaptador (checklist do `AGENTS.md`) |
+| Matemática do código copiado | `glam` 0.27.0 **só dentro** de `petunia_mesh` | O código copiado usa `glam`; reescrever 10,9 mil linhas para trocar o tipo traria risco sem ganho. `glam` nunca aparece na API, no schema, nos arquivos nem na rede |
+| Código copiado | Módulo `legacy/`, quase sem mudanças, origem no `ATTRIBUTION.md` | Regra de legado: migra nomes e índices quando for tocado, com teste antes |
+
+**Proteções que vieram junto:** a cena pode ter até 64 MB, e salvar uma cena maior é recusado (antes, salvava e depois não abria); o histórico de desfazer tem teto de 256 MB.
+
+**Falta:** a interface Qt (menu Malha, modo de edição com `Tab`, atalhos). Lista em [ganchos da interface](../02-arquitetura/13-primitivas-e-edicao-de-malha.md#ganchos-da-interface-que-faltam).
+
+**Reabrir se:** as malhas ficarem grandes demais para o arquivo de texto (aí, um arquivo binário por malha); se precisarmos de booleano "vivo" (mover o cortador e o buraco ir junto), que pediria guardar as operações; ou se o `manifold-rust` parar de ser mantido.
 
 ---
 
@@ -418,23 +429,49 @@ Números, opções e o que mudaria a recomendação: [pintura e animação](../0
 
 ---
 
-## DR-26 — Layout da janela do editor · ACEITA (2026-10-25)
+## DR-26 — Layout e design da janela do editor · ACEITA (2026-10-25, revista no mesmo dia)
 
-**Pedido:** "continue mexendo na ui/ux/design do GUI conforme as referências" (imagens de um redesenho do Unity), com o tema claro como padrão.
+**Pedidos:** "continue mexendo na ui/ux/design do GUI conforme as referências" e, depois, "campos desnecessariamente grandes… textos demais… ícones grandes… menu hambúrguer… barra de comandos… workspaces, com o editor de código numa aba… busque um design system".
 
-**Decisão:**
+**Decisão** (regras e fontes em [design da interface](../02-arquitetura/15-design-da-interface.md)):
 
-1. **Uma barra no topo**: menus, ferramentas em ícones, eixos Global/Local e pivô, desfazer, refazer e salvar. Sai o trilho à esquerda e a barra de texto.
-2. **Faixa do viewport em uma linha** (snap e andar); as opções de esculpir ficam sob ela, só quando a ferramenta está ativa.
-3. **Painéis laterais na altura toda**; os de baixo ficam só sob o viewport, com as abas em cima.
-4. **Inspetor em seções que recolhem**, com rótulo à esquerda e o valor à direita; ações raras no menu `⋯`.
-5. **Sem botão Jogar** até existir o modo Jogar.
+1. **Medidas do Unity Foundations com piso da WCAG**: texto de 12 px, ícones de 16 px, controles de 24 px (alvo mínimo da WCAG 2.5.8); densidade Confortável para quem quer mais.
+2. **Menus atrás de `≡`** (JetBrains New UI), com `Alt+letra`, `F10` e a opção "Menus por extenso".
+3. **Paleta de comandos** (`Ctrl+K`) feita a partir dos menus: todo comando com menu aparece nela.
+4. **Workspaces Cena e Código**; cada um guarda o arranjo dos painéis. O código deixa de ser uma aba de baixo.
+5. **Ferramentas numa coluna no viewport**; opções da ferramenta (eixos, pivô, snap) na faixa da cena; snap num botão com painel.
+6. **Painéis fixos** em cartões com cantos de 8 px; neutros quentes e um acento violeta; borda de campo com 3:1.
+7. **Sem botão Jogar** até existir o modo Jogar.
 
-**Por quê:** menos faixas antes da cena (eram quatro, agora duas) e menos texto repetido; os controles ficam onde a referência e as ferramentas conhecidas (Unity, Godot) os põem.
+**Por quê:** a primeira versão desta decisão ainda tinha campos e texto grandes. As medidas agora vêm de design systems publicados, não de gosto.
 
-**Sem biblioteca nova:** folhas de estilo do Qt bastam. **Mantido:** atalhos, menus com `Alt`, nomes acessíveis, foco visível e o alvo mínimo de 28 px.
+**Sem biblioteca nova:** folhas de estilo do Qt bastam. **Copiado** do Petunia3D: o controle segmentado; **adaptada**: a paleta de comandos.
 
-**Reabrir se:** os testes com pessoas (S8) mostrarem que ícones sem texto atrapalham; nesse caso, a barra ganha rótulos.
+**Reabrir se:** os testes com pessoas (S8) mostrarem que ícones sem texto, menus atrás do `≡` ou 12 px atrapalham.
+
+---
+
+## DR-27 — Cubo orbital e projeções da câmera · ACEITA (2026-10-25)
+
+**DECLARADO:** pedido de arrastar o cubo global, alternar projeção e acrescentar a vista de games 2:1.
+
+**Decisão:** arrasto acima de 4 pixels orbita sem executar o clique ao soltar; faces, arestas, cantos, bússola e início continuam disponíveis. O menu e o rótulo alternam perspectiva/ortográfica e oferecem dois presets ortográficos: isométrico verdadeiro (azimute 45°, elevação 35,264389°) e games 2:1 (azimute 45°, elevação 30°). **GERAL:** no segundo, `atan(sin(30°)) = atan(0,5) = 26,565051°` nas diagonais da tela; 26,565° não é a elevação da câmera.
+
+**Contrato:** operações validadas `camera.orbit {dx, dy}`, `camera.projection {mode}` e `camera.view {name: isometric | game_2_1}`; `camera.get` e `viewport.overlay.camera` expõem a projeção. A troca de projeção preserva o tamanho no plano de foco; picking e gizmos usam a mesma matriz; zoom ortográfico altera a altura visível. Estado somente da sessão, sem alterar a cena ou o histórico de desfazer. Sem dependências novas.
+
+**Reabrir se:** forem necessárias câmeras de jogo persistentes ou projeções oblíquas; esses recursos não estão incluídos neste pedido.
+
+---
+
+## DR-28 — Seleção de componentes e correção da extrusão · ACEITA (2026-10-25)
+
+**DECLARADO:** selecionar arestas e vértices dos objetos e corrigir a extrusão de brushes (`E`). Confirmado: modo de edição por `Tab`, com `1` vértices, `2` arestas e `3` faces.
+
+**Decisão:** reutilizar `mesh.convert`, `mesh.pick`, `mesh.select` e o destaque de componentes existentes. Entrar na edição de um brush exige conversão explícita e reversível para malha; sair não desfaz a conversão. Seleção é estado da sessão, sem passos no histórico; clique substitui, `Shift` soma e `Ctrl` alterna. Controles visíveis acompanham os atalhos. Não inclui transformação de componentes nem novas operações de modelagem.
+
+**Correção:** extrudar um brush deve ser um único gesto reversível: cancelar ou clicar sem arrastar não deixa um objeto; confirmar gera um único passo de desfazer. Corrigir somente defeitos reproduzidos com testes, sem redefinir silenciosamente a extrusão de brush como edição de malha.
+
+**LOCAL:** infraestrutura de seleção e destaque em `crates/petunia_editor/src/mesh_tool.rs`; a ferramenta atual cria o brush em `face_drag_begin` antes da confirmação. Evidência de execução será registrada após os testes. Sem dependências novas.
 
 ---
 

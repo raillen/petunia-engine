@@ -17,6 +17,7 @@ mod convert;
 mod doctor;
 mod host;
 mod natives;
+mod physics_api;
 
 pub use api::{API, ApiFunction, GAME_CAPABILITIES, HANDLERS, KEYWORDS, api_json, script_surface};
 pub use compile::{Compiled, MAX_SCRIPT_BYTES, ScriptDiagnostic, ScriptSeverity, compile};
@@ -26,6 +27,7 @@ pub use host::{
     ScriptLimits, simulate,
 };
 pub use natives::{LogLevel, LogLine};
+pub use petunia_physics::PhysicsSettings;
 
 /// Formats a script's text the way `aipo fmt` does. The text must parse first (the formatter is
 /// forgiving about broken text, and silently "formatting" a mistake would hide it): `Err` carries

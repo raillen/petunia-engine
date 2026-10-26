@@ -1,16 +1,16 @@
 # Primitivas e edição de malha para construir mapas
 
-**Revisão:** 2026-10-24 · **Fonte:** leitura e medição de `petunia3D/crates/mesh` (22,9 mil linhas) e do código da engine (`LOCAL`). Decisão relacionada: [DR-22](../06-decisoes/registro-de-decisoes.md).
+**Revisão:** 2026-10-25 · **Fonte:** leitura e medição de `petunia3D/crates/mesh` (22,9 mil linhas) e do código da engine (`LOCAL`). Decisão relacionada: [DR-22](../06-decisoes/registro-de-decisoes.md).
 
 ## Resumo (TL;DR)
 
-Há **três níveis** de edição para construir mapas. O nível 1 **já funciona**. Recomendo o nível 2 agora e o nível 3 por etapas, com aprovação sua, porque ele quase **dobra** o tamanho do código da engine.
+Há **três níveis** de edição para construir mapas. **Os três já existem no motor.** O nível 3 (booleanos, inset, loop cut, bevel e o resto) chegou em 2026-10-25 e tem teste; **ainda falta a interface** (botões e atalhos no Qt): veja os [ganchos que faltam](#ganchos-da-interface-que-faltam).
 
 | Nível | O que é | Estado | Custo |
 |---|---|---|---|
 | **1. Brushes paramétricos** | Formas com tamanho e detalhe, movidas com gizmo e snap | **Feito** | já pago |
-| **2. Edição de brushes** | Arrastar uma face para redimensionar, cortar, subtrair (portas e janelas) | Planejado, **recomendo agora** | ~1,5 mil linhas (**estimativa**), sem dependência nova |
-| **3. Edição de malha** | Vértices, arestas e faces: extrudar, inset, bevel, loop cut | Planejado, **precisa do seu OK** | ~11,6 mil linhas copiadas |
+| **2. Edição de brushes** | Empurrar/puxar, extrudar, cavar, tornar oco | **Feito** em parte (falta cortar com plano, arranjo, espelhar) | sem dependência nova |
+| **3. Edição de malha** | Booleanos, inset, extrudar, loop cut, bevel, subdividir, dissolver, fundir, faca | **Feito no motor** (2026-10-25); interface pendente | 14,1 mil linhas copiadas (legado; 10,9 mil sem os testes) + ~3,3 mil novas; 2 dependências diretas |
 
 ## O nível 1: o que já existe
 
@@ -69,7 +69,9 @@ Medido em `crates/mesh`:
 
 **Por que nível 2 primeiro:** entrega o que mais pesa em construção de mapa (redimensionar rápido, alinhar na grade) **sem** trazer 11 mil linhas. Todas essas ferramentas viram **comandos** (desfazem e viajam por rede).
 
-## Nível 3: edição de malha
+## Nível 3: edição de malha (análise de 2026-10-24, antes da decisão)
+
+> **Histórico.** Esta seção é a análise que levou à decisão; o que foi feito está em [Nível 3: o que foi feito](#nível-3-o-que-foi-feito-2026-10-25). Diferença em relação ao plano B abaixo: os **booleanos entraram** (com `manifold-rust`), porque você pediu.
 
 | Opção | O que é | Custo | Quando |
 |---|---|---|---|
@@ -91,6 +93,91 @@ Medido em `crates/mesh`:
 4. Gizmo de componente (vértice, aresta, face) usando o mesmo mecanismo de **gesto** do gizmo atual.
 5. Migrar nomes (`ctx`, `idx`, `cfg`) **ao tocar** cada módulo, com teste de regressão antes.
 
+## Nível 3: o que foi feito (2026-10-25)
+
+**Decisão (sua, 2026-10-25):** trazer as operações e guardar a **malha pronta** no mundo (opção "A" da pergunta: a malha, não a lista de operações). Registro em [DR-22](../06-decisoes/registro-de-decisoes.md).
+
+### Como a malha fica guardada
+
+| Peça | Onde | O quê |
+|---|---|---|
+| Tabela `Mesh` | `petunia_project/src/standard.rs` | `geometry` (a malha) e `color` |
+| Tipo de valor `mesh` | `petunia_world` e `petunia_math::PolygonMesh` | Vértices e faces (n-gons), validados como dado hostil: números finitos, índices que existem, limites |
+| No arquivo da cena | texto | `"positions": ["0 0 0", …], "faces": ["0 1 2 3", …]`: **uma linha por vértice e por face**, então mover um vértice muda uma linha |
+| Desfazer | histórico comum | Cada operação é **um** `row.set` (ou um `world.batch`); `Ctrl+Z` traz a malha anterior |
+
+**Limites de uma malha:** 65.536 vértices, 65.536 faces, 256 cantos por face, 262.144 cantos ao todo.
+
+**Duas proteções novas, por causa das malhas:**
+
+- **A cena pode ter até 64 MB** (eram 4 MB), e **salvar recusa** uma cena maior que esse limite, deixando o arquivo antigo intacto. Antes, dava para salvar uma cena que depois **não abria** (o limite só valia ao abrir). Isso era um risco de perder trabalho, agora com teste.
+- **O histórico de desfazer tem teto de memória** (256 MB, ajustável), além dos 500 passos. Cada passo de malha guarda a malha antiga; sem o teto, centenas de edições numa malha grande ocupariam gigabytes. O passo mais novo sempre fica.
+
+### O que veio do Petunia3D
+
+Crate novo `petunia_mesh`. O módulo `legacy/` é a cópia do Petunia3D (commit `dec467127a7f`), **quase sem mudanças**, registrada no [ATTRIBUTION.md](../../ATTRIBUTION.md). Por cima dele, uma API pequena (`lib.rs`) que:
+
+1. converte a malha da engine para a do Petunia3D e de volta (os tipos do Petunia3D e o `glam` **nunca saem do crate**);
+2. **valida antes** (malha, índices, distâncias finitas até 1000 m, contagens);
+3. **valida depois** (o resultado precisa ser uma malha válida dentro dos limites);
+4. **recusa com motivo** quando nada mudou. As funções do Petunia3D simplesmente não fazem nada quando a entrada não serve; aqui você recebe um código e uma sugestão.
+
+| Operação | Função | Teste principal (o que confere) |
+|---|---|---|
+| Cortar, fundir, interseção | `boolean` (com `manifold-rust`) | volumes exatos: parede menos porta = 5 m³; A∪B e A∩B batem com a inclusão-exclusão; resultado fechado |
+| Inset | `inset` | 10 faces, 12 vértices, sólido fechado, face de dentro a 0,75 m do centro |
+| Extrudar | `extrude` | volume 12 m³ para fora, 6 m³ para dentro |
+| Loop cut | `loop_cut` | 1 corte: 10 faces; 2 cortes: 14; termina limpo em triângulos e n-gons |
+| Bevel | `bevel` | chanfro tira exatamente 0,04 m³; arredondado com 4 segmentos |
+| Subdividir | `subdivide` | grade 2×2; **vizinhos sem rachadura** (correção nossa, ver abaixo) |
+| Dissolver, fundir, apagar, virar | `dissolve_edges`, `merge_vertices`, `merge_by_distance`, `delete_faces`, `flip_faces` | contagens e volume |
+| Faca | `knife` | uma face vira duas; sólido continua fechado |
+| Brush → malha | `from_triangles` | a caixa vira 8 vértices e 6 quadriláteros (solda e junta triângulos coplanares) |
+
+**Testes:** 17 da API nova, mais **164 testes do próprio Petunia3D**, que continuam passando dentro do crate. Isso mostra que a cópia se comporta igual à origem. Também há testes de **entrada hostil** (NaN, índices fora, listas vazias, distâncias absurdas: tudo recusado, sem pânico) e de **determinismo** (a mesma entrada, várias vezes, dá a mesma malha bit a bit).
+
+**Desempenho (medido em 2026-10-25, build do editor):** numa malha de 6,5 mil vértices, o booleano leva 74 ms, o inset em todas as faces 29 ms e a checagem de sólido 3 ms. Dois ganhos vieram de medir: a junção dos vizinhos da subdivisão (código nosso) caiu de 1,6 s para 8 ms com uma grade espacial; a checagem de sólido, de 200 ms para 7 ms, com um teste direto das arestas, que é **conferido contra** a estrutura de meias-arestas do Petunia3D em 6 malhas. `opt-level = 3` em `petunia_mesh` e `manifold-rust`, também no build de desenvolvimento, levou o booleano de 164 ms para 30 ms.
+
+**Correção nossa:** a subdivisão do Petunia3D deixa os **vizinhos** da face com a aresta antiga. A malha fica com "rachaduras" invisíveis (junções em T) e deixa de ser um sólido fechado, então um booleano depois disso seria recusado. A API agora insere os pontos novos nas arestas dos vizinhos.
+
+### No editor
+
+Módulo `petunia_editor/src/mesh_tool.rs`, operações `mesh.*` (lista no [editor](11-editor.md#operações--op----)). Pontos principais:
+
+- **Tornar editável** mantém a entidade (nome, transform, scripts); só troca `Brush` por `Mesh`.
+- **Booleanos** aceitam brushes e malhas, em qualquer rotação e escala: a ferramenta é levada para o espaço do alvo. Teste: um pilar girado 45° e esticado 2× dá exatamente o volume dele.
+- **Partes da malha** (faces, arestas, vértices): `mesh.pick` diz o que está sob o mouse; `mesh.select` escolhe. A escolha **some** quando a malha muda (desfazer, outra operação), para nunca apontar para a face errada.
+- **Desenho:** malhas entram no mesmo caminho dos brushes (`DrawItem` com `Shape::Mesh`), então seleção, gizmo, snap a superfície e andares já funcionam com elas. Os triângulos são guardados por "impressão digital" da malha, e o OpenGL apaga os buffers de malhas que saíram da cena.
+- A malha selecionada mostra o **aramado**; faces, arestas e vértices escolhidos aparecem destacados.
+- **Valor ao vivo:** `mesh.preview` mostra inset, extrudar, bevel e loop cut enquanto o mouse arrasta, sem gravar; soltar (`mesh.preview_end`) vira **um** desfazer. Cada passo parte da malha de antes do arrasto, então ir e voltar dá exatamente o mesmo resultado (teste).
+
+### Limites conhecidos (nível 3)
+
+| Limite | Efeito |
+|---|---|
+| **Sem interface ainda** | Só por JSON (testes, agentes, scripts do editor). Botões e atalhos são o próximo passo |
+| Bevel recusa arestas que se encontram num canto | Limite do Petunia3D; chanfre uma aresta de cada vez |
+| Sem UV nem material por face | Cor única por objeto. O módulo de UV (7 arquivos) ficou de fora |
+| Booleanos só entre **sólidos fechados** | Malha aberta (depois de apagar faces) é recusada com motivo |
+| Booleano com faces exatamente no mesmo plano | O `manifold-rust` resolve na maioria dos casos; quando falha, a mensagem pede para mover um pouco a ferramenta |
+| Código copiado ainda usa nomes curtos (`n`, `f`, `idx`) e índices diretos | É legado (regra do `AGENTS.md`): migra quando for tocado. A API nova segue as regras |
+
+### Ganchos da interface que faltam
+
+A interface Qt (`editor/src/`) está sendo redesenhada em outra sessão, por isso nada dela foi tocado. O que ela precisa ligar:
+
+| Gancho | Sugestão | Operação |
+|---|---|---|
+| Menu **Malha** atrás do botão `≡` | uma entrada por operação; a paleta `Ctrl+K` lê os menus, então as entradas aparecem nela sem trabalho a mais | todas as `mesh.*` |
+| Ferramenta **Editar malha** na coluna de ferramentas do viewport | ativa o modo de edição; aparece com uma malha selecionada | `mesh.pick`, `mesh.select` |
+| **Tornar editável** | menu do objeto e inspetor de Brush | `mesh.convert` |
+| **Booleano** | com dois objetos: o ativo é o alvo, o outro é a ferramenta; opção "manter ferramenta" | `mesh.boolean` |
+| **Modo de edição de malha** (`Tab`) e modos face, aresta, vértice (`1`, `2`, `3`) | clique escolhe, `Shift` soma, `Ctrl` alterna | `mesh.pick` → `mesh.select` |
+| Atalhos de modelagem (os do Petunia3D) | `I` inset, `E` extrudar, `Ctrl+R` loop cut, `Ctrl+B` bevel, `K` faca, `M` fundir, `X` apagar faces | `mesh.*` |
+| Valor ao vivo (arrastar o mouse muda a distância) | ao arrastar, mandar `mesh.preview` com o valor; ao soltar, `mesh.preview_end`; `Esc` manda `commit: false`; mostrar `reason` quando `valid` for `false` | `mesh.preview`, `mesh.preview_end` (**existem**, com teste) |
+| Painel com números | distância, cortes, deslize, segmentos | os campos de cada operação |
+| Inspetor da tabela `Mesh` | mostrar contagens (`mesh.info`), não o texto da malha | `mesh.info` |
+
 ## Riscos
 
 | Risco | Efeito |
@@ -101,4 +188,4 @@ Medido em `crates/mesh`:
 
 ## Próximo passo sugerido
 
-Fazer o **nível 2** (alças de face e snap). Se você quiser o nível 3, me diga **A, B ou C** e eu abro o plano de cópia.
+Ligar os [ganchos da interface](#ganchos-da-interface-que-faltam), começando pelo **modo de edição de malha** (`Tab`, clique para escolher face ou aresta). Sem ele, as operações existem mas não são alcançáveis pela janela.

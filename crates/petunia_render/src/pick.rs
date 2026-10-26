@@ -2,12 +2,13 @@
 //! against the real triangles of every item, so ramps and cylinders pick as exactly as boxes.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use petunia_math::Vec3;
 
 use crate::camera::{Camera, Mat4, model_matrix};
 use crate::frame::{DrawItem, Shape};
-use crate::mesh::{MeshData, build_mesh};
+use crate::mesh::{MeshData, item_mesh};
 
 /// A ray in world space. `direction` has length one.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -23,19 +24,39 @@ pub fn ray_through(camera: &Camera, aspect_ratio: f32, ndc_x: f32, ndc_y: f32) -
         return None;
     }
     let forward = camera.forward();
-    let side = forward.cross(Vec3::UP).normalized_or_zero();
-    let up = side.cross(forward);
-    let half_height = (camera.fov_degrees.to_radians() * 0.5).tan();
-    let direction =
-        forward + side * (ndc_x * half_height * aspect_ratio) + up * (ndc_y * half_height);
-    let direction = direction.normalized_or_zero();
-    if direction.length_squared() == 0.0 {
-        return None;
+    let side = {
+        let cross = forward.cross(Vec3::UP).normalized_or_zero();
+        if cross.length_squared() > 0.0 {
+            cross
+        } else {
+            camera.right()
+        }
+    };
+    let up = side.cross(forward).normalized_or_zero();
+    match camera.projection_mode {
+        crate::camera::ProjectionMode::Perspective => {
+            let half_height = (camera.fov_degrees.to_radians() * 0.5).tan();
+            let direction =
+                forward + side * (ndc_x * half_height * aspect_ratio) + up * (ndc_y * half_height);
+            let direction = direction.normalized_or_zero();
+            if direction.length_squared() == 0.0 {
+                return None;
+            }
+            Some(Ray {
+                origin: camera.position,
+                direction,
+            })
+        }
+        crate::camera::ProjectionMode::Orthographic => {
+            let half_height = (camera.orthographic_height * 0.5).max(0.05);
+            let half_width = half_height * aspect_ratio.max(0.01);
+            let origin = camera.position + side * (ndc_x * half_width) + up * (ndc_y * half_height);
+            Some(Ray {
+                origin,
+                direction: forward,
+            })
+        }
     }
-    Some(Ray {
-        origin: camera.position,
-        direction,
-    })
 }
 
 fn transform_point(matrix: &Mat4, point: [f32; 3]) -> Vec3 {
@@ -127,7 +148,7 @@ pub fn pick_surface(items: &[DrawItem], ray: &Ray, ignore: &[u64]) -> Option<Sur
         .iter()
         .filter(|item| item.entity != 0 && !ignore.contains(&item.entity))
     {
-        let Ok(mesh) = build_mesh(item.shape, item.size, item.detail) else {
+        let Ok(mesh) = item_mesh(item) else {
             continue;
         };
         let model = model_matrix(&item.transform);
@@ -151,7 +172,7 @@ pub fn mesh_points(items: &[DrawItem], ignore: &[u64]) -> Vec<Vec3> {
         .iter()
         .filter(|item| item.entity != 0 && !ignore.contains(&item.entity))
     {
-        let Ok(mesh) = build_mesh(item.shape, item.size, item.detail) else {
+        let Ok(mesh) = item_mesh(item) else {
             continue;
         };
         let model = model_matrix(&item.transform);
@@ -169,10 +190,13 @@ pub fn mesh_points(items: &[DrawItem], ignore: &[u64]) -> Vec<Vec3> {
     points
 }
 
+/// Shape, size bits, detail and (for editable meshes) the fingerprint: equal keys share a mesh.
+type MeshKey = (Shape, [u32; 3], u32, u64);
+
 /// The entity whose surface the ray hits first, with the distance. Items with entity `0` and
 /// items with an invalid size are skipped.
 pub fn pick_entity(items: &[DrawItem], ray: &Ray) -> Option<(u64, f32)> {
-    let mut meshes: HashMap<(Shape, [u32; 3], u32), Option<MeshData>> = HashMap::new();
+    let mut meshes: HashMap<MeshKey, Option<Arc<MeshData>>> = HashMap::new();
     let mut best: Option<(u64, f32)> = None;
     for item in items.iter().filter(|item| item.entity != 0) {
         let key = (
@@ -183,10 +207,9 @@ pub fn pick_entity(items: &[DrawItem], ray: &Ray) -> Option<(u64, f32)> {
                 item.size.z.to_bits(),
             ],
             item.detail,
+            item.mesh_fingerprint,
         );
-        let mesh = meshes
-            .entry(key)
-            .or_insert_with(|| build_mesh(item.shape, item.size, item.detail).ok());
+        let mesh = meshes.entry(key).or_insert_with(|| item_mesh(item).ok());
         let Some(mesh) = mesh else {
             continue;
         };
@@ -218,7 +241,41 @@ mod tests {
                 ..Transform::IDENTITY
             },
             color: Color::WHITE,
+            mesh: None,
+            mesh_fingerprint: 0,
         }
+    }
+
+    #[test]
+    fn editable_meshes_pick_by_their_own_triangles() {
+        // A single upward triangle far to the side of where a 2 m box would be.
+        let polygon = petunia_math::PolygonMesh {
+            positions: vec![
+                Vec3::new(4.0, 0.0, 1.0),
+                Vec3::new(6.0, 0.0, 1.0),
+                Vec3::new(5.0, 0.0, -1.0),
+            ],
+            faces: vec![vec![0, 1, 2]],
+        };
+        let item = DrawItem {
+            shape: Shape::Mesh,
+            mesh: Some(Arc::new(crate::mesh::polygon_mesh_data(&polygon))),
+            mesh_fingerprint: polygon.fingerprint(),
+            ..box_at(9, 0.0)
+        };
+        let down = |x: f32| Ray {
+            origin: Vec3::new(x, 5.0, 0.0),
+            direction: Vec3::new(0.0, -1.0, 0.0),
+        };
+        let items = [item.clone()];
+        assert_eq!(pick_entity(&items, &down(5.0)).map(|hit| hit.0), Some(9));
+        assert_eq!(
+            pick_entity(&items, &down(0.0)),
+            None,
+            "no box where the shape would be"
+        );
+        let hit = pick_surface(&items, &down(5.0), &[]).expect("surface");
+        assert!(hit.normal.y > 0.99 && (hit.distance - 5.0).abs() < 1.0e-4);
     }
 
     #[test]
@@ -230,5 +287,19 @@ mod tests {
         let corner = ray_through(&camera, 1.0, 0.95, 0.95).expect("ray");
         assert_eq!(pick_entity(&items, &corner), None);
         assert!(ray_through(&camera, 1.0, f32::NAN, 0.0).is_none());
+
+        let ortho_camera = Camera {
+            projection_mode: crate::camera::ProjectionMode::Orthographic,
+            orthographic_height: 10.0,
+            ..Camera::default()
+        };
+        let ortho_center = ray_through(&ortho_camera, 1.0, 0.0, 0.0).expect("ortho ray");
+        assert_eq!(ortho_center.direction, ortho_camera.forward());
+        assert_eq!(ortho_center.origin, ortho_camera.position);
+
+        let ortho_offset = ray_through(&ortho_camera, 1.0, 0.5, 0.5).expect("offset ray");
+        assert_eq!(ortho_offset.direction, ortho_camera.forward());
+        assert!((ortho_offset.origin.x - 2.5).abs() < 1.0e-5);
+        assert!((ortho_offset.origin.y - 2.5).abs() < 1.0e-5);
     }
 }

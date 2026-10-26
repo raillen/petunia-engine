@@ -3,22 +3,26 @@
 #include <QJsonObject>
 #include <QWidget>
 
+class QAction;
+class QActionGroup;
+class QButtonGroup;
+class QCheckBox;
 class QComboBox;
+class QFrame;
+class QMenu;
 class QPushButton;
 class QToolButton;
-class QLabel;
+enum class ComponentMode;
 
-// Strip above the viewport: grid snapping (on/off, the three steps, the target) and the floor.
-// The gizmo controls (Global/Local, pivot, edit pivot) live in `transformControls()`, a separate
-// widget the main window places in the top bar. It only shows and asks; the engine owns the values.
+// Strip above the viewport, the "tool settings" of the scene (Unity and Blender put them here):
+// axes (Global/Local), pivot, edit pivot, snapping and the floor. Snapping is one toggle that shows
+// the current step; its steps, target and slope option open in a small panel (the ⌄ next to it).
+// It only shows and asks; the engine owns the values.
 class ViewportHeader : public QWidget {
     Q_OBJECT
 
 public:
     explicit ViewportHeader(QWidget* parent = nullptr);
-
-    // Global/Local, pivot and edit pivot, for the top bar. Owned by whoever adds it to a layout.
-    QWidget* transformControls() const { return transformControls_; }
 
     // Follows the engine's `snap` object without emitting signals.
     void showSnap(const QJsonObject& snap);
@@ -26,10 +30,11 @@ public:
     void showTransform(const QJsonObject& transform);
     // Follows the engine's `floor` object (current floor, list of floors).
     void showFloor(const QJsonObject& floor);
+    void showEditMode(bool on);
+    void showComponentMode(ComponentMode mode);
     // Icons depend on the theme color.
     void refreshIcons();
-    // Enables or disables both strips (no project open = nothing to edit).
-    void setControlsEnabled(bool enabled);
+    void setControlsEnabled(bool enabled) { setEnabled(enabled); }
 
 signals:
     void snapRequested(const QJsonObject& fields);
@@ -37,24 +42,40 @@ signals:
     void floorStepRequested(int delta);
     void floorSelectRequested(double entity);
     void viewRequested(const QString& name);
+    void editModeRequested(bool on);
+    void componentModeRequested(ComponentMode mode);
 
 private:
-    QComboBox* makeStepBox(const QString& accessibleName, const QList<double>& steps, const QString& suffix);
+    QComboBox* makeStepBox(QWidget* parent, const QString& accessibleName, const QList<double>& steps, const QString& suffix);
     void select(QComboBox* box, double value);
     void emitTransform();
+    void emitSnap();
+    void updateSnapText();
 
-    QWidget* transformControls_;
+    QButtonGroup* modeGroup_ = nullptr;
+    QPushButton* objectModeButton_ = nullptr;
+    QPushButton* editModeButton_ = nullptr;
+    QButtonGroup* componentGroup_ = nullptr;
+    QPushButton* vertexButton_ = nullptr;
+    QPushButton* edgeButton_ = nullptr;
+    QPushButton* faceButton_ = nullptr;
+    QFrame* componentSeparator_ = nullptr;
+
+    QPushButton* globalButton_;
+    QPushButton* localButton_;
+    QToolButton* pivotButton_;
+    QActionGroup* pivotGroup_;
+    QToolButton* editPivotButton_;
     QToolButton* snapButton_;
+    QToolButton* snapOptionsButton_;
+    QFrame* snapPanel_;
     QComboBox* translateBox_;
     QComboBox* rotateBox_;
     QComboBox* scaleBox_;
-    QPushButton* globalButton_;
-    QPushButton* localButton_;
-    QComboBox* pivotBox_;
     QComboBox* targetBox_;
-    QToolButton* slopeButton_;
-    QToolButton* editPivotButton_;
+    QCheckBox* slopeBox_;
     QComboBox* floorBox_;
     QToolButton* floorDown_;
     QToolButton* floorUp_;
+    QToolButton* viewButton_;
 };

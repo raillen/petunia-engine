@@ -1,0 +1,20 @@
+[package]
+name = "petunia_physics"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Adapter around Rapier: rigid bodies, colliders, contacts and queries, in Petunia's own types."
+
+[dependencies]
+petunia_math.workspace = true
+petunia_world.workspace = true
+rapier3d.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+petunia_project.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

@@ -252,13 +252,27 @@ impl View {
                 + entry(12 + row)
         };
         let w = clip(3);
-        if w <= 0.05 {
-            return None;
+        match self.camera.projection_mode {
+            petunia_render::ProjectionMode::Perspective => {
+                if w <= 0.05 {
+                    return None;
+                }
+                Some([
+                    (clip(0) / w * 0.5 + 0.5) * self.width,
+                    (1.0 - (clip(1) / w * 0.5 + 0.5)) * self.height,
+                ])
+            }
+            petunia_render::ProjectionMode::Orthographic => {
+                let z_ndc = clip(2);
+                if !(-1.0..=1.0).contains(&z_ndc) {
+                    return None;
+                }
+                Some([
+                    (clip(0) * 0.5 + 0.5) * self.width,
+                    (1.0 - (clip(1) * 0.5 + 0.5)) * self.height,
+                ])
+            }
         }
-        Some([
-            (clip(0) / w * 0.5 + 0.5) * self.width,
-            (1.0 - (clip(1) / w * 0.5 + 0.5)) * self.height,
-        ])
     }
 
     pub fn right(&self) -> Vec3 {

@@ -1,0 +1,20 @@
+[package]
+name = "petunia_mesh"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Editable polygon meshes: booleans, inset, loop cut, bevel, extrude and cleanup. Geometry ported from Petunia3D's mesh crate (legacy module) behind a small engine-facing API."
+
+[dependencies]
+petunia_math.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+glam.workspace = true
+manifold-rust.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

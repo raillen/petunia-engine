@@ -229,6 +229,37 @@ fn check_world(world: &World, report: &mut Report) {
         }
     }
 
+    for handle in world.entities_with_table("Mesh").unwrap_or_default() {
+        let id = world.persistent_id(handle).map_or(0, |id| id.0);
+        let target = format!("entidade #{id}");
+        if let Ok(Value::Mesh(mesh)) = world.get(handle, "Mesh", "geometry")
+            && mesh.faces.is_empty()
+        {
+            report.push(Diagnostic::warning(
+                "scene.mesh.empty",
+                &target,
+                "a malha não tem faces, então não aparece",
+                "Apague a entidade ou desfaça a operação que esvaziou a malha.",
+            ));
+        }
+        if !world.has_row(handle, "Transform") {
+            report.push(Diagnostic::warning(
+                "scene.mesh.no_transform",
+                &target,
+                "a malha não tem Transform, então ficará na origem",
+                "Adicione a tabela Transform à entidade.",
+            ));
+        }
+        if world.has_row(handle, "Brush") {
+            report.push(Diagnostic::warning(
+                "scene.mesh.also_brush",
+                &target,
+                "a entidade tem Brush e Mesh; as duas formas são desenhadas uma sobre a outra",
+                "Remova a tabela Brush (a malha já guarda a forma).",
+            ));
+        }
+    }
+
     let has_start = world
         .entities_with_table("PlayerStart")
         .is_ok_and(|found| !found.is_empty());

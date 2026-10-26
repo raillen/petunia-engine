@@ -5,7 +5,8 @@ use std::path::{Component, Path, PathBuf};
 use crate::error::ProjectError;
 
 pub const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
-pub const MAX_SCENE_BYTES: u64 = 4 * 1024 * 1024;
+/// Editable meshes are saved inside the scene (DR-22), so a scene can be a few megabytes.
+pub const MAX_SCENE_BYTES: u64 = 64 * 1024 * 1024;
 
 fn io_error(path: &Path, error: &std::io::Error) -> ProjectError {
     ProjectError::Io {

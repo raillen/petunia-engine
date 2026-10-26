@@ -3,6 +3,7 @@
 #include <QJsonObject>
 #include <QList>
 #include <QMainWindow>
+#include <QHash>
 #include <QPair>
 
 #include <memory>
@@ -27,7 +28,13 @@ class QPushButton;
 class QDockWidget;
 class QMenu;
 class QMenuBar;
+class QShortcut;
+class QStackedWidget;
+class QVBoxLayout;
+class PetuniaSegmented;
+class CommandPalette;
 struct Reply;
+enum class ComponentMode;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -49,8 +56,15 @@ protected:
 private:
     void buildActions();
     void buildMenus();
-    // One bar on top: menus, the tools, the gizmo controls, then undo, redo and save.
+    // One bar on top: the ≡ menu, the project, the workspaces, the command search, undo, redo, save.
     void buildAppBar();
+    // The tools float in a column at the top left of the viewport (Blender, Unity "Tools" overlay).
+    void buildToolPalette();
+    // Workspaces share the scene; each keeps its own arrangement of panels.
+    void switchWorkspace(const QString& id);
+    void applyDefaultDocks(const QString& id);
+    // The menus as words in the bar (on) or behind the ≡ button (off, the default).
+    void setFullMenus(bool on);
     void buildSculptBar();
     void syncSculptBar(const QJsonObject& snapshot);
     void buildDocks();
@@ -66,7 +80,14 @@ private:
     void refreshIcons();
     void setActionIcon(QAction* action, const QString& iconName);
     void showShortcuts();
+    // Editar > Preferências (Ctrl+,): appearance and the selection outline.
+    void showPreferences();
+    // Sends the saved outline color and thickness to the engine.
+    void applyOutlineStyle();
     void showPrimitivesPie();
+    void toggleEditMode();
+    void setComponentMode(ComponentMode mode);
+    void syncEditMode();
     void showAbout();
 
     std::unique_ptr<EngineBridge> bridge_;
@@ -83,6 +104,20 @@ private:
     // The menus live inside the top bar, not in QMainWindow's own menu bar slot.
     QMenuBar* menus_ = nullptr;
     QMenu* viewMenu_ = nullptr;
+    QToolButton* hamburger_ = nullptr;
+    QAction* fullMenusAction_ = nullptr;
+    QList<QShortcut*> menuShortcuts_;
+    CommandPalette* palette_ = nullptr;
+    QAction* paletteAction_ = nullptr;
+    QLabel* projectLabel_ = nullptr;
+    // Central pages, one per workspace: the scene (strip + viewport) and the code.
+    QStackedWidget* pages_ = nullptr;
+    QVBoxLayout* sceneLayout_ = nullptr;
+    PetuniaSegmented* workspaces_ = nullptr;
+    QString workspace_ = QStringLiteral("scene");
+    QHash<QString, QByteArray> workspaceStates_;
+    QAction* sceneAction_ = nullptr;
+    QDockWidget* apiDock_ = nullptr;
 
     QAction* newAction_ = nullptr;
     QAction* openAction_ = nullptr;
@@ -93,11 +128,14 @@ private:
     QAction* duplicateAction_ = nullptr;
     QAction* deleteAction_ = nullptr;
     QAction* clearSelectionAction_ = nullptr;
+    QAction* editModeAction_ = nullptr;
+    QAction* vertexModeAction_ = nullptr;
+    QAction* edgeModeAction_ = nullptr;
+    QAction* faceModeAction_ = nullptr;
     QAction* shapeActions_[6] = {};
     QAction* toolActions_[8] = {};
     QAction* carveAction_ = nullptr;
     QAction* codeAction_ = nullptr;
-    QDockWidget* codeDock_ = nullptr;
     CodePanel* code_ = nullptr;
     QAction* caveAction_ = nullptr;
     QAction* randomCaveAction_ = nullptr;
@@ -123,10 +161,12 @@ private:
     QAction* editPivotAction_ = nullptr;
     // Exibir > Objetos acima do andar: ghost, hide, show.
     QList<QAction*> aboveActions_;
+    // Exibir > Projeção: perspective, orthographic.
+    QList<QAction*> projectionActions_;
     // Double tap on a tool shortcut (Petunia3D "Modo Livre").
     QAction* lastToolAction_ = nullptr;
     qint64 lastToolMilliseconds_ = 0;
-    QAction* viewActions_[6] = {};
+    QAction* viewActions_[8] = {};
     QAction* focusAction_ = nullptr;
     QAction* resetCameraAction_ = nullptr;
     QAction* largerTextAction_ = nullptr;
@@ -136,6 +176,7 @@ private:
     QAction* shortcutsAction_ = nullptr;
     QAction* primitivesMenuAction_ = nullptr;
     QAction* aboutAction_ = nullptr;
+    QAction* preferencesAction_ = nullptr;
 
     QList<QPair<QAction*, QString>> iconActions_;
     QList<QPair<QToolButton*, QString>> iconButtons_;

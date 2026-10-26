@@ -51,6 +51,7 @@ Regra: **`DECLARADO`, `GERAL` e `HIPÓTESE` nunca viram fato sem prova.**
 - [12 **Paridade da interface com o Petunia3D**](02-arquitetura/12-paridade-ui-petunia3d.md) — o que veio e o que falta
 - [13 **Primitivas e edição de malha**](02-arquitetura/13-primitivas-e-edicao-de-malha.md) — três níveis para construir mapas
 - [14 **Workspaces e prioridades antes da API**](02-arquitetura/14-workspaces-e-prioridades.md) — Mapa, Pintura, Animação, Efeitos; cavernas e andares
+- [15 **Design da interface**](02-arquitetura/15-design-da-interface.md) — medidas, cores, menus, paleta de comandos e workspaces, com as fontes
 - [09 Personagens, UI de jogo e grade](02-arquitetura/09-personagens-ui-e-grade.md)
 - [10 Bibliotecas auxiliares (comprar × construir)](02-arquitetura/10-bibliotecas-auxiliares.md)
 

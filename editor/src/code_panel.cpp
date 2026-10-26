@@ -60,25 +60,64 @@ QString severityLabel(const QString& severity) {
 CodePanel::CodePanel(EngineBridge* bridge, QWidget* parent) : QWidget(parent), bridge_(bridge) {
     setAccessibleName(QStringLiteral("Editor de código"));
 
-    auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 6);
-    layout->setSpacing(4);
+    // A workspace page: the scripts on the left, the text in the middle, the output below it.
+    auto* outer = new QHBoxLayout(this);
+    outer->setContentsMargins(0, 0, 0, 0);
+    outer->setSpacing(0);
+    auto* columns = new QSplitter(Qt::Horizontal, this);
+    columns->setHandleWidth(PetuniaTheme::instance().scaled(5));
+    columns->setChildrenCollapsible(false);
+    outer->addWidget(columns);
 
-    // Panel bar: the script, then icon buttons with short names; it may shrink with the window.
-    auto* barWidget = new QWidget(this);
-    barWidget->setObjectName(QStringLiteral("PetuniaPanelBar"));
+    auto* sidebar = new QWidget(columns);
+    sidebar->setObjectName(QStringLiteral("PetuniaWorkspacePage"));
+    sidebar->setAttribute(Qt::WA_StyledBackground);
+    auto* sideLayout = new QVBoxLayout(sidebar);
+    sideLayout->setContentsMargins(6, 6, 6, 6);
+    sideLayout->setSpacing(4);
+    auto* sideHeader = new QHBoxLayout;
+    auto* sideTitle = new QLabel(QStringLiteral("Scripts"), sidebar);
+    sideTitle->setProperty("role", QStringLiteral("panelTitle"));
+    sideHeader->addWidget(sideTitle, 1);
+    auto* newButton = new QToolButton(sidebar);
+    newButton->setProperty("role", QStringLiteral("panelButton"));
+    newButton->setProperty("iconName", QStringLiteral("plus"));
+    newButton->setIcon(PetuniaIcons::get(QStringLiteral("plus")));
+    newButton->setToolTip(QStringLiteral("Novo script a partir do modelo"));
+    newButton->setAccessibleName(QStringLiteral("Novo script"));
+    sideHeader->addWidget(newButton);
+    sideLayout->addLayout(sideHeader);
+    scripts_ = new QListWidget(sidebar);
+    scripts_->setAccessibleName(QStringLiteral("Scripts do projeto"));
+    scripts_->setToolTip(QStringLiteral("Scripts da pasta scripts/ do projeto"));
+    scripts_->setFrameShape(QFrame::NoFrame);
+    sideLayout->addWidget(scripts_, 1);
+    noScripts_ = new QLabel(QStringLiteral("Nenhum script ainda.\nO botão + cria um a partir do modelo; depois, \"Ligar ao objeto\" faz ele rodar no jogo."), sidebar);
+    noScripts_->setWordWrap(true);
+    noScripts_->setProperty("role", QStringLiteral("muted"));
+    noScripts_->setAlignment(Qt::AlignTop | Qt::AlignLeft);
+    noScripts_->hide();
+    sideLayout->addWidget(noScripts_, 1);
+    sidebar->setMinimumWidth(150);
+
+    auto* page = new QWidget(columns);
+    page->setObjectName(QStringLiteral("PetuniaWorkspacePage"));
+    page->setAttribute(Qt::WA_StyledBackground);
+    auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(0, 0, 0, 6);
+    layout->setSpacing(0);
+    columns->addWidget(sidebar);
+    columns->addWidget(page);
+    columns->setStretchFactor(1, 1);
+    columns->setSizes({200, 800});
+
+    // Action bar: save and format, then try it, then attach. Icons with short words.
+    auto* barWidget = new QWidget(page);
+    barWidget->setObjectName(QStringLiteral("PetuniaViewportHeader"));
     barWidget->setAttribute(Qt::WA_StyledBackground);
     auto* bar = new QHBoxLayout(barWidget);
-    bar->setContentsMargins(4, 4, 6, 4);
+    bar->setContentsMargins(6, 3, 6, 3);
     bar->setSpacing(2);
-    scripts_ = new QComboBox;
-    scripts_->setAccessibleName(QStringLiteral("Script aberto"));
-    scripts_->setToolTip(QStringLiteral("Scripts da pasta scripts/ do projeto"));
-    scripts_->setMinimumContentsLength(12);
-    scripts_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-    WheelGuard::protect(scripts_);
-    bar->addWidget(scripts_);
-    bar->addSpacing(4);
     auto makeButton = [bar](const QString& text, const QString& icon, const QString& tip) {
         auto* button = new QToolButton;
         button->setText(text);
@@ -91,13 +130,14 @@ CodePanel::CodePanel(EngineBridge* bridge, QWidget* parent) : QWidget(parent), b
         bar->addWidget(button);
         return button;
     };
-    QToolButton* newButton = makeButton(QStringLiteral("Novo"), QStringLiteral("new_file"),
-                                        QStringLiteral("Cria um script a partir do modelo"));
     saveButton_ = makeButton(QStringLiteral("Salvar"), QStringLiteral("save"),
                              QStringLiteral("Grava o script (Ctrl+S dentro do editor). A versão anterior vai para scripts/.backup/"));
     formatButton_ = makeButton(QStringLiteral("Formatar"), QStringLiteral("sort_az"),
                                QStringLiteral("Arruma o texto como o `aipo fmt` (Ctrl+Shift+F). Só funciona se o texto compila na sintaxe"));
-    bar->addSpacing(6);
+    auto* line = new QFrame(barWidget);
+    line->setProperty("role", QStringLiteral("vrule"));
+    line->setFixedWidth(1);
+    bar->addWidget(line);
     runButton_ = makeButton(QStringLiteral("Executar"), QStringLiteral("play"),
                             QStringLiteral("Roda o script numa CÓPIA do mundo (F5): a cena não muda. Mostra o console e o que mudaria"));
     frames_ = new QSpinBox;
@@ -107,16 +147,18 @@ CodePanel::CodePanel(EngineBridge* bridge, QWidget* parent) : QWidget(parent), b
     frames_->setAccessibleName(QStringLiteral("Quadros a simular"));
     frames_->setToolTip(QStringLiteral("Quantos quadros (1/60 s cada) a execução de teste simula"));
     bar->addWidget(frames_);
-    bar->addSpacing(6);
-    attachButton_ = makeButton(QStringLiteral("Ligar"), QStringLiteral("link"),
-                               QStringLiteral("Liga este script ao objeto selecionado (tabela Script)"));
-    attachButton_->setAccessibleName(QStringLiteral("Ligar o script ao objeto selecionado"));
     bar->addStretch(1);
+    attachButton_ = makeButton(QStringLiteral("Ligar ao objeto"), QStringLiteral("link"),
+                               QStringLiteral("Liga este script ao objeto selecionado na cena (tabela Script)"));
+    attachButton_->setAccessibleName(QStringLiteral("Ligar o script ao objeto selecionado"));
     barWidget->setMinimumWidth(1);
     layout->addWidget(barWidget);
-    connect(&PetuniaTheme::instance(), &PetuniaTheme::changed, barWidget, [barWidget] {
-        for (QToolButton* button : barWidget->findChildren<QToolButton*>()) {
-            button->setIcon(PetuniaIcons::get(button->property("iconName").toString()));
+    connect(&PetuniaTheme::instance(), &PetuniaTheme::changed, this, [this] {
+        for (QToolButton* button : findChildren<QToolButton*>()) {
+            const QString icon = button->property("iconName").toString();
+            if (!icon.isEmpty()) {
+                button->setIcon(PetuniaIcons::get(icon));
+            }
         }
     });
 
@@ -144,7 +186,7 @@ CodePanel::CodePanel(EngineBridge* bridge, QWidget* parent) : QWidget(parent), b
     splitter->setStretchFactor(0, 4);
     splitter->setStretchFactor(1, 1);
     // The text gets the room; problems and console stay a strip below it.
-    output_->setMaximumHeight(130);
+    output_->setMaximumHeight(180);
     // A panel that is only tabbed behind the others must not make the bottom area taller: explicit
     // small minimums override the children's size hints (the dock is as tall as its tallest tab).
     editor_->setMinimumHeight(40);
@@ -157,6 +199,8 @@ CodePanel::CodePanel(EngineBridge* bridge, QWidget* parent) : QWidget(parent), b
     hint_->setWordWrap(true);
     hint_->setAccessibleName(QStringLiteral("Ajuda da sugestão"));
     hint_->setMinimumHeight(1);
+    hint_->setProperty("role", QStringLiteral("caption"));
+    hint_->setContentsMargins(8, 2, 8, 0);
     layout->addWidget(hint_);
 
     checkTimer_ = new QTimer(this);
@@ -165,14 +209,17 @@ CodePanel::CodePanel(EngineBridge* bridge, QWidget* parent) : QWidget(parent), b
     connect(checkTimer_, &QTimer::timeout, this, &CodePanel::check);
 
     connect(bridge_, &EngineBridge::snapshotChanged, this, &CodePanel::onSnapshot);
-    connect(scripts_, &QComboBox::activated, this, [this](int index) {
-        const QString name = scripts_->itemData(index).toString();
+    connect(scripts_, &QListWidget::currentItemChanged, this, [this](QListWidgetItem* item) {
+        if (item == nullptr) {
+            return;
+        }
+        const QString name = item->data(Qt::UserRole).toString();
         if (name == current_) {
             return;
         }
         if (!maybeSave()) {
             const QSignalBlocker blocker(scripts_);
-            scripts_->setCurrentIndex(scripts_->findData(current_));
+            scripts_->setCurrentRow(rowOf(current_));
             return;
         }
         load(name);
@@ -251,25 +298,38 @@ void CodePanel::reloadList(const QString& select) {
         const QJsonObject item = value.toObject();
         const QString name = item.value(QStringLiteral("name")).toString();
         const int errors = item.value(QStringLiteral("errors")).toInt();
-        QString label = name;
-        if (errors > 0) {
-            label += QStringLiteral("  (%1 erro%2)").arg(errors).arg(errors == 1 ? "" : "s");
-        }
         const int attached = item.value(QStringLiteral("attached")).toInt();
-        if (attached > 0) {
-            label += QStringLiteral("  · %1 objeto%2").arg(attached).arg(attached == 1 ? "" : "s");
+        auto* row = new QListWidgetItem(PetuniaIcons::get(errors > 0 ? QStringLiteral("warning") : QStringLiteral("script")), name, scripts_);
+        row->setData(Qt::UserRole, name);
+        QStringList facts;
+        if (errors > 0) {
+            facts << QStringLiteral("%1 erro%2").arg(errors).arg(errors == 1 ? "" : "s");
         }
-        scripts_->addItem(label, name);
+        facts << (attached > 0 ? QStringLiteral("ligado a %1 objeto%2").arg(attached).arg(attached == 1 ? "" : "s")
+                               : QStringLiteral("não ligado a nenhum objeto"));
+        row->setToolTip(QStringLiteral("%1.aipo — %2").arg(name, facts.join(QStringLiteral(", "))));
+        row->setData(Qt::AccessibleTextRole, QStringLiteral("%1, %2").arg(name, facts.join(QStringLiteral(", "))));
     }
+    scripts_->setVisible(scripts_->count() > 0);
+    noScripts_->setVisible(scripts_->count() == 0);
     const QString want = select.isEmpty() ? current_ : select;
-    const int index = scripts_->findData(want);
+    const int index = rowOf(want);
     if (index >= 0) {
-        scripts_->setCurrentIndex(index);
+        scripts_->setCurrentRow(index);
     } else if (scripts_->count() > 0 && current_.isEmpty()) {
-        scripts_->setCurrentIndex(0);
-        const QString first = scripts_->itemData(0).toString();
+        scripts_->setCurrentRow(0);
+        const QString first = scripts_->item(0)->data(Qt::UserRole).toString();
         QTimer::singleShot(0, this, [this, first] { load(first); });
     }
+}
+
+int CodePanel::rowOf(const QString& name) const {
+    for (int row = 0; row < scripts_->count(); ++row) {
+        if (scripts_->item(row)->data(Qt::UserRole).toString() == name) {
+            return row;
+        }
+    }
+    return -1;
 }
 
 void CodePanel::load(const QString& name) {
@@ -285,10 +345,9 @@ void CodePanel::load(const QString& name) {
     editor_->document()->clearUndoRedoStacks();
     editor_->setEnabled(true);
     setDirty(false);
-    const int index = scripts_->findData(name);
-    if (index >= 0) {
+    {
         const QSignalBlocker blocker(scripts_);
-        scripts_->setCurrentIndex(index);
+        scripts_->setCurrentRow(rowOf(name));
     }
     check();
 }

@@ -9,7 +9,7 @@
 
 use petunia_math::{Color, Vec3};
 use petunia_render::{
-    DrawItem, OverlayItem, RenderFrame, SurfaceHit, build_mesh, mesh_points, model_matrix,
+    DrawItem, OverlayItem, RenderFrame, SurfaceHit, item_mesh, mesh_points, model_matrix,
     pick_entity, pick_surface,
 };
 use petunia_world::PersistentId;
@@ -123,7 +123,7 @@ pub struct FreeMode {
 
 /// World-space bounding box of one draw item (from its real mesh).
 pub(crate) fn item_bounds(item: &DrawItem) -> Option<(Vec3, Vec3)> {
-    let mesh = build_mesh(item.shape, item.size, item.detail).ok()?;
+    let mesh = item_mesh(item).ok()?;
     let matrix = model_matrix(&item.transform);
     let entry = |index: usize| matrix.get(index).copied().unwrap_or(0.0);
     let mut low = Vec3::splat(f32::MAX);
@@ -146,9 +146,92 @@ pub(crate) fn item_bounds(item: &DrawItem) -> Option<(Vec3, Vec3)> {
 
 /// Lowest point of an item's mesh along its own up axis, in its own (unscaled) units.
 fn local_bottom(item: &DrawItem) -> f32 {
-    build_mesh(item.shape, item.size, item.detail)
+    item_mesh(item)
         .map(|mesh| mesh.positions.iter().map(|p| p[1]).fold(f32::MAX, f32::min))
         .unwrap_or(-item.size.y * 0.5)
+}
+
+/// How the selection outline looks; the person chooses it in the editor's preferences.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct OutlineStyle {
+    pub(crate) color: Color,
+    pub(crate) width_pixels: f32,
+}
+
+impl Default for OutlineStyle {
+    fn default() -> Self {
+        Self {
+            color: SELECTION_COLOR,
+            width_pixels: 2.0,
+        }
+    }
+}
+
+/// Thinnest and thickest outline, in logical pixels.
+const OUTLINE_WIDTH_RANGE: (f32, f32) = (1.0, 8.0);
+
+/// The box around an item in its own coordinates (from its real mesh), turned and scaled with
+/// it: the outline follows the object's rotation instead of growing around it.
+fn oriented_box_lines(
+    item: &DrawItem,
+    color: Color,
+    width_pixels: f32,
+    out: &mut Vec<OverlayItem>,
+) {
+    let Ok(mesh) = item_mesh(item) else {
+        return;
+    };
+    let mut low = Vec3::splat(f32::MAX);
+    let mut high = Vec3::splat(f32::MIN);
+    for [x, y, z] in &mesh.positions {
+        low = Vec3::new(low.x.min(*x), low.y.min(*y), low.z.min(*z));
+        high = Vec3::new(high.x.max(*x), high.y.max(*y), high.z.max(*z));
+    }
+    if low.x > high.x {
+        return;
+    }
+    let matrix = model_matrix(&item.transform);
+    let entry = |index: usize| matrix.get(index).copied().unwrap_or(0.0);
+    let to_world = |point: Vec3| {
+        Vec3::new(
+            entry(0) * point.x + entry(4) * point.y + entry(8) * point.z + entry(12),
+            entry(1) * point.x + entry(5) * point.y + entry(9) * point.z + entry(13),
+            entry(2) * point.x + entry(6) * point.y + entry(10) * point.z + entry(14),
+        )
+    };
+    let start = out.len();
+    box_lines(low, high, color, width_pixels, out);
+    for line in out.iter_mut().skip(start) {
+        if let OverlayItem::Line { from, to, .. } = line {
+            *from = to_world(*from);
+            *to = to_world(*to);
+        }
+    }
+}
+
+/// Reads `{ "r", "g", "b", "a" }` (0 to 1; `a` defaults to 1).
+pub(crate) fn outline_color(value: &serde_json::Value) -> Result<Color, Failure> {
+    let channel = |name: &str, default: Option<f64>| -> Result<f32, Failure> {
+        let number = value
+            .get(name)
+            .and_then(serde_json::Value::as_f64)
+            .or(default)
+            .ok_or_else(|| {
+                Failure::bad_request(&format!("a cor precisa do campo `{name}` (0 a 1)"))
+            })?;
+        if !number.is_finite() || !(0.0..=1.0).contains(&number) {
+            return Err(Failure::bad_request(&format!(
+                "`{name}` da cor vai de 0 a 1"
+            )));
+        }
+        Ok(number as f32)
+    };
+    Ok(Color::new(
+        channel("r", None)?,
+        channel("g", None)?,
+        channel("b", None)?,
+        channel("a", Some(1.0))?,
+    ))
 }
 
 /// The twelve edges of a box as constant-width lines.
@@ -304,7 +387,14 @@ impl EditorSession {
         let items = self
             .project
             .as_ref()
-            .map(|project| petunia_render::extract_frame(&project.world, self.camera.camera).items)
+            .map(|project| {
+                petunia_render::extract_frame_cached(
+                    &project.world,
+                    self.camera.camera,
+                    &mut self.mesh_cache.borrow_mut(),
+                )
+                .items
+            })
             .unwrap_or_default();
         self.pickable(items)
     }
@@ -784,6 +874,36 @@ impl EditorSession {
 
     // ---- overlay ----------------------------------------------------------------------------
 
+    /// `viewport.outline_style`: color and thickness of the selection outline. Not a command: it
+    /// is a preference of this editor, not part of the scene, and is not undone.
+    pub fn set_outline_style(
+        &mut self,
+        color: Option<Color>,
+        width_pixels: Option<f32>,
+    ) -> Result<Json, Failure> {
+        if let Some(width) = width_pixels {
+            if !width.is_finite()
+                || !(OUTLINE_WIDTH_RANGE.0..=OUTLINE_WIDTH_RANGE.1).contains(&width)
+            {
+                return Err(Failure::bad_request(&format!(
+                    "a espessura do contorno vai de {} a {} pixels",
+                    OUTLINE_WIDTH_RANGE.0, OUTLINE_WIDTH_RANGE.1
+                )));
+            }
+        }
+        if let Some(color) = color {
+            self.outline.color = color;
+        }
+        if let Some(width) = width_pixels {
+            self.outline.width_pixels = width;
+        }
+        let color = self.outline.color;
+        Ok(json!({
+            "color": { "r": color.r, "g": color.g, "b": color.b, "a": color.a },
+            "width": self.outline.width_pixels,
+        }))
+    }
+
     /// World-space helpers the renderer draws: constant-width outlines of the selection and of
     /// the object under the mouse, and the face a face tool would work on.
     pub(crate) fn outline_overlay(&self, frame: &RenderFrame) -> Vec<OverlayItem> {
@@ -794,12 +914,16 @@ impl EditorSession {
             if !(selected || hovered) {
                 continue;
             }
-            if let Some((low, high)) = item_bounds(item) {
-                if selected {
-                    box_lines(low, high, SELECTION_COLOR, 2.0, &mut items);
-                } else {
-                    box_lines(low, high, HOVER_COLOR, 1.5, &mut items);
-                }
+            if selected {
+                oriented_box_lines(
+                    item,
+                    self.outline.color,
+                    self.outline.width_pixels,
+                    &mut items,
+                );
+            } else {
+                let width = (self.outline.width_pixels * 0.75).max(OUTLINE_WIDTH_RANGE.0);
+                oriented_box_lines(item, HOVER_COLOR, width, &mut items);
             }
         }
         if let Some(face) = self.face_drag.map(|drag| drag.face).or(self.hovered_face) {
@@ -834,6 +958,8 @@ impl EditorSession {
             "right": vector_json(view.right()),
             "up": vector_json(view.up()),
             "forward": vector_json(self.camera.camera.forward()),
+            "projection_mode": self.camera.camera.projection_mode.name(),
+            "orthographic_height": self.camera.camera.orthographic_height,
         });
         if !view.is_valid() || self.project.is_none() {
             return json!({ "camera": camera, "gizmo": null });
@@ -961,13 +1087,115 @@ impl EditorSession {
             "right" => (-90.0, 0.0),
             "top" => (0.0, -89.0),
             "bottom" => (0.0, 89.0),
+            "isometric" | "iso" => {
+                if self.camera.camera.projection_mode == petunia_render::ProjectionMode::Perspective
+                {
+                    let (_, distance) = self.view_target()?;
+                    self.camera.camera.orthographic_height =
+                        distance * (self.camera.camera.fov_degrees.to_radians() * 0.5).tan() * 2.0;
+                    self.camera.camera.projection_mode =
+                        petunia_render::ProjectionMode::Orthographic;
+                }
+                // True isometric elevation: arcsin(1 / sqrt(3)) ≈ 35.26439° looking down.
+                let pitch = -(1.0f32 / 3.0f32.sqrt()).asin().to_degrees();
+                (45.0, pitch)
+            }
+            "game_2_1" | "dimetric_2_1" => {
+                if self.camera.camera.projection_mode == petunia_render::ProjectionMode::Perspective
+                {
+                    let (_, distance) = self.view_target()?;
+                    self.camera.camera.orthographic_height =
+                        distance * (self.camera.camera.fov_degrees.to_radians() * 0.5).tan() * 2.0;
+                    self.camera.camera.projection_mode =
+                        petunia_render::ProjectionMode::Orthographic;
+                }
+                // Classic game isometric (2:1 dimetric): 45° yaw, 30° elevation (screen diagonals 26.565°).
+                (45.0, -30.0)
+            }
             other => {
                 return Err(Failure::bad_request(&format!(
-                    "vista `{other}` desconhecida (front, back, left, right, top ou bottom)"
+                    "vista `{other}` desconhecida (front, back, left, right, top, bottom, isometric ou game_2_1)"
                 )));
             }
         };
         self.look_from(yaw, pitch)
+    }
+
+    /// Orbits the camera around the current view target by mouse pixel deltas (dx, dy).
+    pub fn camera_orbit(&mut self, delta_x: f32, delta_y: f32) -> Result<Json, Failure> {
+        if !(delta_x.is_finite() && delta_y.is_finite()) {
+            return Err(Failure::bad_request(
+                "os deslocamentos precisam ser números",
+            ));
+        }
+        let degrees_per_pixel = 0.4_f32;
+        let new_yaw = (self.camera.camera.yaw_degrees + delta_x * degrees_per_pixel + 180.0)
+            .rem_euclid(360.0)
+            - 180.0;
+        let new_pitch =
+            (self.camera.camera.pitch_degrees - delta_y * degrees_per_pixel).clamp(-89.0, 89.0);
+        self.look_from(new_yaw, new_pitch)
+    }
+
+    /// Switches or toggles camera projection mode (perspective or orthographic).
+    pub fn camera_projection(
+        &mut self,
+        mode: Option<&str>,
+        height: Option<f32>,
+    ) -> Result<Json, Failure> {
+        let current_mode = self.camera.camera.projection_mode;
+        let target_mode = match mode {
+            Some("perspective") => petunia_render::ProjectionMode::Perspective,
+            Some("orthographic") | Some("ortho") => petunia_render::ProjectionMode::Orthographic,
+            Some("toggle") | None => match current_mode {
+                petunia_render::ProjectionMode::Perspective => {
+                    petunia_render::ProjectionMode::Orthographic
+                }
+                petunia_render::ProjectionMode::Orthographic => {
+                    petunia_render::ProjectionMode::Perspective
+                }
+            },
+            Some(other) => {
+                return Err(Failure::bad_request(&format!(
+                    "projeção `{other}` desconhecida (perspective, orthographic ou toggle)"
+                )));
+            }
+        };
+
+        if let Some(height_value) = height {
+            if !(height_value.is_finite() && height_value > 0.0) {
+                return Err(Failure::bad_request(
+                    "a altura ortográfica precisa ser um número positivo",
+                ));
+            }
+            self.camera.camera.orthographic_height = height_value.clamp(0.1, 10_000.0);
+        }
+
+        if target_mode == petunia_render::ProjectionMode::Orthographic
+            && current_mode == petunia_render::ProjectionMode::Perspective
+        {
+            if height.is_none() {
+                let (_, distance) = self.view_target()?;
+                self.camera.camera.orthographic_height =
+                    distance * (self.camera.camera.fov_degrees.to_radians() * 0.5).tan() * 2.0;
+            }
+        } else if target_mode == petunia_render::ProjectionMode::Perspective
+            && current_mode == petunia_render::ProjectionMode::Orthographic
+        {
+            let (center, _) = self.view_target()?;
+            let half_fov_tan = (self.camera.camera.fov_degrees.to_radians() * 0.5).tan();
+            if half_fov_tan > 1.0e-4 {
+                let distance = (self.camera.camera.orthographic_height * 0.5) / half_fov_tan;
+                let forward = self.camera.camera.forward();
+                self.camera.camera.position = center - forward * distance;
+            }
+        }
+
+        self.camera.camera.projection_mode = target_mode;
+        Ok(json!({
+            "projection_mode": target_mode.name(),
+            "orthographic_height": self.camera.camera.orthographic_height,
+        }))
     }
 
     /// Looks at the target from a direction (target → eye).
@@ -1018,5 +1246,83 @@ impl EditorSession {
 
     pub(crate) fn default_gizmo_size() -> f32 {
         ROD_LENGTH
+    }
+}
+
+#[cfg(test)]
+mod outline_tests {
+    use serde_json::{Value as Json, json};
+
+    use crate::session::EditorSession;
+    use petunia_render::OverlayItem;
+
+    fn call(session: &mut EditorSession, request: Json) -> Json {
+        let reply = session.handle(&request);
+        assert_eq!(reply["ok"], true, "{request} -> {reply}");
+        reply["result"].clone()
+    }
+
+    fn selection_lines(
+        session: &EditorSession,
+    ) -> Vec<(petunia_math::Vec3, petunia_math::Vec3, f32, f32)> {
+        let frame = session.frame().expect("frame");
+        frame
+            .overlay
+            .iter()
+            .filter_map(|item| match item {
+                OverlayItem::Line {
+                    from,
+                    to,
+                    color,
+                    width_pixels,
+                } => Some((*from, *to, color.r, *width_pixels)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_outline_turns_with_the_object_and_takes_the_chosen_style() {
+        let root = std::env::temp_dir().join(format!(
+            "petunia_editor_test_outline_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let mut session = EditorSession::new().expect("session");
+        call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "contorno" }),
+        );
+        // Crate #9 of the sample is turned 25 degrees around Y.
+        call(&mut session, json!({ "op": "selection.set", "entity": 9 }));
+        let lines = selection_lines(&session);
+        assert_eq!(lines.len(), 12, "one box, twelve edges");
+        let slanted = lines.iter().any(|(from, to, _, _)| {
+            let delta = *to - *from;
+            delta.y.abs() < 1.0e-4 && delta.x.abs() > 1.0e-3 && delta.z.abs() > 1.0e-3
+        });
+        assert!(
+            slanted,
+            "a horizontal edge of a turned box is not parallel to X or Z"
+        );
+
+        call(
+            &mut session,
+            json!({ "op": "viewport.outline_style", "color": { "r": 0.0, "g": 1.0, "b": 0.5 }, "width": 5.0 }),
+        );
+        let lines = selection_lines(&session);
+        assert!(
+            lines
+                .iter()
+                .all(|(_, _, red, width)| *red == 0.0 && *width == 5.0)
+        );
+
+        let thick = session.handle(&json!({ "op": "viewport.outline_style", "width": 40.0 }));
+        assert_eq!(thick["ok"], false, "the width has limits");
+        let bad = session.handle(
+            &json!({ "op": "viewport.outline_style", "color": { "r": 2.0, "g": 0.0, "b": 0.0 } }),
+        );
+        assert_eq!(bad["ok"], false, "color channels go from 0 to 1");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

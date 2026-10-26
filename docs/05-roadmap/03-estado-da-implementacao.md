@@ -1,6 +1,6 @@
 # Estado da implementação
 
-**Revisão:** 2026-10-25 · **Fase atual:** 1 (esqueleto) concluída no código; **fase 2 (editor e construção de mapas) começou**
+**Revisão:** 2026-10-25 (edição de malha) · **Fase atual:** 1 (esqueleto) concluída no código; **fase 2 (editor e construção de mapas) começou**
 
 ## Resumo (TL;DR)
 
@@ -10,23 +10,49 @@ O essencial foi verificado **em display virtual** (nada apareceu na sua tela), c
 
 Três análises novas pedem a sua decisão: [paridade da interface](../02-arquitetura/12-paridade-ui-petunia3d.md), [edição de malha](../02-arquitetura/13-primitivas-e-edicao-de-malha.md) e [pintura e animação](../01-pesquisa/07-pintura-e-animacao.md).
 
-## Última etapa: layout da janela (2026-10-25)
+## Última etapa: edição de malha do Petunia3D (2026-10-25)
 
-Redesenho guiado pelas imagens de referência ([DR-26](../06-decisoes/registro-de-decisoes.md), [layout](../02-arquitetura/11-editor.md#layout-da-janela)).
+Booleanos (fundir, cortar, interseção), inset, extrudar, loop cut, bevel, subdividir, dissolver, fundir vértices, apagar e virar faces, faca. Decisão: [DR-22](../06-decisoes/registro-de-decisoes.md) (a malha pronta fica guardada na cena). Detalhes: [edição de malha](../02-arquitetura/13-primitivas-e-edicao-de-malha.md#nível-3-o-que-foi-feito-2026-10-25).
 
 | O quê | Verificação |
 |---|---|
-| **Uma barra no topo** (menus, ferramentas, Global/Local, pivô, desfazer, refazer, salvar); trilho e barra de texto removidos | **visto (display virtual)**; `Alt+C` abre *Criar* (teste de fumaça) |
-| Faixa do viewport em **uma linha**; opções de esculpir sob ela | **visto (display virtual)** |
-| **Hierarquia em árvore** com ícone por tipo, número em cinza e botão *Criar* | **visto (display virtual)** |
-| **Inspetor em seções** que recolhem, menu `⋯`, *Adicionar tabela* como menu | **visto**; o teste de fumaça adiciona `PlayerStart` pelo menu |
-| Painéis de baixo com abas em cima; laterais na altura toda; janela continua em 1360 px | **visto (display virtual)** |
-| Tema escuro com o mesmo layout | **visto (display virtual)** |
+| Crate `petunia_mesh`: código do Petunia3D (legado) + API validada | **181 testes passam**: 164 do próprio Petunia3D + 17 da API (volumes exatos, sólido fechado, entrada hostil, determinismo) |
+| Tabela `Mesh`, tipo de valor `mesh`, uma linha por vértice no arquivo | testes de ida e volta, recusa de malha quebrada; **salvar e abrir de novo dá a malha bit a bit igual** |
+| Operações `mesh.*` no editor (tornar editável, booleano, escolher partes, as operações) | **5 testes de ponta a ponta pelo JSON**: cada operação é **um** desfazer; booleano com ferramenta girada e esticada dá o volume exato |
+| Malhas desenhadas, selecionáveis e com gizmo e snap (mesmo caminho dos brushes) | teste de picking em malha; **não vista em imagem** |
+| Salvar recusa cena maior que o limite de abrir (antes: salvava e não abria mais) | teste: o arquivo antigo fica igual |
+| Histórico de desfazer com teto de memória (256 MB) | teste: os passos antigos saem, o desfazer continua certo |
+| Subdivisão sem rachaduras nos vizinhos (defeito do Petunia3D corrigido na API) | teste: o sólido continua fechado, também subdividindo metade de uma malha densa |
+| **Valor ao vivo** ao arrastar (`mesh.preview`): inset, extrudar, bevel, loop cut | 2 testes: um arrasto = um desfazer; cancelar não deixa rastro; ir e voltar dá o mesmo resultado |
+| Desempenho no build do editor (6,5 mil vértices) | **medido**: booleano 74 ms, inset em todas as faces 29 ms, checar sólido 3 ms |
+| `cargo fmt`, `clippy -D warnings`, **310 testes** (2 threads), `cargo deny` | **passou**, recompilado do zero numa pasta de build **isolada** (`/tmp/petunia-x.verify`); o `cargo deny` rodou com a base de avisos local (`--offline`) |
+| **Falso verde encontrado:** a cópia `petunia-engine-system-modules` usa a **mesma** pasta de build (`/tmp/petunia-engine-target`) | Uma cópia sobrescreve os binários da outra, e o `cargo test` chegou a rodar o `petunia_math` da cópia (5 testes em vez de 9) dizendo "ok". Até a cópia ter outra pasta de build, **verifique com `CARGO_TARGET_DIR` próprio** |
+
+**Não verificado:** nada disso foi **visto** em janela (nem no display virtual), porque a interface Qt ainda não tem os botões. Os ganchos que faltam estão [listados aqui](../02-arquitetura/13-primitivas-e-edicao-de-malha.md#ganchos-da-interface-que-faltam). Malhas acima de 6,5 mil vértices ainda não foram medidas.
+
+## Última etapa: design da interface, workspaces e paleta de comandos (2026-10-25)
+
+Pesquisa e regras em [design da interface](../02-arquitetura/15-design-da-interface.md); decisão [DR-26](../06-decisoes/registro-de-decisoes.md) (revista).
+
+| O quê | Verificação |
+|---|---|
+| Medidas novas: texto de 12 px, ícones de 16 px, controles de 24 px; neutros quentes e acento violeta nos temas claro e escuro | **visto (display virtual)**; contraste **calculado** (todos os textos ≥ 4,5:1) |
+| Menus atrás de `≡`, `Alt+letra`, `F10`, "Menus por extenso" | **visto**; o teste de fumaça usa `Alt+C` |
+| **Paleta de comandos** (`Ctrl+K`): busca tolerante, destaque das letras, recentes, atalhos | **vista** com "cvr" → Caverna; não tem teste automático |
+| **Workspaces Cena e Código** (`F3`/`F4`), cada um com seu arranjo de painéis | **visto**; o teste de fumaça cria e salva um script no workspace Código |
+| Coluna de ferramentas no viewport; faixa da cena com snap num botão e painel | **visto** (o painel do snap e o menu `≡` capturados na tela virtual) |
+| Inspetor e hierarquia compactos, rótulos e tabelas em português | **visto** |
+| Referência da API com as funções do script primeiro | **vista** |
+| Ícone de busca quebrado, vindo do Petunia3D | corrigido; os outros 286 ícones conferidos |
 | Teste de fumaça com as coordenadas novas | **7/7 ok** |
 
-**Não verificado:** nada disso foi visto na **sua** sessão real; leitor de tela e navegação só por teclado nos painéis novos não foram testados.
+**Não verificado:** a sua sessão real; leitor de tela; navegação só por teclado nos painéis novos; a paleta sem mouse em todos os casos.
 
-## Etapa anterior: Script Host e editor de código (2026-10-25)
+## Antes: layout da janela (2026-10-25)
+
+Primeira versão do redesenho (uma barra no topo, hierarquia em árvore, inspetor em seções). Substituída pela etapa acima.
+
+## Antes: Script Host e editor de código (2026-10-25)
 
 | O quê | Verificação |
 |---|---|
@@ -93,26 +119,27 @@ Redesenho guiado pelas imagens de referência ([DR-26](../06-decisoes/registro-d
 
 ## O que existe
 
-**18,5 mil linhas de Rust** em 14 crates, **5,3 mil linhas de C++** próprias e **3,4 mil linhas de C++ copiadas** do Petunia3D (`editor/src/ui_kit/`; só o tema ganhou estilos novos).
+**37,5 mil linhas de Rust** em 15 crates (14,1 mil delas copiadas do Petunia3D em `petunia_mesh/src/legacy/`), **6,1 mil linhas de C++** próprias e **3,6 mil linhas de C++ copiadas** do Petunia3D (`editor/src/ui_kit/`; o tema foi reescrito, o resto está igual).
 
 | Parte | Linhas | O que faz |
 |---|---:|---|
-| `petunia_math` | 236 | `Vec2`, `Vec3`, `Color`, `Transform` |
-| `petunia_world` | 1414 | Entidades, tabelas, tags, comandos adiados, RNG; `f32` salvo em decimal curto |
+| `petunia_math` | 753 | `Vec2`, `Vec3`, `Color`, `Transform`, **`PolygonMesh`** (malha editável como dado, triângulos para desenhar) |
+| `petunia_world` | 1444 | Entidades, tabelas, tags, comandos adiados, RNG; `f32` salvo em decimal curto; tipo de valor **`mesh`** |
 | `petunia_schema` | 466 | API como dado |
-| `petunia_commands` | 1128 | Despachante com desfazer/refazer |
-| `petunia_project` | 966 | Formato de texto, salvar, diagnósticos, projeto de exemplo; `Brush.detail` |
+| `petunia_commands` | 1245 | Despachante com desfazer/refazer; histórico com **teto de memória** |
+| `petunia_project` | 1074 | Formato de texto, salvar (recusa cena grande demais para abrir), diagnósticos, projeto de exemplo; tabela **`Mesh`** |
 | `petunia_input` | 166 | Entrada por ações nomeadas |
-| `petunia_render` | 1637 | Câmera, **seis formas**, picking, **overlay para gizmos**, volumes esculpidos no quadro |
+| `petunia_render` | 1831 | Câmera, **seis formas** e **malhas editáveis**, picking, **overlay para gizmos**, volumes esculpidos no quadro |
 | `petunia_sculpt` | 2176 | **Cavernas**: campo em blocos, malha por *surface nets*, gerador, caminho, fundir traços |
-| `petunia_script` | 2172 | **Script Host**: compila e roda Aipo, API como dado, Doctor de scripts, simulação numa cópia |
-| `petunia_render_gl` | 767 | OpenGL 3.3: contorno de seleção, **passe de overlay em pixels** |
+| `petunia_script` | 3614 | **Script Host**: compila e roda Aipo, API como dado, Doctor de scripts, simulação numa cópia |
+| `petunia_render_gl` | 820 | OpenGL 3.3: contorno de seleção, **passe de overlay em pixels**, buffers de malhas editáveis |
 | `petunia_player` | 386 | Janela simples com câmera livre |
 | `petunia_cli` | 177 | `petunia new / check / run / schema / version` |
-| `petunia_editor` | 6538 | Sessão, operações JSON, **gizmo**, **gestos**, snap a objetos, Modo Livre, **operações de brush**, andares, **esculpir** |
+| `petunia_mesh` | 15361 | **Edição de malha**: booleanos, inset, loop cut, bevel… (14100 linhas de legado do Petunia3D + API validada) |
+| `petunia_editor` | 7801 | Sessão, operações JSON, **gizmo**, **gestos**, snap a objetos, Modo Livre, **operações de brush**, andares, **esculpir**, **edição de malha** |
 | `petunia_editor_ffi` | 210 | Fronteira C |
-| `editor/` (C++/Qt) | 5303 | Janela, barra principal, faixa do viewport, docas, inspetor, editor de código |
-| `editor/src/ui_kit/` (copiado) | 3368 | Tema, campo numérico, campo XYZ, expressões, arrasto, ícones |
+| `editor/` (C++/Qt) | 6138 | Janela, barra principal, workspaces, paleta de comandos, faixa da cena, docas, inspetor, editor de código |
+| `editor/src/ui_kit/` (copiado) | 3567 | Tema, campo numérico, campo XYZ, expressões, arrasto, ícones |
 
 Detalhes: [editor](../02-arquitetura/11-editor.md), [paridade](../02-arquitetura/12-paridade-ui-petunia3d.md).
 
@@ -121,7 +148,7 @@ Detalhes: [editor](../02-arquitetura/11-editor.md), [paridade](../02-arquitetura
 | Item | Estado | Evidência |
 |---|---|---|
 | `cargo fmt`, `cargo clippy --workspace --all-targets -D warnings` | **passou** | limpo |
-| Suíte completa, **96 testes** (2026-10-25) | **passou** | script 20, editor 20, sculpt 17, render 13, world 12, commands 5, input 3, math 3, schema 2, project 1 |
+| Suíte completa, **301 testes** (2026-10-25, depois da edição de malha) | **passou** | mesh 179 (164 do Petunia3D), script 30 (14 + 16 do host), editor 25, sculpt 17, render 15, world 13, math 9, commands 6, input 3, project 2, schema 2 |
 | Formas orientadas para fora (caixa, rampa, cilindro, cone, esfera, escada) | **passou** | teste por geometria, em vários níveis de detalhe |
 | Gizmo: acertar a alça, mover só no eixo e no snap, girar em passos, escalar sem zerar | **passou** | 4 testes em `petunia_editor` |
 | Um arrasto vira **um** passo de desfazer; sem mudança, nenhum | **passou** | teste de gesto |
@@ -208,14 +235,15 @@ No editor:
 
 ## Limites conhecidos
 
-Veja [editor](../02-arquitetura/11-editor.md). Os maiores: sem câmera ortográfica, lista de objetos sem paginação, sem salvamento automático, sem paleta de comandos, cavar só em caixas sem rotação.
+Veja [editor](../02-arquitetura/11-editor.md). Os maiores: sem câmera ortográfica, lista de objetos sem paginação, sem salvamento automático, cavar só em caixas sem rotação (use `mesh.boolean` para o resto), edição de malha ainda sem interface.
 
 ## Pendências que não são código
 
 | Item | Nota |
 |---|---|
 | `TODO(human)` em `petunia_schema/src/naming.rs` | Política dos verbos da API; hoje aceita qualquer verbo |
-| **DR-22 nível 3**, **DR-23** e **DR-24** (workspaces e prioridades) | Aguardam sua decisão |
+| **DR-23** e **DR-24** (workspaces e prioridades) | Aguardam sua decisão |
+| Interface da edição de malha (menu, `Tab`, atalhos) | O motor está pronto; a janela está sendo redesenhada em outra sessão |
 | `catch_unwind` no despachante | Planejado |
 
 ## Próximos passos

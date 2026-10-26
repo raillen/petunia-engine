@@ -19,6 +19,7 @@ use serde_json::json;
 use crate::api::{API, CONTEXT_GLOBAL, GAME_CAPABILITIES, install_standard, script_surface};
 use crate::compile::{MAX_SCRIPT_BYTES, ScriptDiagnostic, compile};
 use crate::natives::{self, GameCell, GameState, LogLevel, LogLine};
+use crate::physics_api::{self, PhysicsRuntime};
 
 /// Scripts of a project live here, one `.aipo` file each; a `Script` row names one by its file
 /// name without the extension.
@@ -104,6 +105,14 @@ fn callback_for(module: &str, name: &str) -> Option<HostNativeCallback> {
         ("log", "info") => natives::log_info,
         ("log", "warning") => natives::log_warning,
         ("log", "error") => natives::log_error,
+        ("collision", "list") => physics_api::collision_list,
+        ("collision", "get") => physics_api::collision_get,
+        ("collision", "set") => physics_api::collision_set,
+        ("collision", "overlaps") => physics_api::collision_overlaps,
+        ("physics", "raycast") => physics_api::physics_raycast,
+        ("physics", "velocity") => physics_api::physics_velocity,
+        ("physics", "set_velocity") => physics_api::physics_set_velocity,
+        ("physics", "impulse") => physics_api::physics_impulse,
         _ => return None,
     })
 }
@@ -168,6 +177,7 @@ impl ScriptHost {
                 commands_run: 0,
                 log: Vec::new(),
                 events: Vec::new(),
+                physics: None,
             }))),
             surface: script_surface(),
             scripts: BTreeMap::new(),
@@ -209,6 +219,28 @@ impl ScriptHost {
     /// Handlers that failed since the last call.
     pub fn take_faults(&mut self) -> Vec<ScriptFault> {
         std::mem::take(&mut self.faults)
+    }
+
+    /// Turns physics on for this game: builds the simulation from the world's `Collider` and
+    /// `RigidBody` tables. `hulls` gives the points of `convex` colliders on objects without a
+    /// `Mesh` (the caller builds them from the brush shape). Returns the problems: colliders and
+    /// bodies left out, each naming the object; they are also written to the console.
+    pub fn attach_physics(
+        &mut self,
+        settings: petunia_physics::PhysicsSettings,
+        hulls: BTreeMap<u64, Vec<petunia_math::Vec3>>,
+    ) -> Result<Vec<String>, String> {
+        let mut state = self.state.0.borrow_mut();
+        let (runtime, problems) = PhysicsRuntime::new(&state.world, settings, hulls)?;
+        state.physics = Some(runtime);
+        for problem in &problems {
+            state.push_log(LogLevel::Warning, format!("física: {problem}"));
+        }
+        Ok(problems)
+    }
+
+    pub fn has_physics(&self) -> bool {
+        self.state.0.borrow().physics.is_some()
     }
 
     pub fn loaded_scripts(&self) -> Vec<String> {
@@ -441,6 +473,15 @@ impl ScriptHost {
         {
             let mut state = self.state.0.borrow_mut();
             state.seconds += dt;
+            // Physics first, so `on_update` sees where things fell this frame.
+            let GameState { world, physics, .. } = &mut *state;
+            let problems = match physics {
+                Some(runtime) => runtime.advance(world, dt),
+                None => Vec::new(),
+            };
+            for problem in problems {
+                state.push_log(LogLevel::Warning, format!("física: {problem}"));
+            }
         }
         for (entity, script) in self.attached() {
             if self.disabled.contains(&entity) {
@@ -469,7 +510,40 @@ impl ScriptHost {
                 );
             }
         }
+        self.deliver_contacts();
         self.state.0.borrow_mut().world.advance_tick();
+    }
+
+    /// `on_collision(entity, other, mine, theirs)` when a contact starts and `on_collision_end`
+    /// when it stops, to the scripts of both objects, in a fixed order.
+    fn deliver_contacts(&mut self) {
+        let contacts = match self.state.0.borrow_mut().physics.as_mut() {
+            Some(runtime) => std::mem::take(&mut runtime.contacts),
+            None => return,
+        };
+        if contacts.is_empty() {
+            return;
+        }
+        let attached: BTreeMap<u64, String> = self.attached().into_iter().collect();
+        for contact in contacts {
+            let handler = match contact.phase {
+                petunia_physics::ContactPhase::Started => "on_collision",
+                petunia_physics::ContactPhase::Stopped => "on_collision_end",
+            };
+            for (mine, theirs) in [(&contact.first, &contact.second), (&contact.second, &contact.first)] {
+                if mine.owner == theirs.owner || self.disabled.contains(&mine.owner) {
+                    continue;
+                }
+                if let Some(script) = attached.get(&mine.owner).cloned() {
+                    self.call_handler(
+                        mine.owner,
+                        &script,
+                        handler,
+                        &[Value::Int(theirs.owner as i64), Value::string(mine.name.clone()), Value::string(theirs.name.clone())],
+                    );
+                }
+            }
+        }
     }
 
     /// Sends an event to one object from the host (a key, a trigger).

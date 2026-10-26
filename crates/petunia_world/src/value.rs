@@ -1,4 +1,4 @@
-use petunia_math::{Color, Vec3};
+use petunia_math::{Color, PolygonMesh, Vec3};
 use serde::{Deserialize, Serialize};
 
 /// Largest integer that every language in the engine can represent exactly (2^53 - 1).
@@ -18,6 +18,8 @@ pub enum ValueKind {
     Text,
     Vec3,
     Color,
+    /// An editable polygon mesh (see `petunia_math::PolygonMesh`).
+    Mesh,
 }
 
 impl ValueKind {
@@ -29,6 +31,7 @@ impl ValueKind {
             Self::Text => "text",
             Self::Vec3 => "vec3",
             Self::Color => "color",
+            Self::Mesh => "mesh",
         }
     }
 }
@@ -42,6 +45,7 @@ pub enum Value {
     Text(String),
     Vec3(Vec3),
     Color(Color),
+    Mesh(PolygonMesh),
 }
 
 impl Value {
@@ -53,6 +57,7 @@ impl Value {
             Self::Text(_) => ValueKind::Text,
             Self::Vec3(_) => ValueKind::Vec3,
             Self::Color(_) => ValueKind::Color,
+            Self::Mesh(_) => ValueKind::Mesh,
         }
     }
 
@@ -80,6 +85,7 @@ impl Value {
             }
             Self::Vec3(vector) => finite(vector.is_finite()),
             Self::Color(color) => finite(color.is_finite()),
+            Self::Mesh(mesh) => mesh.validate().map_err(|error| error.to_string()),
         }
     }
 
@@ -102,6 +108,9 @@ impl Value {
                 serde_json::from_value::<Color>(json.clone())
                     .map_err(|error| format!("esperava {{r, g, b, a}}: {error}"))?,
             ),
+            ValueKind::Mesh => {
+                Self::Mesh(PolygonMesh::from_text_json(json).map_err(|error| error.to_string())?)
+            }
         };
         value.validate(max_text_bytes)?;
         Ok(value)
@@ -126,6 +135,7 @@ impl Value {
                 "b": f32_json(color.b),
                 "a": f32_json(color.a),
             }),
+            Self::Mesh(mesh) => mesh.to_text_json(),
         }
     }
 }
@@ -169,5 +179,25 @@ mod tests {
         assert!(text.contains("0.1") && text.contains("0.001"), "{text}");
         let back = Value::from_json(ValueKind::Vec3, &Value::Vec3(vector).to_json(), 16);
         assert_eq!(back, Ok(Value::Vec3(vector)));
+    }
+
+    #[test]
+    fn meshes_round_trip_and_refuse_broken_geometry() {
+        let mesh = PolygonMesh {
+            positions: vec![
+                Vec3::new(0.0, 0.0, 0.0),
+                Vec3::new(1.5, 0.0, 0.0),
+                Vec3::new(0.0, 0.25, 0.0),
+            ],
+            faces: vec![vec![0, 1, 2]],
+        };
+        let json = Value::Mesh(mesh.clone()).to_json();
+        assert_eq!(json["positions"][1], "1.5 0 0");
+        assert_eq!(
+            Value::from_json(ValueKind::Mesh, &json, 16),
+            Ok(Value::Mesh(mesh))
+        );
+        let broken = serde_json::json!({ "positions": ["0 0 0"], "faces": ["0 1 2"] });
+        assert!(Value::from_json(ValueKind::Mesh, &broken, 16).is_err());
     }
 }

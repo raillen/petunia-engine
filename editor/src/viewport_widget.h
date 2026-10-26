@@ -11,6 +11,8 @@ class EngineBridge;
 class NavCubeWidget;
 class ViewportOverlay;
 
+enum class ComponentMode { Vertex, Edge, Face };
+
 // The 3D view. It draws through the engine and turns keyboard and mouse into camera and
 // selection operations. Controls (also listed in Ajuda > Atalhos):
 //   arrows / PageUp / PageDown move, Shift is faster, mouse wheel moves forward/back,
@@ -25,6 +27,11 @@ public:
     // Double tap on G, R or S: the free mode of that tool ("move", "rotate", "scale").
     void startFreeMode(const QString& tool);
 
+    bool isEditMode() const { return editMode_; }
+    void setEditMode(bool on);
+    ComponentMode componentMode() const { return componentMode_; }
+    void setComponentMode(ComponentMode mode);
+
 signals:
     void selectionChanged();
     // A gizmo drag is changing a value live: the panels should show it, not rebuild.
@@ -32,6 +39,9 @@ signals:
 
     void cameraChanged();
     void renderFailed(const QString& message);
+    void editModeChanged(bool on);
+    void editModeToggleRequested();
+    void componentModeChanged(ComponentMode mode);
 
 protected:
     void initializeGL() override;
@@ -50,6 +60,7 @@ protected:
 private:
     void tick();
     void pickAt(const QPoint& position);
+    void pickComponentAt(const QPoint& position, Qt::KeyboardModifiers modifiers);
     QJsonObject pointerFields(const QPoint& position) const;
     bool hasProject() const;
     QString currentTool() const;
@@ -81,4 +92,6 @@ private:
     NavCubeWidget* navCube_ = nullptr;
     bool clickCandidate_ = false;
     bool renderErrorReported_ = false;
+    bool editMode_ = false;
+    ComponentMode componentMode_ = ComponentMode::Face;
 };

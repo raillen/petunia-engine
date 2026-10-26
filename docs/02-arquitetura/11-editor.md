@@ -96,39 +96,57 @@ Se algo falha, a resposta explica o que fazer:
 | `sculpt.consolidate` | — | Funde traços em cadeia (um desfazer) |
 | `sculpt.faceted` | `value` | Triângulos chapados (low poly) na caverna selecionada |
 | `brush.carve` · `brush.hollow` | — / `thickness` | **Cavar** (a seleção corta as caixas que toca) e **Tornar oco** |
+| `mesh.convert` | `entity`? | **Tornar editável**: o brush vira malha (`Mesh`), mesma entidade, mesma aparência (um desfazer) |
+| `mesh.boolean` | `operation` (`union`, `subtract`, `intersect`), `tool`, `entity`?, `keep_tool`? | **Fundir, cortar, interseção** com outro brush ou malha, em qualquer rotação e escala; o alvo vira malha; a ferramenta some (a menos que `keep_tool`). Um desfazer |
+| `mesh.pick` | `x`, `y`, `width`, `height`, `entity`? | Face, aresta (com a fração ao longo dela), vértice e ponto sob o mouse |
+| `mesh.select` | `faces`, `edges` (`[[a, b]]`), `vertices`, `mode` (`replace`, `add`, `toggle`, `clear`) | Escolhe partes da malha. A escolha some quando a malha muda (desfazer, outra operação) |
+| `mesh.info` | `entity`?, `geometry`? | Vértices, faces, arestas, triângulos, se é **sólido fechado**, a escolha; com `geometry`, a malha inteira |
+| `mesh.inset` | `faces`?, `distance` (0,2), `grouping` (`region`, `individual`) | **Inset**: a face encolhe e ganha um anel; depois, a escolha é a face de dentro |
+| `mesh.extrude` | `faces`?, `distance` (0,5; negativo afunda), `grouping` | **Extrudar** faces da malha |
+| `mesh.loop_cut` | `edge`?, `cuts` (1 a 32), `slide` (-1 a 1) | **Corte em laço** no anel de quadriláteros da aresta; termina limpo em triângulos e n-gons |
+| `mesh.bevel` | `edges`?, `width` (0,1), `segments` (1 = chanfro, até 16 = arredondado) | **Bevel**: tudo ou nada; arestas que se encontram num canto são recusadas juntas (limite do Petunia3D) |
+| `mesh.subdivide` | `faces`?, `cuts` (1 a 32) | Subdivide triângulos e quadriláteros; os vizinhos ganham os pontos novos (sem rachaduras) |
+| `mesh.dissolve` | `edges`? | Tira arestas e junta as duas faces de cada lado |
+| `mesh.merge` · `mesh.merge_by_distance` | `vertices`? / `distance` (0,001) | Funde vértices no centro; funde os que estão perto demais |
+| `mesh.delete_faces` · `mesh.flip` | `faces`? | Apaga faces (a malha fica aberta); vira faces do avesso (sem `faces`: todas) |
+| `mesh.knife` | `start`, `end`: `{ "edge": [a, b], "fraction": 0.5 }` | **Faca**: corta uma face em duas entre dois pontos das suas arestas |
+| `mesh.preview` | `operation` (`inset`, `extrude`, `bevel`, `loop_cut`) + os valores dela (`distance`, `width`, `slide`…) | **Valor ao vivo** enquanto o mouse arrasta: mostra o resultado sem gravar; cada passo parte da malha de antes do arrasto. Um valor que ainda não serve (inset de 0) mostra a malha como estava e responde `valid: false` com o motivo |
+| `mesh.preview_end` | `commit` (padrão `true`) | Solta o arrasto: **um** passo de desfazer, ou nada quando `commit: false`. Outra operação de malha também encerra o arrasto (mantendo-o) |
 | `floor.step` · `floor.height` | `delta` / `meters` | Sobe ou desce o **andar** (grade e criação); além do último, **cria** o andar (um desfazer) |
 | `floor.select` · `floor.above` | `entity` / `mode` (`ghost`, `hide`, `show`) | Vai a um andar da lista; como aparecem os objetos acima dele |
 | `viewport.overlay` | `width`, `height` | Modelo em pixels do gizmo, guias, marcadores, painel do gesto e eixos da câmera |
-| `camera.view_direction` · `camera.yaw` | `x`, `y`, `z` / `degrees` | Usados pelo cubo de navegação |
+| `camera.view_direction` · `camera.yaw` · `camera.orbit` · `camera.projection` | `x`, `y`, `z` / `degrees` / `dx`, `dy` / `mode`, `height` | Usados pelo cubo de navegação e menus de projeção |
 
 ## Layout da janela
 
-Inspirado no redesenho do Unity que você mandou como referência visual ([DR-26](../06-decisoes/registro-de-decisoes.md)). Nada de código foi copiado.
+As regras de tamanho, cor e texto estão em [design da interface](15-design-da-interface.md) ([DR-26](../06-decisoes/registro-de-decisoes.md)).
 
 ```text
-┌ Arquivo Editar Criar … │ ferramentas │ Global|Local  Pivô ⊞ ……………… ↶ ↷ │ 💾 ┐
-├ Hierarquia ─────┬ Snap 0,5 m 15° 0,1× Inteligente …  ⌄ Térreo ⌃ ┬ Inspetor ────┤
-│ + Criar  Buscar │ (opções da ferramenta de esculpir, só com B)  │ ◇ Caixa  #9  │
-│ ▾ Sala          │                                               │ ⌄ Name    ⋯  │
-│   ◇ Piso     #1 │              viewport 3D                      │ ⌄ Transform ⋯│
-│   ◇ Caixa    #9 │                                               │ + Adicionar  │
-│                 ├ Diagnósticos  Histórico  API  Código ─────────┤   tabela     │
-│                 │ painel da aba                                 │              │
-└─────────────────┴───────────────────────────────────────────────┴──────────────┘
+┌ ≡  Sala de exemplo        [ Cena | Código ]        🔍 Buscar comando  Ctrl K   ↶ ↷ 💾 ┐
+├ Hierarquia ─────┬ Global|Local  ⊕Pivô ⊞ │ 🧲0,5 m ⌄          ⌄ Térreo ⌃ ┬ Inspetor ────┤
+│ 🔍 Buscar     + │ ┌──┐                                                │ ◇ Caixa  #9  │
+│ ▾ Sala          │ │⬚ │  ferramentas                                   │ ⌄ Nome    ⋯  │
+│   ◇ Piso     #1 │ │✥ │  (coluna)          viewport 3D                 │ ⌄ Transf. ⋯  │
+│   ◇ Caixa    #9 │ └──┘                                                │ + Adicionar  │
+│                 ├ Diagnósticos  Histórico ────────────────────────────┤   tabela     │
+└─────────────────┴─────────────────────────────────────────────────────┴──────────────┘
 ```
 
 | Parte | O que tem |
 |---|---|
-| **Barra de cima** (uma só) | Menus; as 8 ferramentas em ícones (transformar · faces · esculpir) e o menu de primitivas; eixos **Global/Local**, pivô e editar pivô; desfazer, refazer e salvar |
-| **Faixa do viewport** | Snap, os três passos (as unidades m, ° e × dizem qual é qual), alvo do snap, inclinação e o andar |
-| **Opções da ferramenta** | Só aparece com Esculpir ou Túnel; quando falta espaço, o resto vai para o botão `⋯` |
-| **Hierarquia** | Árvore com o projeto na raiz, ícone por tipo de objeto, número em cinza; **Criar** ao lado da busca |
-| **Inspetor** | Cabeçalho com ícone, nome e número; uma seção por tabela, que **recolhe** (o estado vale para os próximos objetos); o `⋯` da seção tem *Remover tabela*; **Adicionar tabela** no fim |
-| **Painéis de baixo** | Abas em cima (Diagnósticos, Histórico, API, Código), só sob o viewport; os painéis laterais vão até embaixo |
+| **Barra de cima** | `≡` com todos os menus (`F10`; `Alt+letra` abre um menu direto); o projeto (`•` = não salvo); os workspaces **Cena** (`F3`) e **Código** (`F4`); **Buscar comando** (`Ctrl+K`); desfazer, refazer, salvar |
+| **Faixa da cena** | Eixos Global/Local, pivô (menu), editar pivô, **snap** (o botão mostra o passo; `⌄` abre passos, alvo e inclinação) e o andar |
+| **Coluna de ferramentas** | No canto do viewport: transformar · faces · esculpir · primitivas (a lista abre ao lado) |
+| **Opções da ferramenta** | Só com Esculpir ou Túnel, sob a faixa; quando falta espaço, o resto vai para `⋯` |
+| **Hierarquia** | Árvore com o projeto na raiz, ícone por tipo, número em cinza; busca e `+` (criar) |
+| **Inspetor** | Ícone, nome e número; uma seção por tabela, com nome em português, que **recolhe**; `⋯` remove; **Adicionar tabela** no fim |
+| **Workspace Código** | Lista de scripts (`+` cria), editor, Problemas e Console, e a **Referência da API** (funções do script primeiro) |
 
-Os painéis laterais têm um título compacto com **soltar** e **fechar**; **Exibir** reabre qualquer painel. Os temas **claro** (padrão), escuro e alto contraste usam o mesmo layout.
+**Paleta de comandos** (`Ctrl+K` ou `Ctrl+Shift+P`): digite parte do nome, em qualquer ordem de letras ("cvr" acha "Caverna"); `↑ ↓` escolhem, `Enter` executa, `Esc` fecha. Os comandos usados por último aparecem primeiro.
 
-**Não há botão Jogar** na barra: o modo Jogar ainda não existe, e um botão sem efeito engana.
+**Exibir > Menus por extenso na barra** troca o `≡` pelos nomes dos menus. Cada workspace lembra quais painéis estavam abertos e o tamanho deles.
+
+**Não há botão Jogar**: o modo Jogar ainda não existe, e um botão sem efeito engana.
 
 ## Controles do viewport
 
@@ -142,13 +160,13 @@ Os painéis laterais têm um título compacto com **soltar** e **fechar**; **Exi
 | Aproximar e afastar | roda do mouse |
 | Selecionar | clique esquerdo |
 | Selecionar e transformar (gizmo universal) | `V` |
-| Mover, Girar, Escalar | `G`, `R`, `S` (mapa padrão do Petunia3D; ou os ícones da barra de cima) |
+| Mover, Girar, Escalar | `G`, `R`, `S` (mapa padrão do Petunia3D; ou a coluna de ferramentas no viewport) |
 | Menu radial de primitivas | `Shift+A` (aponte e clique, ou números 1–8) |
 | Modo Livre (o mouse muda o valor; `X` `Y` `Z` restringem; digite um número) | **duplo toque** em `G`, `R` ou `S`; `Enter`/clique confirma, `Esc`/botão direito cancela |
 | Empurrar/puxar e Extrudar uma face | `P` e `E`, depois arraste a face |
 | Cavar e Tornar oco | `Ctrl+Alt+C` e `Ctrl+Alt+H` |
 | Esculpir caverna (modo nas opções da ferramenta, sob a faixa do viewport; `Ctrl` faz o oposto) | `B`; `[` e `]` mudam o raio; `Esc` cancela o arrasto |
-| Editor de código | `F4`; `F5` executa numa cópia; `Ctrl+S` dentro do editor salva o **script**; `Ctrl+Shift+F` formata; `Ctrl+Espaço` sugestões; **`Esc` e depois `Tab` sai do editor** |
+| Workspace Código | `F4` (e `F3` volta à cena); `F5` executa numa cópia; `Ctrl+S` dentro do editor salva o **script**; `Ctrl+Shift+F` formata; `Ctrl+Espaço` sugestões; **`Esc` e depois `Tab` sai do editor** |
 | Túnel por caminho: clique pontos na rocha | `Shift+B`; `Enter` cava, `Backspace` tira o último ponto, `Esc` cancela |
 | Editar o pivô do objeto | `Alt+P` |
 | Subir e descer de andar (acima do último, cria um novo) | `Ctrl+PageUp` e `Ctrl+PageDown`, ou a lista de andares na barra |
@@ -178,10 +196,13 @@ Os atalhos de edição ficam em **Ajuda > Atalhos**: `Ctrl+Z`, `Ctrl+Shift+Z`, `
 | Limite | Efeito |
 |---|---|
 | A lista de objetos vem inteira a cada mudança (corte em 10 mil) | Cenas enormes ficam lentas; falta paginação |
-| Sem câmera ortográfica | Construir em planta exige a vista de topo em perspectiva |
 | Traços de caverna não aparecem na Hierarquia nem se editam um a um | A caverna inteira se move, copia e apaga; editar um traço fica para depois |
 | Abrir uma caverna enorme e desfazer nela recalculam o campo todo | Pausa de centenas de milissegundos com mais de mil traços; ver [cavernas](14-workspaces-e-prioridades.md) |
-| **Cavar** só funciona em caixas sem rotação | Recusa com mensagem; rampas e cilindros não são cortados |
+| **Cavar** só funciona em caixas sem rotação | Recusa com mensagem; para outras formas e rotações, use `mesh.boolean` |
+| Edição de malha ainda **não tem botões nem atalhos** no Qt | As operações `mesh.*` existem e têm teste; os ganchos da interface estão listados em [edição de malha](13-primitivas-e-edicao-de-malha.md#ganchos-da-interface-que-faltam) |
+| Bevel recusa arestas que se encontram num canto | Limite herdado do Petunia3D: escolha arestas separadas, uma de cada vez |
+| Malhas editáveis **não têm UV** nem material por face | Cor única por objeto; UV ficou fora da cópia (DR-22) |
+| Tempo das operações no build do editor (dev, com `opt-level = 3` em `petunia_mesh` e `manifold-rust`) | Malha de 6,5 mil vértices: booleano 74 ms, inset em todas as faces 29 ms, subdividir 5 a 30 ms, checar sólido 3 ms (medido em 2026-10-25). Malhas maiores ainda não foram medidas |
 | Testar "acima do andar" monta a malha de cada objeto a cada quadro | Bom para centenas de objetos; cenas grandes pedem caixas guardadas |
 | Inteiros no inspetor vão só até 32 bits | O motor aceita até 2^53 |
 | Desfazer não restaura a seleção | A entidade recriada precisa ser selecionada de novo |

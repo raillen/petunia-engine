@@ -11,6 +11,11 @@ use crate::error::CommandError;
 /// History is bounded: old entries fall off the back.
 pub const MAX_HISTORY: usize = 500;
 
+/// History is also bounded by memory: an undo step of an editable mesh keeps the whole old mesh,
+/// so a few hundred edits of a large mesh would otherwise hold gigabytes. The newest step always
+/// stays, whatever its size.
+pub const MAX_HISTORY_BYTES: usize = 256 * 1024 * 1024;
+
 /// Most commands in one `world.batch` (a hostile caller cannot ask for endless work).
 pub const MAX_BATCH: usize = 10_000;
 
@@ -55,6 +60,38 @@ struct Entry {
 struct HistoryEntry {
     command: String,
     inverse: CommandRecord,
+    /// Size of the inverse as JSON: what the step costs to keep.
+    bytes: usize,
+}
+
+impl HistoryEntry {
+    fn new(command: String, inverse: CommandRecord) -> Self {
+        let bytes = json_bytes(&inverse.payload) + inverse.command.len();
+        Self {
+            command,
+            inverse,
+            bytes,
+        }
+    }
+}
+
+/// Bytes of a JSON value written compactly, counted without building the text.
+fn json_bytes(value: &Json) -> usize {
+    struct Counter(usize);
+    impl std::io::Write for Counter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 += bytes.len();
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut counter = Counter(0);
+    match serde_json::to_writer(&mut counter, value) {
+        Ok(()) => counter.0,
+        Err(_) => 0,
+    }
 }
 
 /// Table of commands plus undo and redo stacks.
@@ -62,6 +99,7 @@ pub struct Dispatcher {
     entries: BTreeMap<String, Entry>,
     undo: VecDeque<HistoryEntry>,
     redo: Vec<HistoryEntry>,
+    history_budget_bytes: usize,
 }
 
 impl Dispatcher {
@@ -70,6 +108,7 @@ impl Dispatcher {
             entries: BTreeMap::new(),
             undo: VecDeque::new(),
             redo: Vec::new(),
+            history_budget_bytes: MAX_HISTORY_BYTES,
         }
     }
 
@@ -128,10 +167,7 @@ impl Dispatcher {
             .get(&record.command)
             .is_some_and(|entry| entry.spec.reversibility == Reversibility::Undoable);
         if reversible && let Some(inverse) = outcome.inverse {
-            self.push_undo(HistoryEntry {
-                command: record.command.clone(),
-                inverse,
-            });
+            self.push_undo(HistoryEntry::new(record.command.clone(), inverse));
             self.redo.clear();
         }
         Ok(outcome.result)
@@ -142,10 +178,8 @@ impl Dispatcher {
         let entry = self.undo.pop_back().ok_or(CommandError::NothingToUndo)?;
         let outcome = self.run(world, &entry.inverse)?;
         if let Some(inverse) = outcome.inverse {
-            self.redo.push(HistoryEntry {
-                command: entry.command.clone(),
-                inverse,
-            });
+            self.redo
+                .push(HistoryEntry::new(entry.command.clone(), inverse));
         }
         Ok(entry.command)
     }
@@ -155,10 +189,7 @@ impl Dispatcher {
         let entry = self.redo.pop().ok_or(CommandError::NothingToRedo)?;
         let outcome = self.run(world, &entry.inverse)?;
         if let Some(inverse) = outcome.inverse {
-            self.push_undo(HistoryEntry {
-                command: entry.command.clone(),
-                inverse,
-            });
+            self.push_undo(HistoryEntry::new(entry.command.clone(), inverse));
         }
         Ok(entry.command)
     }
@@ -253,6 +284,26 @@ impl Dispatcher {
         while self.undo.len() > MAX_HISTORY {
             self.undo.pop_front();
         }
+        let mut total: usize = self.undo.iter().map(|entry| entry.bytes).sum();
+        while total > self.history_budget_bytes && self.undo.len() > 1 {
+            if let Some(oldest) = self.undo.pop_front() {
+                total -= oldest.bytes;
+            }
+        }
+    }
+
+    /// Memory the undo history may hold (bytes of JSON; default [`MAX_HISTORY_BYTES`]). Lower it
+    /// on machines with little memory; the newest step always stays.
+    pub fn set_history_budget(&mut self, bytes: usize) {
+        self.history_budget_bytes = bytes.min(MAX_HISTORY_BYTES);
+    }
+
+    /// Steps that can be undone, and the memory they hold (bytes of JSON).
+    pub fn undo_depth(&self) -> (usize, usize) {
+        (
+            self.undo.len(),
+            self.undo.iter().map(|entry| entry.bytes).sum(),
+        )
     }
 
     /// Commands in the same module, or sharing the verb, as a hint for typos.
@@ -319,5 +370,71 @@ fn resolve_references(payload: &Json, results: &[Json]) -> Result<Json, String> 
             .collect::<Result<Vec<_>, _>>()
             .map(Json::Array),
         other => Ok(other.clone()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use petunia_world::{TableSpec, Value, ValueKind};
+    use serde_json::json;
+
+    #[test]
+    fn history_drops_the_oldest_steps_when_it_passes_its_memory_budget() {
+        let mut world = World::new(1);
+        world
+            .define_table(TableSpec::new("Note").column(
+                "text",
+                ValueKind::Text,
+                Value::Text(String::new()),
+            ))
+            .expect("table");
+        let mut dispatcher = Dispatcher::with_builtin().expect("dispatcher");
+        let created = dispatcher
+            .execute(
+                &mut world,
+                &CommandRecord::new("world.create", json!({ "rows": { "Note": {} } })),
+            )
+            .expect("create");
+        let entity = created["entity"].as_u64().expect("entity");
+        let text = "x".repeat(1000);
+        for _ in 0..20 {
+            dispatcher
+                .execute(
+                    &mut world,
+                    &CommandRecord::new(
+                        "world.set",
+                        json!({ "entity": entity, "table": "Note", "column": "text", "value": text }),
+                    ),
+                )
+                .expect("set");
+        }
+        let (steps, bytes) = dispatcher.undo_depth();
+        assert_eq!(steps, 21);
+        assert!(bytes > 19 * 1000 && bytes < 21 * 1100, "{bytes}");
+        assert_eq!(json_bytes(&json!({ "a": [1, 2] })), r#"{"a":[1,2]}"#.len());
+
+        // A budget of about five steps keeps only the newest five, and undo still works.
+        dispatcher.set_history_budget(5 * 1100);
+        dispatcher
+            .execute(
+                &mut world,
+                &CommandRecord::new(
+                    "world.set",
+                    json!({ "entity": entity, "table": "Note", "column": "text", "value": "end" }),
+                ),
+            )
+            .expect("set");
+        let (steps, bytes) = dispatcher.undo_depth();
+        assert!(steps <= 5 && bytes <= 5 * 1100, "{steps} {bytes}");
+        dispatcher.undo(&mut world).expect("undo");
+        let handle = world
+            .handle_of(petunia_world::PersistentId(entity))
+            .expect("handle");
+        assert_eq!(world.get(handle, "Note", "text"), Ok(&Value::Text(text)));
+        // Even a tiny budget keeps the newest step.
+        dispatcher.set_history_budget(1);
+        dispatcher.redo(&mut world).expect("redo");
+        assert_eq!(dispatcher.undo_depth().0, 1);
     }
 }

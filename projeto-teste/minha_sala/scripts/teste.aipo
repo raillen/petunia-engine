@@ -5,16 +5,5 @@ log.info("começou", entity)
 }
 
 fn on_update(entity, dt) {
- #1. Lê a rotação atual em graus (x, y, z)
-    let rot = world.get(entity, "Transform", "rotation_degrees")
-
-    #2. Calcula a nova rotação (ex: 90 graus por segundo no eixo Y)
-    let nova_rot = {
-        "x": rot["x"],
-        "y": rot["y"] + (90.0 * dt),
-        "z": rot["z"]
-    }
-
-    #3. Aplica a rotação de volta ao objeto
-    world.set(entity, "Transform", "rotation_degrees", nova_rot)
+ transform.rotate_y(entity, degrees = 90.0 * dt)
 }

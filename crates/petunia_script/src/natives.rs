@@ -62,6 +62,8 @@ pub struct GameState {
     pub commands_run: u64,
     pub log: Vec<LogLine>,
     pub events: Vec<QueuedEvent>,
+    /// The physics of the game, when the host was given one (`ScriptHost::attach_physics`).
+    pub physics: Option<crate::physics_api::PhysicsRuntime>,
 }
 
 impl GameState {
@@ -81,16 +83,16 @@ impl GameState {
 #[derive(Clone)]
 pub(crate) struct GameCell(pub Rc<RefCell<GameState>>);
 
-type Native = Result<Value, VmError>;
+pub(crate) type Native = Result<Value, VmError>;
 
-fn internal(reason: &str) -> VmError {
+pub(crate) fn internal(reason: &str) -> VmError {
     VmError::Fault(VmFault::CorruptedBytecode {
         offset: 0,
         reason: reason.to_string(),
     })
 }
 
-fn wrong_type(expected: &str, actual: &Value) -> VmError {
+pub(crate) fn wrong_type(expected: &str, actual: &Value) -> VmError {
     VmError::Fault(VmFault::TypeMismatch {
         expected: expected.to_string(),
         actual: actual.type_name().to_string(),
@@ -98,7 +100,7 @@ fn wrong_type(expected: &str, actual: &Value) -> VmError {
 }
 
 /// The game state, after checking the capability the call needs (`""` for none).
-fn context(vm: &mut Vm, permission: &str, operation: &str) -> Result<GameCell, VmError> {
+pub(crate) fn context(vm: &mut Vm, permission: &str, operation: &str) -> Result<GameCell, VmError> {
     let handle = match vm.get_global(CONTEXT_GLOBAL) {
         Some(Value::HostHandle(handle)) => *handle,
         _ => return Err(internal("o contexto do jogo não está disponível")),
@@ -116,7 +118,7 @@ fn context(vm: &mut Vm, permission: &str, operation: &str) -> Result<GameCell, V
         .map_err(VmError::Fault)
 }
 
-fn entity_arg(args: &[Value], index: usize, operation: &str) -> Result<u64, VmError> {
+pub(crate) fn entity_arg(args: &[Value], index: usize, operation: &str) -> Result<u64, VmError> {
     match args.get(index) {
         Some(Value::Int(id)) if *id >= 0 => Ok(*id as u64),
         Some(other) => Err(wrong_type(
@@ -127,7 +129,7 @@ fn entity_arg(args: &[Value], index: usize, operation: &str) -> Result<u64, VmEr
     }
 }
 
-fn text_arg(args: &[Value], index: usize, operation: &str) -> Result<String, VmError> {
+pub(crate) fn text_arg(args: &[Value], index: usize, operation: &str) -> Result<String, VmError> {
     match args.get(index) {
         Some(Value::String(text)) => Ok(text.to_string()),
         Some(other) => Err(wrong_type(&format!("String em {operation}"), other)),
@@ -135,7 +137,7 @@ fn text_arg(args: &[Value], index: usize, operation: &str) -> Result<String, VmE
     }
 }
 
-fn float_arg(args: &[Value], index: usize, operation: &str) -> Result<f32, VmError> {
+pub(crate) fn float_arg(args: &[Value], index: usize, operation: &str) -> Result<f32, VmError> {
     match args.get(index) {
         Some(Value::Float(real)) if real.is_finite() => {
             let cast = *real as f32;
@@ -155,7 +157,7 @@ fn float_arg(args: &[Value], index: usize, operation: &str) -> Result<f32, VmErr
     }
 }
 
-fn vec3_to_value(vector: Vec3) -> Value {
+pub(crate) fn vec3_to_value(vector: Vec3) -> Value {
     json_to_value(&json!({
         "x": vector.x,
         "y": vector.y,
@@ -163,7 +165,7 @@ fn vec3_to_value(vector: Vec3) -> Value {
     }))
 }
 
-fn read_transform(world: &World, entity: u64) -> Result<Transform, String> {
+pub(crate) fn read_transform(world: &World, entity: u64) -> Result<Transform, String> {
     let handle = world
         .handle_of(PersistentId(entity))
         .map_err(|_| format!("o objeto {entity} não existe"))?;
@@ -193,13 +195,13 @@ fn read_transform(world: &World, entity: u64) -> Result<Transform, String> {
     })
 }
 
-fn failure(message: impl Into<String>) -> Native {
+pub(crate) fn failure(message: impl Into<String>) -> Native {
     Ok(Value::failure(message))
 }
 
 /// Runs a command through the dispatcher; a refusal is a recoverable `Failure` the script can
 /// handle, not a crash.
-fn run_command(cell: &GameCell, command: &str, payload: Json) -> Result<Json, String> {
+pub(crate) fn run_command(cell: &GameCell, command: &str, payload: Json) -> Result<Json, String> {
     let mut state = cell.0.borrow_mut();
     let GameState {
         world,

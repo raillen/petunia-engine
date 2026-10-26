@@ -5,5 +5,5 @@ log.info("começou", entity)
 }
 
 fn on_update(entity, dt) {
-# roda todo quadro; `dt` são os segundos desde o quadro anterior
+ transform.rotate_y(entity, degrees = 90.0 * dt)
 }

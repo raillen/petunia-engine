@@ -11,6 +11,7 @@ mod brush_ops;
 mod failure;
 mod floors;
 mod gizmo;
+mod mesh_tool;
 mod protocol;
 mod scripts;
 mod sculpt_tool;
@@ -242,6 +243,99 @@ mod tests {
         );
         assert_eq!(bad["ok"], false);
         assert_eq!(count(&mut session), before);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn camera_orbit_projection_and_isometric_views_work_through_protocol() {
+        let mut session = EditorSession::new().expect("session");
+        let root = scratch_dir("camera_orbit_test");
+        call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "CameraTest" }),
+        );
+
+        // Initial camera get
+        let initial = call(&mut session, json!({ "op": "camera.get" }));
+        assert_eq!(initial["ok"], true);
+        assert_eq!(initial["result"]["projection_mode"], "perspective");
+
+        // camera.orbit
+        let orbit = call(
+            &mut session,
+            json!({ "op": "camera.orbit", "dx": 10.0, "dy": 5.0 }),
+        );
+        assert_eq!(orbit["ok"], true);
+        let after_orbit = call(&mut session, json!({ "op": "camera.get" }));
+        let yaw = after_orbit["result"]["yaw_degrees"].as_f64().unwrap();
+        let pitch = after_orbit["result"]["pitch_degrees"].as_f64().unwrap();
+        assert!((yaw - 4.0).abs() < 1.0e-3);
+        assert!((pitch - (-2.0)).abs() < 1.0e-3);
+
+        // camera.projection toggle
+        let toggle = call(&mut session, json!({ "op": "camera.projection" }));
+        assert_eq!(toggle["ok"], true);
+        assert_eq!(toggle["result"]["projection_mode"], "orthographic");
+        let after_toggle = call(&mut session, json!({ "op": "camera.get" }));
+        assert_eq!(after_toggle["result"]["projection_mode"], "orthographic");
+
+        // camera.projection explicit
+        let set_persp = call(
+            &mut session,
+            json!({ "op": "camera.projection", "mode": "perspective" }),
+        );
+        assert_eq!(set_persp["ok"], true);
+        assert_eq!(set_persp["result"]["projection_mode"], "perspective");
+
+        // camera.projection validation: zero, negative, NaN height must fail
+        let bad_height_zero = call(
+            &mut session,
+            json!({ "op": "camera.projection", "height": 0.0 }),
+        );
+        assert_eq!(bad_height_zero["ok"], false);
+        let bad_height_neg = call(
+            &mut session,
+            json!({ "op": "camera.projection", "height": -5.0 }),
+        );
+        assert_eq!(bad_height_neg["ok"], false);
+
+        // camera.projection with explicit valid height
+        let set_ortho_custom = call(
+            &mut session,
+            json!({ "op": "camera.projection", "mode": "orthographic", "height": 12.0 }),
+        );
+        assert_eq!(set_ortho_custom["ok"], true);
+        assert_eq!(
+            set_ortho_custom["result"]["projection_mode"],
+            "orthographic"
+        );
+        assert_eq!(set_ortho_custom["result"]["orthographic_height"], 12.0);
+
+        // camera.view game_2_1
+        let game_view = call(
+            &mut session,
+            json!({ "op": "camera.view", "name": "game_2_1" }),
+        );
+        assert_eq!(game_view["ok"], true);
+        let game_cam = call(&mut session, json!({ "op": "camera.get" }));
+        assert_eq!(game_cam["result"]["projection_mode"], "orthographic");
+        assert!((game_cam["result"]["yaw_degrees"].as_f64().unwrap() - 45.0).abs() < 1.0e-3);
+        assert!((game_cam["result"]["pitch_degrees"].as_f64().unwrap() - (-30.0)).abs() < 1.0e-3);
+
+        // camera.view isometric
+        let iso_view = call(
+            &mut session,
+            json!({ "op": "camera.view", "name": "isometric" }),
+        );
+        assert_eq!(iso_view["ok"], true);
+        let iso_cam = call(&mut session, json!({ "op": "camera.get" }));
+        assert_eq!(iso_cam["result"]["projection_mode"], "orthographic");
+        assert!((iso_cam["result"]["yaw_degrees"].as_f64().unwrap() - 45.0).abs() < 1.0e-3);
+        let true_iso_pitch = -(1.0f64 / 3.0f64.sqrt()).asin().to_degrees();
+        assert!(
+            (iso_cam["result"]["pitch_degrees"].as_f64().unwrap() - true_iso_pitch).abs() < 1.0e-3
+        );
+
         let _ = std::fs::remove_dir_all(&root);
     }
 }

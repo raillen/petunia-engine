@@ -35,6 +35,7 @@ public:
 private:
     void onSnapshot();
     void reloadList(const QString& select = QString());
+    int rowOf(const QString& name) const;
     void load(const QString& name);
     void save();
     void format();
@@ -51,7 +52,10 @@ private:
 
     EngineBridge* bridge_;
     CodeEdit* editor_;
-    QComboBox* scripts_;
+    // Scripts of the project, one per row; the row data is the file name.
+    QListWidget* scripts_;
+    // Shown instead of the list while the project has no script: what to do next.
+    QLabel* noScripts_;
     QToolButton* saveButton_;
     QToolButton* formatButton_;
     QToolButton* runButton_;

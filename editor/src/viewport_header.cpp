@@ -1,20 +1,27 @@
 #include "viewport_header.h"
+#include "viewport_widget.h"
 
 #include <cmath>
 
+#include <QAction>
+#include <QActionGroup>
 #include <QButtonGroup>
+#include <QCheckBox>
 #include <QComboBox>
-#include <QPushButton>
+#include <QFormLayout>
+#include <QFrame>
 #include <QHBoxLayout>
 #include <QJsonArray>
 #include <QLabel>
 #include <QLocale>
+#include <QMenu>
+#include <QPushButton>
 #include <QSignalBlocker>
 #include <QToolButton>
 
 #include "petunia_icons.h"
-#include "wheel_guard.h"
 #include "petunia_theme.h"
+#include "wheel_guard.h"
 
 namespace {
 
@@ -22,37 +29,139 @@ QString numberText(double value) {
     return QLocale().toString(value, 'g', 4);
 }
 
+QFrame* rule(QWidget* parent) {
+    auto* line = new QFrame(parent);
+    line->setProperty("role", QStringLiteral("vrule"));
+    line->setFixedWidth(1);
+    return line;
+}
+
 }  // namespace
 
 ViewportHeader::ViewportHeader(QWidget* parent) : QWidget(parent) {
     setObjectName(QStringLiteral("PetuniaViewportHeader"));
     setAttribute(Qt::WA_StyledBackground);
-    // One row: snapping on the left, the floor on the right. The units (m, °, ×) name the steps.
+    setAccessibleName(QStringLiteral("Opções da cena"));
     auto* layout = new QHBoxLayout(this);
     layout->setContentsMargins(6, 3, 6, 3);
-    layout->setSpacing(4);
+    layout->setSpacing(2);
 
+    auto makeSegment = [&](const QString& text, const QString& segment, const QString& tip) {
+        auto* button = new QPushButton(text, this);
+        button->setCheckable(true);
+        button->setProperty("segment", segment);
+        button->setToolTip(tip);
+        button->setAccessibleName(tip);
+        layout->addWidget(button);
+        return button;
+    };
+
+    // Mode switch: Objeto / Edição
+    modeGroup_ = new QButtonGroup(this);
+    objectModeButton_ = makeSegment(QStringLiteral("Objeto"), QStringLiteral("first"), QStringLiteral("Modo Objeto (Tab)"));
+    editModeButton_ = makeSegment(QStringLiteral("Edição"), QStringLiteral("last"), QStringLiteral("Modo Edição de Malha (Tab)"));
+    modeGroup_->addButton(objectModeButton_);
+    modeGroup_->addButton(editModeButton_);
+    objectModeButton_->setChecked(true);
+    connect(objectModeButton_, &QPushButton::clicked, this, [this] { emit editModeRequested(false); });
+    connect(editModeButton_, &QPushButton::clicked, this, [this] { emit editModeRequested(true); });
+
+    // Component mode (only visible in edit mode)
+    componentGroup_ = new QButtonGroup(this);
+    vertexButton_ = makeSegment(QStringLiteral("Vértice (1)"), QStringLiteral("first"), QStringLiteral("Selecionar vértices (1)"));
+    edgeButton_ = makeSegment(QStringLiteral("Aresta (2)"), QStringLiteral("middle"), QStringLiteral("Selecionar arestas (2)"));
+    faceButton_ = makeSegment(QStringLiteral("Face (3)"), QStringLiteral("last"), QStringLiteral("Selecionar faces (3)"));
+    componentGroup_->addButton(vertexButton_);
+    componentGroup_->addButton(edgeButton_);
+    componentGroup_->addButton(faceButton_);
+    faceButton_->setChecked(true);
+    connect(vertexButton_, &QPushButton::clicked, this, [this] { emit componentModeRequested(ComponentMode::Vertex); });
+    connect(edgeButton_, &QPushButton::clicked, this, [this] { emit componentModeRequested(ComponentMode::Edge); });
+    connect(faceButton_, &QPushButton::clicked, this, [this] { emit componentModeRequested(ComponentMode::Face); });
+
+    componentSeparator_ = rule(this);
+    layout->addWidget(componentSeparator_);
+
+    vertexButton_->hide();
+    edgeButton_->hide();
+    faceButton_->hide();
+    componentSeparator_->hide();
+
+    layout->addWidget(rule(this));
+
+    // Axes of the gizmo: a two-button switch.
+    auto* axes = new QButtonGroup(this);
+    globalButton_ = makeSegment(QStringLiteral("Global"), QStringLiteral("first"), QStringLiteral("Eixos do gizmo alinhados ao mundo"));
+    localButton_ = makeSegment(QStringLiteral("Local"), QStringLiteral("last"),
+                               QStringLiteral("Eixos do gizmo alinhados ao objeto (escalar usa sempre estes)"));
+    axes->addButton(globalButton_);
+    axes->addButton(localButton_);
+    globalButton_->setChecked(true);
+    connect(globalButton_, &QPushButton::clicked, this, &ViewportHeader::emitTransform);
+    connect(localButton_, &QPushButton::clicked, this, &ViewportHeader::emitTransform);
+    layout->addSpacing(4);
+
+    // Pivot: icon plus the short name of the current choice; the choices open in a menu.
+    pivotButton_ = new QToolButton(this);
+    pivotButton_->setProperty("role", QStringLiteral("header"));
+    pivotButton_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    pivotButton_->setPopupMode(QToolButton::InstantPopup);
+    pivotButton_->setToolTip(QStringLiteral("Ponto em volta do qual o objeto gira e escala"));
+    pivotButton_->setAccessibleName(QStringLiteral("Ponto de pivô"));
+    auto* pivotMenu = new QMenu(pivotButton_);
+    pivotGroup_ = new QActionGroup(pivotMenu);
+    const QList<QPair<QString, QString>> pivots = {{QStringLiteral("object"), QStringLiteral("Pivô do objeto")},
+                                                   {QStringLiteral("bounds_center"), QStringLiteral("Centro da caixa")},
+                                                   {QStringLiteral("base"), QStringLiteral("Base (fica no chão)")}};
+    for (const auto& [id, label] : pivots) {
+        QAction* action = pivotMenu->addAction(label);
+        action->setCheckable(true);
+        action->setData(id);
+        pivotGroup_->addAction(action);
+        connect(action, &QAction::triggered, this, &ViewportHeader::emitTransform);
+    }
+    pivotGroup_->actions().constFirst()->setChecked(true);
+    pivotButton_->setMenu(pivotMenu);
+    layout->addWidget(pivotButton_);
+
+    editPivotButton_ = new QToolButton(this);
+    editPivotButton_->setCheckable(true);
+    editPivotButton_->setProperty("role", QStringLiteral("appTool"));
+    editPivotButton_->setToolTip(QStringLiteral("Editar pivô: arraste o gizmo para mudar onde o objeto gira e escala (Alt+P)"));
+    editPivotButton_->setAccessibleName(QStringLiteral("Editar o pivô do objeto"));
+    connect(editPivotButton_, &QToolButton::toggled, this, [this](bool on) {
+        emit transformRequested(QJsonObject{{"edit_pivot", on}});
+    });
+    layout->addWidget(editPivotButton_);
+    layout->addWidget(rule(this));
+
+    // Snapping: the toggle shows the move step; the panel holds the rest.
     snapButton_ = new QToolButton(this);
     snapButton_->setCheckable(true);
     snapButton_->setProperty("role", QStringLiteral("header"));
     snapButton_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    snapButton_->setText(QStringLiteral("Snap"));
-    snapButton_->setToolTip(QStringLiteral("Alinha a movimentos, giros e escalas a passos fixos (segure Ctrl para inverter)"));
     snapButton_->setAccessibleName(QStringLiteral("Ligar ou desligar o snap"));
     layout->addWidget(snapButton_);
+    snapOptionsButton_ = new QToolButton(this);
+    snapOptionsButton_->setProperty("role", QStringLiteral("header"));
+    snapOptionsButton_->setToolTip(QStringLiteral("Passos, alvo e inclinação do snap"));
+    snapOptionsButton_->setAccessibleName(QStringLiteral("Opções do snap"));
+    snapOptionsButton_->setFixedWidth(16);
+    layout->addWidget(snapOptionsButton_);
 
-    translateBox_ = makeStepBox(QStringLiteral("Passo de mover, em metros"), {0.1, 0.25, 0.5, 1.0, 2.0, 5.0}, QStringLiteral(" m"));
-    rotateBox_ = makeStepBox(QStringLiteral("Passo de girar, em graus"), {5.0, 15.0, 45.0, 90.0}, QStringLiteral("°"));
-    scaleBox_ = makeStepBox(QStringLiteral("Passo de escala"), {0.05, 0.1, 0.25, 0.5}, QStringLiteral("×"));
-    layout->addWidget(translateBox_);
-    layout->addWidget(rotateBox_);
-    layout->addWidget(scaleBox_);
-
-    // What a moving object snaps to (Petunia3D SnapTarget).
-    targetBox_ = new QComboBox(this);
+    snapPanel_ = new QFrame(this, Qt::Popup);
+    snapPanel_->setProperty("role", QStringLiteral("card"));
+    snapPanel_->setAccessibleName(QStringLiteral("Opções do snap"));
+    auto* form = new QFormLayout(snapPanel_);
+    form->setContentsMargins(12, 10, 12, 10);
+    form->setHorizontalSpacing(10);
+    form->setVerticalSpacing(6);
+    translateBox_ = makeStepBox(snapPanel_, QStringLiteral("Passo de mover, em metros"), {0.1, 0.25, 0.5, 1.0, 2.0, 5.0}, QStringLiteral(" m"));
+    rotateBox_ = makeStepBox(snapPanel_, QStringLiteral("Passo de girar, em graus"), {5.0, 15.0, 45.0, 90.0}, QStringLiteral("°"));
+    scaleBox_ = makeStepBox(snapPanel_, QStringLiteral("Passo de escala"), {0.05, 0.1, 0.25, 0.5}, QStringLiteral("×"));
+    targetBox_ = new QComboBox(snapPanel_);
     targetBox_->setAccessibleName(QStringLiteral("Alvo do snap ao mover"));
     targetBox_->setToolTip(QStringLiteral(
-        "Alvo do snap ao mover.\n"
         "Inteligente: canto de outro objeto, senão a superfície, senão a grade.\n"
         "Superfície: o objeto assenta no que está sob o mouse (topos, rampas, andares)."));
     targetBox_->addItem(QStringLiteral("Inteligente"), QStringLiteral("smart"));
@@ -61,16 +170,59 @@ ViewportHeader::ViewportHeader(QWidget* parent) : QWidget(parent) {
     targetBox_->addItem(QStringLiteral("Ponto"), QStringLiteral("point"));
     targetBox_->addItem(QStringLiteral("Superfície"), QStringLiteral("face"));
     WheelGuard::protect(targetBox_);
-    layout->addWidget(targetBox_);
-    slopeButton_ = new QToolButton(this);
-    slopeButton_->setCheckable(true);
-    slopeButton_->setProperty("role", QStringLiteral("header"));
-    slopeButton_->setText(QStringLiteral("Inclinação"));
-    slopeButton_->setToolTip(QStringLiteral("Ao assentar numa superfície, inclina o objeto junto com a rampa ou o terreno"));
-    slopeButton_->setAccessibleName(QStringLiteral("Alinhar o objeto à inclinação da superfície"));
-    layout->addWidget(slopeButton_);
+    slopeBox_ = new QCheckBox(QStringLiteral("Inclinar junto com a superfície"), snapPanel_);
+    slopeBox_->setToolTip(QStringLiteral("Ao assentar numa superfície, inclina o objeto junto com a rampa ou o terreno"));
+    form->addRow(QStringLiteral("Mover"), translateBox_);
+    form->addRow(QStringLiteral("Girar"), rotateBox_);
+    form->addRow(QStringLiteral("Escala"), scaleBox_);
+    form->addRow(QStringLiteral("Alvo"), targetBox_);
+    form->addRow(slopeBox_);
+    connect(snapOptionsButton_, &QToolButton::clicked, this, [this] {
+        snapPanel_->adjustSize();
+        snapPanel_->move(snapButton_->mapToGlobal(QPoint(0, snapButton_->height() + 4)));
+        snapPanel_->show();
+        translateBox_->setFocus();
+    });
+    connect(snapButton_, &QToolButton::toggled, this, &ViewportHeader::emitSnap);
+    connect(slopeBox_, &QCheckBox::toggled, this, &ViewportHeader::emitSnap);
+    for (QComboBox* box : {translateBox_, rotateBox_, scaleBox_, targetBox_}) {
+        connect(box, &QComboBox::activated, this, &ViewportHeader::emitSnap);
+    }
+
+    viewButton_ = new QToolButton(this);
+    viewButton_->setProperty("role", QStringLiteral("header"));
+    viewButton_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    viewButton_->setPopupMode(QToolButton::InstantPopup);
+    viewButton_->setText(QStringLiteral("Vistas"));
+    viewButton_->setToolTip(QStringLiteral("Vistas predefinidas da câmera"));
+    viewButton_->setAccessibleName(QStringLiteral("Vistas predefinidas da câmera"));
+    auto* viewPresetsMenu = new QMenu(viewButton_);
+    const struct {
+        const char* name;
+        const char* label;
+    } viewPresets[8] = {
+        {"front", "Frente"},
+        {"back", "Trás"},
+        {"left", "Esquerda"},
+        {"right", "Direita"},
+        {"top", "Topo"},
+        {"bottom", "Base"},
+        {"isometric", "Isométrica"},
+        {"game_2_1", "Isométrica 2:1"},
+    };
+    for (const auto& preset : viewPresets) {
+        QAction* action = viewPresetsMenu->addAction(QString::fromUtf8(preset.label));
+        connect(action, &QAction::triggered, this, [this, name = QString::fromLatin1(preset.name)] {
+            emit viewRequested(name);
+        });
+    }
+    viewButton_->setMenu(viewPresetsMenu);
+    layout->addWidget(rule(this));
+    layout->addWidget(viewButton_);
+
     layout->addStretch(1);
 
+    // Floor: down, which one, up.
     floorDown_ = new QToolButton(this);
     floorDown_->setProperty("role", QStringLiteral("header"));
     floorDown_->setToolTip(QStringLiteral("Descer um andar (Ctrl+PageDown)"));
@@ -82,10 +234,9 @@ ViewportHeader::ViewportHeader(QWidget* parent) : QWidget(parent) {
     floorBox_ = new QComboBox(this);
     floorBox_->setToolTip(QStringLiteral("Andar em construção. Subir além do último cria um andar novo"));
     floorBox_->setAccessibleName(QStringLiteral("Andar atual"));
-    // Sized for "Subsolo 12": it is filled after construction, so it cannot adjust to its
-    // contents. The elevation is in each item's tooltip, keeping the window narrow.
+    // Sized for "Subsolo 12": it is filled after construction, so it cannot adjust to its contents.
     floorBox_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-    floorBox_->setMinimumContentsLength(9);
+    floorBox_->setMinimumContentsLength(8);
     WheelGuard::protect(floorBox_);
     layout->addWidget(floorDown_);
     layout->addWidget(floorBox_);
@@ -99,86 +250,16 @@ ViewportHeader::ViewportHeader(QWidget* parent) : QWidget(parent) {
         }
     });
 
-    // Gizmo controls for the top bar (Petunia3D's TransformOrientation and PivotPoint, adapted):
-    // a two-button switch for the axes, then the pivot.
-    transformControls_ = new QWidget(this);
-    auto* transformLayout = new QHBoxLayout(transformControls_);
-    transformLayout->setContentsMargins(0, 0, 0, 0);
-    transformLayout->setSpacing(0);
-    auto* axes = new QButtonGroup(transformControls_);
-    auto makeSegment = [&](const QString& text, const QString& segment, const QString& tip) {
-        auto* button = new QPushButton(text, transformControls_);
-        button->setCheckable(true);
-        button->setProperty("segment", segment);
-        button->setToolTip(tip);
-        button->setAccessibleName(tip);
-        axes->addButton(button);
-        transformLayout->addWidget(button);
-        return button;
-    };
-    globalButton_ = makeSegment(QStringLiteral("Global"), QStringLiteral("first"),
-                                QStringLiteral("Eixos do gizmo alinhados ao mundo"));
-    localButton_ = makeSegment(QStringLiteral("Local"), QStringLiteral("last"),
-                               QStringLiteral("Eixos do gizmo alinhados ao objeto (escalar usa sempre estes)"));
-    globalButton_->setChecked(true);
-    transformLayout->addSpacing(6);
-    pivotBox_ = new QComboBox(transformControls_);
-    pivotBox_->setAccessibleName(QStringLiteral("Ponto de pivô"));
-    pivotBox_->setToolTip(QStringLiteral("Ponto em volta do qual o objeto gira e escala"));
-    pivotBox_->addItem(QStringLiteral("Pivô do objeto"), QStringLiteral("object"));
-    pivotBox_->addItem(QStringLiteral("Centro da caixa"), QStringLiteral("bounds_center"));
-    pivotBox_->addItem(QStringLiteral("Base (no chão)"), QStringLiteral("base"));
-    WheelGuard::protect(pivotBox_);
-    transformLayout->addWidget(pivotBox_);
-    transformLayout->addSpacing(2);
-    editPivotButton_ = new QToolButton(transformControls_);
-    editPivotButton_->setCheckable(true);
-    editPivotButton_->setProperty("role", QStringLiteral("appTool"));
-    editPivotButton_->setToolTip(QStringLiteral("Editar pivô: arraste o gizmo para mudar onde o objeto gira e escala (Alt+P)"));
-    editPivotButton_->setAccessibleName(QStringLiteral("Editar o pivô do objeto"));
-    transformLayout->addWidget(editPivotButton_);
-    connect(editPivotButton_, &QToolButton::toggled, this, [this](bool on) {
-        emit transformRequested(QJsonObject{{"edit_pivot", on}});
-    });
-    connect(globalButton_, &QPushButton::clicked, this, &ViewportHeader::emitTransform);
-    connect(localButton_, &QPushButton::clicked, this, &ViewportHeader::emitTransform);
-    connect(pivotBox_, &QComboBox::activated, this, &ViewportHeader::emitTransform);
-
     refreshIcons();
-
-    auto emitSnap = [this] {
-        emit snapRequested(QJsonObject{{"enabled", snapButton_->isChecked()},
-                                       {"translate", translateBox_->currentData().toDouble()},
-                                       {"rotate_degrees", rotateBox_->currentData().toDouble()},
-                                       {"scale", scaleBox_->currentData().toDouble()},
-                                       {"target", targetBox_->currentData().toString()},
-                                       {"align_to_slope", slopeButton_->isChecked()}});
-    };
-    connect(snapButton_, &QToolButton::toggled, this, emitSnap);
-    connect(slopeButton_, &QToolButton::toggled, this, emitSnap);
-    connect(targetBox_, &QComboBox::activated, this, emitSnap);
-    for (QComboBox* box : {translateBox_, rotateBox_, scaleBox_}) {
-        connect(box, &QComboBox::activated, this, emitSnap);
-    }
+    updateSnapText();
     connect(&PetuniaTheme::instance(), &PetuniaTheme::changed, this, &ViewportHeader::refreshIcons);
 }
 
-void ViewportHeader::emitTransform() {
-    emit transformRequested(QJsonObject{
-        {"orientation", localButton_->isChecked() ? QStringLiteral("local") : QStringLiteral("global")},
-        {"pivot", pivotBox_->currentData().toString()}});
-}
-
-void ViewportHeader::setControlsEnabled(bool enabled) {
-    setEnabled(enabled);
-    transformControls_->setEnabled(enabled);
-}
-
-QComboBox* ViewportHeader::makeStepBox(const QString& accessibleName, const QList<double>& steps, const QString& suffix) {
-    auto* box = new QComboBox(this);
+QComboBox* ViewportHeader::makeStepBox(QWidget* parent, const QString& accessibleName, const QList<double>& steps, const QString& suffix) {
+    auto* box = new QComboBox(parent);
     box->setAccessibleName(accessibleName);
-    WheelGuard::protect(box);
     box->setToolTip(accessibleName);
+    WheelGuard::protect(box);
     for (const double step : steps) {
         box->addItem(numberText(step) + suffix, step);
     }
@@ -195,19 +276,45 @@ void ViewportHeader::select(QComboBox* box, double value) {
     }
 }
 
+void ViewportHeader::emitTransform() {
+    const QAction* pivot = pivotGroup_->checkedAction();
+    emit transformRequested(QJsonObject{
+        {"orientation", localButton_->isChecked() ? QStringLiteral("local") : QStringLiteral("global")},
+        {"pivot", pivot != nullptr ? pivot->data().toString() : QStringLiteral("object")}});
+}
+
+void ViewportHeader::emitSnap() {
+    updateSnapText();
+    emit snapRequested(QJsonObject{{"enabled", snapButton_->isChecked()},
+                                   {"translate", translateBox_->currentData().toDouble()},
+                                   {"rotate_degrees", rotateBox_->currentData().toDouble()},
+                                   {"scale", scaleBox_->currentData().toDouble()},
+                                   {"target", targetBox_->currentData().toString()},
+                                   {"align_to_slope", slopeBox_->isChecked()}});
+}
+
+void ViewportHeader::updateSnapText() {
+    snapButton_->setText(translateBox_->currentText());
+    snapButton_->setToolTip(QStringLiteral("Snap %1: mover %2, girar %3, escala %4, alvo %5 (segure Ctrl para inverter)")
+                                .arg(snapButton_->isChecked() ? QStringLiteral("ligado") : QStringLiteral("desligado"),
+                                     translateBox_->currentText(), rotateBox_->currentText(), scaleBox_->currentText(),
+                                     targetBox_->currentText().toLower()));
+}
+
 void ViewportHeader::showSnap(const QJsonObject& snap) {
     const QSignalBlocker a(snapButton_);
     const QSignalBlocker b(translateBox_);
     const QSignalBlocker c(rotateBox_);
     const QSignalBlocker d(scaleBox_);
+    const QSignalBlocker e(targetBox_);
+    const QSignalBlocker f(slopeBox_);
     snapButton_->setChecked(snap.value(QStringLiteral("enabled")).toBool());
     select(translateBox_, snap.value(QStringLiteral("translate")).toDouble());
     select(rotateBox_, snap.value(QStringLiteral("rotate_degrees")).toDouble());
     select(scaleBox_, snap.value(QStringLiteral("scale")).toDouble());
-    const QSignalBlocker e(targetBox_);
-    const QSignalBlocker f(slopeButton_);
     targetBox_->setCurrentIndex(qMax(0, targetBox_->findData(snap.value(QStringLiteral("target")).toString())));
-    slopeButton_->setChecked(snap.value(QStringLiteral("align_to_slope")).toBool());
+    slopeBox_->setChecked(snap.value(QStringLiteral("align_to_slope")).toBool());
+    updateSnapText();
 }
 
 void ViewportHeader::showFloor(const QJsonObject& floor) {
@@ -235,21 +342,58 @@ void ViewportHeader::showFloor(const QJsonObject& floor) {
     }
 }
 
+void ViewportHeader::showEditMode(bool on) {
+    const QSignalBlocker a(objectModeButton_);
+    const QSignalBlocker b(editModeButton_);
+    objectModeButton_->setChecked(!on);
+    editModeButton_->setChecked(on);
+    vertexButton_->setVisible(on);
+    edgeButton_->setVisible(on);
+    faceButton_->setVisible(on);
+    componentSeparator_->setVisible(on);
+}
+
+void ViewportHeader::showComponentMode(ComponentMode mode) {
+    const QSignalBlocker a(vertexButton_);
+    const QSignalBlocker b(edgeButton_);
+    const QSignalBlocker c(faceButton_);
+    if (mode == ComponentMode::Vertex) {
+        vertexButton_->setChecked(true);
+    } else if (mode == ComponentMode::Edge) {
+        edgeButton_->setChecked(true);
+    } else {
+        faceButton_->setChecked(true);
+    }
+}
+
 void ViewportHeader::showTransform(const QJsonObject& transform) {
     const QSignalBlocker a(globalButton_);
     const QSignalBlocker b(localButton_);
-    const QSignalBlocker c(pivotBox_);
-    const QSignalBlocker d(editPivotButton_);
+    const QSignalBlocker c(editPivotButton_);
     editPivotButton_->setChecked(transform.value(QStringLiteral("edit_pivot")).toBool());
     const bool local = transform.value(QStringLiteral("orientation")).toString() == QLatin1String("local");
     localButton_->setChecked(local);
     globalButton_->setChecked(!local);
-    pivotBox_->setCurrentIndex(qMax(0, pivotBox_->findData(transform.value(QStringLiteral("pivot")).toString())));
+    const QString pivot = transform.value(QStringLiteral("pivot")).toString();
+    for (QAction* action : pivotGroup_->actions()) {
+        if (action->data().toString() == pivot) {
+            action->setChecked(true);
+        }
+    }
+    const QAction* checked = pivotGroup_->checkedAction();
+    // The short word on the button; the full name is in the menu and the tooltip.
+    const QString full = checked != nullptr ? checked->text() : QString();
+    pivotButton_->setText(full.section(QLatin1Char(' '), 0, 0));
+    pivotButton_->setToolTip(QStringLiteral("Pivô: %1. Ponto em volta do qual o objeto gira e escala").arg(full.toLower()));
 }
 
 void ViewportHeader::refreshIcons() {
     snapButton_->setIcon(PetuniaIcons::get(QStringLiteral("snap_magnet")));
+    snapOptionsButton_->setIcon(PetuniaIcons::get(QStringLiteral("chevron_down")));
+    snapOptionsButton_->setIconSize(QSize(10, 10));
+    pivotButton_->setIcon(PetuniaIcons::get(QStringLiteral("origin")));
     editPivotButton_->setIcon(PetuniaIcons::get(QStringLiteral("pivot_median")));
     floorDown_->setIcon(PetuniaIcons::get(QStringLiteral("chevron_down")));
     floorUp_->setIcon(PetuniaIcons::get(QStringLiteral("chevron_up")));
+    viewButton_->setIcon(PetuniaIcons::get(QStringLiteral("view_front")));
 }

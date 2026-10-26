@@ -8,21 +8,37 @@ Regra do projeto: todo código ou arquivo copiado de outro lugar entra aqui, com
 
 | Destino na engine | Origem no Petunia3D | Mudanças |
 |---|---|---|
-| `editor/src/ui_kit/petunia_theme.{h,cpp}` | `crates/ui-cxxqt/cpp/petunia_theme.*` | 2026-10-25: estilos novos (barra principal, títulos de painel, seções do inspetor, opções da ferramenta); os existentes ficaram iguais |
+| `editor/src/ui_kit/petunia_theme.{h,cpp}` | `crates/ui-cxxqt/cpp/petunia_theme.*` | 2026-10-25: medidas (24 px, 12 px, 16 px) e a folha de estilos **reescritas** ([design](docs/02-arquitetura/15-design-da-interface.md)); tokens e API iguais |
 | `editor/src/ui_kit/petunia_icons.h` | `crates/ui-cxxqt/cpp/petunia_icons.h` | nenhuma |
 | `editor/src/ui_kit/petunia_expression.h` | `crates/ui-cxxqt/cpp/petunia_expression.h` | nenhuma |
 | `editor/src/ui_kit/petunia_scrub.{h,cpp}` | `crates/ui-cxxqt/cpp/petunia_scrub.*` | nenhuma |
 | `editor/src/ui_kit/petunia_number_field.{h,cpp}` | `crates/ui-cxxqt/cpp/petunia_number_field.*` | nenhuma |
 | `editor/src/ui_kit/petunia_vector3_field.{h,cpp}` | `crates/ui-cxxqt/cpp/petunia_vector3_field.*` | nenhuma |
-| `editor/src/ui_kit/petunia_nav_cube.{h,cpp}` | `crates/ui-cxxqt/cpp/petunia_nav_cube.*` | nenhuma |
+| `editor/src/ui_kit/petunia_nav_cube.{h,cpp}` | `crates/ui-cxxqt/cpp/petunia_nav_cube.*` | 2026-10-25: suporte a menu de projeção via seta e rótulo, presets isométrica e game 2:1, sincronização de projeção com a câmera, arrasto para orbitar e acesso por teclado |
 | `editor/src/ui_kit/shell/petunia_pie_menu.{h,cpp}` | `crates/ui-cxxqt/cpp/shell/petunia_pie_menu.*` | nenhuma |
+| `editor/src/ui_kit/shell/petunia_segmented.{h,cpp}` | `crates/ui-cxxqt/cpp/shell/petunia_segmented.*` | nenhuma (copiado em 2026-10-25) |
+| `editor/src/command_palette.{h,cpp}` | ideia e comportamento de `crates/ui-cxxqt/cpp/petunia_command_palette.*` | **reescrito**: busca nas ações dos menus (não na ponte Rust), busca tolerante, destaque, recentes |
 | `editor/src/ui_kit/shell/petunia_i18n.h` | `crates/ui-cxxqt/cpp/shell/petunia_i18n.h` | nenhuma |
-| `editor/assets/themes/*.json` | `assets/themes/<tema>/theme.toml` (`petunia-dark`, `petunia-light`, `petunia-high-contrast`) | TOML convertido para JSON; mesmas chaves. 2026-10-25: no `petunia-light`, cinzas de fundo e bordas ajustados (o destaque e os textos ficaram iguais) |
-| `editor/assets/icons/*.svg` (287 ícones) | `assets/icons/petunia-outline/svg/**` | pastas achatadas em uma só (sem colisão de nomes) |
+| `editor/assets/themes/*.json` | `assets/themes/<tema>/theme.toml` (`petunia-dark`, `petunia-light`, `petunia-high-contrast`) | TOML convertido para JSON; mesmas chaves. 2026-10-25: cores dos temas claro e escuro trocadas (neutros quentes, acento violeta); alto contraste igual |
+| `editor/assets/icons/*.svg` (287 ícones) | `assets/icons/petunia-outline/svg/**` | pastas achatadas em uma só (sem colisão de nomes); `search.svg` corrigido (caminho sem `M`/`L` não desenhava o cabo da lupa) |
 
 **Licença dos ícones:** pacote `petunia-outline` 1.0.0, autor "Petunia3D Team", licença MIT (conforme o `manifest.toml` do pacote).
 
 **Não copiado:** os três arquivos `.zip` de ícones de origem não documentada (`apple-like`, `windows11-like`, `technical-cad`) ficam de fora até a procedência ser verificada.
+
+### Edição de malha (copiado em 2026-10-25, mesmo commit `dec467127a7f`)
+
+Destino: `crates/petunia_mesh/src/legacy/`. Origem: `crates/mesh/src/` do Petunia3D. Os arquivos são **legado** (regra do `AGENTS.md`): nomes curtos e índices diretos migram quando forem tocados. A API da engine (`crates/petunia_mesh/src/lib.rs`) é nova.
+
+| Destino | Origem | Mudanças |
+|---|---|---|
+| `legacy/mod.rs` | `lib.rs` | lista de módulos reduzida ao subconjunto; tiradas `from_sweep` e `to_triangles*` (dependiam de `sweep` e `shading`); `mark_sharp` trazido de `shading.rs`; `crate::` virou `crate::legacy::` em todos os arquivos |
+| `legacy/{half_edge,topology,triangulate,validation,cleanup,inset,bevel,loop_cut,connect,loops,knife,boolean,boolean_partition,obj}.rs` | mesmos nomes | só o caminho `crate::legacy::` |
+| `legacy/ops.rs` | `ops.rs` | tirada `sweep` (dependia de `sweep.rs`) |
+| `legacy/boolean_cleanup.rs` | `boolean_cleanup.rs` | sem o novo layout de UV (módulo `uv_layout` não copiado); `annotate_mesh_provenance` marcada como não usada; 2 testes de UV tirados |
+| `legacy/primitives.rs` | `primitives.rs` | chamadas a `layout_uv_charts` tiradas; 4 `let mut` viraram `let` |
+
+**Não copiado:** `uv*` (7 arquivos), `uv_xatlas`, `shading`, `sweep`, `curve`, `poly_pen`, `shape_ops`, `profile_geo`, `imprint`, `arrangement`, `solid_builder`, `morph`, `path_frames` e os testes de integração de `crates/mesh/tests/`. Testes tirados dos módulos copiados: `sweep_polyline_creates_mesh`, `equalize_texel_density_scales_islands`, `inherits_uv_when_every_face_comes_from_a`, `mixed_origin_results_get_a_fresh_non_overlapping_layout` (dependiam do que não foi copiado). Os outros **164 testes** do Petunia3D passam aqui.
 
 ## Portado do Petunia3D (lógica reescrita em Rust da engine, mesmo desenho)
 

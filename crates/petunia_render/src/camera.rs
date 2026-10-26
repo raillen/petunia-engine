@@ -6,7 +6,23 @@ use petunia_math::{Transform, Vec3};
 /// 4x4 matrix, column-major (OpenGL layout): element `[column * 4 + row]`.
 pub type Mat4 = [f32; 16];
 
-/// Perspective camera. Right-handed, Y up, looking down -Z at yaw 0.
+/// Camera projection: standard perspective or orthographic (parallel lines stay parallel).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProjectionMode {
+    Perspective,
+    Orthographic,
+}
+
+impl ProjectionMode {
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::Perspective => "perspective",
+            Self::Orthographic => "orthographic",
+        }
+    }
+}
+
+/// Perspective or orthographic camera. Right-handed, Y up, looking down -Z at yaw 0.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Camera {
     pub position: Vec3,
@@ -15,6 +31,8 @@ pub struct Camera {
     pub fov_degrees: f32,
     pub near: f32,
     pub far: f32,
+    pub projection_mode: ProjectionMode,
+    pub orthographic_height: f32,
 }
 
 impl Default for Camera {
@@ -26,6 +44,8 @@ impl Default for Camera {
             fov_degrees: 70.0,
             near: 0.05,
             far: 500.0,
+            projection_mode: ProjectionMode::Perspective,
+            orthographic_height: 12.0,
         }
     }
 }
@@ -72,26 +92,53 @@ impl Camera {
     }
 
     pub fn projection_matrix(&self, aspect_ratio: f32) -> Mat4 {
-        let focal = 1.0 / (self.fov_degrees.to_radians() * 0.5).tan();
-        let range = self.near - self.far;
-        [
-            focal / aspect_ratio,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            focal,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            (self.far + self.near) / range,
-            -1.0,
-            0.0,
-            0.0,
-            2.0 * self.far * self.near / range,
-            0.0,
-        ]
+        match self.projection_mode {
+            ProjectionMode::Perspective => {
+                let focal = 1.0 / (self.fov_degrees.to_radians() * 0.5).tan();
+                let range = self.near - self.far;
+                [
+                    focal / aspect_ratio,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    focal,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    (self.far + self.near) / range,
+                    -1.0,
+                    0.0,
+                    0.0,
+                    2.0 * self.far * self.near / range,
+                    0.0,
+                ]
+            }
+            ProjectionMode::Orthographic => {
+                let half_height = (self.orthographic_height * 0.5).max(0.05);
+                let half_width = half_height * aspect_ratio.max(0.01);
+                let range = self.near - self.far;
+                [
+                    1.0 / half_width,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0 / half_height,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    2.0 / range,
+                    0.0,
+                    0.0,
+                    0.0,
+                    (self.far + self.near) / range,
+                    1.0,
+                ]
+            }
+        }
     }
 
     pub fn view_projection(&self, aspect_ratio: f32) -> Mat4 {
@@ -160,6 +207,24 @@ mod tests {
             matrix[1] * point.x + matrix[5] * point.y + matrix[9] * point.z + matrix[13],
             matrix[2] * point.x + matrix[6] * point.y + matrix[10] * point.z + matrix[14],
         )
+    }
+
+    #[test]
+    fn orthographic_projection_maps_bounds_to_normalized_device_coordinates() {
+        let camera = Camera {
+            projection_mode: ProjectionMode::Orthographic,
+            orthographic_height: 10.0,
+            near: 1.0,
+            far: 100.0,
+            ..Camera::default()
+        };
+        let proj = camera.projection_matrix(1.0);
+        assert!((proj[0] * 5.0 - 1.0).abs() < 1.0e-6);
+        assert!((proj[5] * 5.0 - 1.0).abs() < 1.0e-6);
+        let z_near = -proj[10] + proj[14];
+        assert!((z_near - (-1.0)).abs() < 1.0e-5);
+        let z_far = proj[10] * (-100.0) + proj[14];
+        assert!((z_far - 1.0).abs() < 1.0e-5);
     }
 
     #[test]

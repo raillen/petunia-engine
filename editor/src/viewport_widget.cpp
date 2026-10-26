@@ -1,6 +1,7 @@
 #include "viewport_widget.h"
 
 #include <QGuiApplication>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -56,6 +57,7 @@ ViewportWidget::ViewportWidget(EngineBridge* bridge, QWidget* parent)
         update();
         emit cameraChanged();
     });
+    connect(navCube_, &NavCubeWidget::operationFailed, this, &ViewportWidget::renderFailed);
     moveTimer_.setInterval(kFrameMilliseconds);
     connect(&moveTimer_, &QTimer::timeout, this, &ViewportWidget::tick);
 }
@@ -199,6 +201,29 @@ void ViewportWidget::startFreeMode(const QString& tool) {
     update();
 }
 
+void ViewportWidget::setEditMode(bool on) {
+    if (editMode_ == on) {
+        return;
+    }
+    editMode_ = on;
+    if (editMode_) {
+        setCursor(Qt::CrossCursor);
+    } else {
+        unsetCursor();
+    }
+    emit editModeChanged(editMode_);
+    update();
+}
+
+void ViewportWidget::setComponentMode(ComponentMode mode) {
+    if (componentMode_ == mode) {
+        return;
+    }
+    componentMode_ = mode;
+    emit componentModeChanged(componentMode_);
+    update();
+}
+
 void ViewportWidget::finishFreeMode(bool confirm) {
     freeMode_ = false;
     freeTyped_.clear();
@@ -237,7 +262,8 @@ bool ViewportWidget::event(QEvent* event) {
     if (event->type() == QEvent::ShortcutOverride) {
         auto* key = static_cast<QKeyEvent*>(event);
         const bool plain = !(key->modifiers() & (Qt::ControlModifier | Qt::AltModifier));
-        if ((looking_ && plain && isLetterMovementKey(key->key())) ||
+        if ((plain && key->key() == Qt::Key_Tab) ||
+            (looking_ && plain && isLetterMovementKey(key->key())) ||
             ((gizmoDragging_ || faceDragging_) && key->key() == Qt::Key_Escape) ||
             (freeMode_ && plain && isFreeModeKey(key->key())) ||
             (pathPending() && (key->key() == Qt::Key_Escape || key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter ||
@@ -248,6 +274,10 @@ bool ViewportWidget::event(QEvent* event) {
     }
     if (event->type() == QEvent::KeyPress) {
         auto* key = static_cast<QKeyEvent*>(event);
+        if (key->key() == Qt::Key_Tab && !(key->modifiers() & (Qt::ControlModifier | Qt::AltModifier))) {
+            emit editModeToggleRequested();
+            return true;
+        }
         if (freeMode_ && isFreeModeKey(key->key())) {
             handleFreeKey(key);
             return true;
@@ -311,6 +341,12 @@ void ViewportWidget::mousePressEvent(QMouseEvent* event) {
         lastMouse_ = event->pos();
         setCursor(Qt::ClosedHandCursor);
     } else if (event->button() == Qt::LeftButton) {
+        if (hasProject() && editMode_) {
+            pressPosition_ = event->pos();
+            clickCandidate_ = true;
+            event->accept();
+            return;
+        }
         if (hasProject() && currentTool() == QLatin1String("sculpt")) {
             QJsonObject fields = pointerFields(event->pos());
             fields.insert(QStringLiteral("invert"), event->modifiers().testFlag(Qt::ControlModifier));
@@ -440,7 +476,11 @@ void ViewportWidget::mouseReleaseEvent(QMouseEvent* event) {
             update();
         } else if (clickCandidate_) {
             clickCandidate_ = false;
-            pickAt(event->pos());
+            if (editMode_) {
+                pickComponentAt(event->pos(), event->modifiers());
+            } else {
+                pickAt(event->pos());
+            }
         }
     }
     event->accept();
@@ -475,6 +515,10 @@ bool ViewportWidget::hasProject() const {
 // object under it.
 void ViewportWidget::updateHover(const QPoint& position) {
     if (!hasProject()) {
+        return;
+    }
+    if (editMode_) {
+        setCursor(Qt::CrossCursor);
         return;
     }
     const Reply reply = bridge_->call(QStringLiteral("pointer.hover"), pointerFields(position));
@@ -513,4 +557,56 @@ void ViewportWidget::pickAt(const QPoint& position) {
     if (reply.ok) {
         emit selectionChanged();
     }
+}
+
+void ViewportWidget::pickComponentAt(const QPoint& position, Qt::KeyboardModifiers modifiers) {
+    if (width() <= 0 || height() <= 0 || !hasProject() || !bridge_->hasSelection()) {
+        return;
+    }
+    QJsonObject fields = pointerFields(position);
+    fields.insert(QStringLiteral("entity"), static_cast<double>(bridge_->selection()));
+    const Reply pickReply = bridge_->call(QStringLiteral("mesh.pick"), fields);
+
+    QString selectMode = QStringLiteral("replace");
+    if (modifiers.testFlag(Qt::ControlModifier)) {
+        selectMode = QStringLiteral("toggle");
+    } else if (modifiers.testFlag(Qt::ShiftModifier)) {
+        selectMode = QStringLiteral("add");
+    }
+
+    if (!pickReply.ok || pickReply.result.isNull() || !pickReply.result.isObject()) {
+        if (selectMode == QLatin1String("replace")) {
+            bridge_->call(QStringLiteral("mesh.select"), QJsonObject{
+                {QStringLiteral("entity"), static_cast<double>(bridge_->selection())},
+                {QStringLiteral("mode"), QStringLiteral("clear")}
+            });
+            update();
+        }
+        return;
+    }
+
+    const QJsonObject hit = pickReply.result.toObject();
+    QJsonObject selectFields{
+        {QStringLiteral("entity"), static_cast<double>(bridge_->selection())},
+        {QStringLiteral("mode"), selectMode}
+    };
+
+    if (componentMode_ == ComponentMode::Vertex) {
+        if (hit.contains(QStringLiteral("vertex"))) {
+            const int vertex = hit.value(QStringLiteral("vertex")).toInt();
+            selectFields.insert(QStringLiteral("vertices"), QJsonArray{vertex});
+        }
+    } else if (componentMode_ == ComponentMode::Edge) {
+        if (hit.contains(QStringLiteral("edge"))) {
+            selectFields.insert(QStringLiteral("edges"), QJsonArray{hit.value(QStringLiteral("edge")).toArray()});
+        }
+    } else {
+        if (hit.contains(QStringLiteral("face"))) {
+            const int face = hit.value(QStringLiteral("face")).toInt();
+            selectFields.insert(QStringLiteral("faces"), QJsonArray{face});
+        }
+    }
+
+    bridge_->call(QStringLiteral("mesh.select"), selectFields);
+    update();
 }

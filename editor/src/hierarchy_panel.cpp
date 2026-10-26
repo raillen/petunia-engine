@@ -27,24 +27,22 @@ HierarchyPanel::HierarchyPanel(EngineBridge* bridge, QWidget* parent)
     bar->setObjectName(QStringLiteral("PetuniaPanelBar"));
     bar->setAttribute(Qt::WA_StyledBackground);
     auto* barLayout = new QHBoxLayout(bar);
-    barLayout->setContentsMargins(4, 4, 4, 4);
+    barLayout->setContentsMargins(6, 2, 6, 4);
     barLayout->setSpacing(4);
 
     createButton_ = new QToolButton(bar);
-    createButton_->setText(QStringLiteral("Criar"));
-    createButton_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     createButton_->setPopupMode(QToolButton::InstantPopup);
-    createButton_->setProperty("role", QStringLiteral("header"));
+    createButton_->setProperty("role", QStringLiteral("appTool"));
     createButton_->setToolTip(QStringLiteral("Cria um objeto na frente da câmera (Shift+A abre o menu radial)"));
     createButton_->setAccessibleName(QStringLiteral("Criar objeto"));
     createButton_->setEnabled(false);
-    barLayout->addWidget(createButton_);
-
     filter_ = new QLineEdit(bar);
     filter_->setPlaceholderText(QStringLiteral("Buscar"));
     filter_->setClearButtonEnabled(true);
     filter_->setAccessibleName(QStringLiteral("Filtrar objetos pelo nome"));
+    filter_->addAction(PetuniaIcons::get(QStringLiteral("search"), PetuniaTheme::instance().textMuted().name()), QLineEdit::LeadingPosition);
     barLayout->addWidget(filter_, 1);
+    barLayout->addWidget(createButton_);
 
     tree_ = new QTreeWidget(this);
     tree_->setAccessibleName(QStringLiteral("Objetos da cena"));
@@ -52,7 +50,7 @@ HierarchyPanel::HierarchyPanel(EngineBridge* bridge, QWidget* parent)
     tree_->setUniformRowHeights(true);
     tree_->setColumnCount(2);
     tree_->setHeaderHidden(true);
-    tree_->setIndentation(14);
+    tree_->setIndentation(12);
     tree_->setFrameShape(QFrame::NoFrame);
     tree_->setIconSize(QSize(16, 16));
     tree_->header()->setStretchLastSection(false);

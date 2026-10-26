@@ -1,8 +1,14 @@
-use petunia_math::{Color, Vec3};
+use petunia_math::{Color, PolygonMesh, Vec3};
 use petunia_world::{TableSpec, Value, ValueKind, World, WorldError};
 
 /// Shapes a brush can have. The renderer builds the mesh from the shape and the size.
 pub const BRUSH_SHAPES: [&str; 6] = ["box", "ramp", "cylinder", "cone", "sphere", "stairs"];
+
+/// Shapes a collider can have (`convex` wraps the owner's mesh).
+pub const COLLIDER_SHAPES: [&str; 4] = ["box", "sphere", "capsule", "convex"];
+
+/// How a rigid body moves.
+pub const BODY_KINDS: [&str; 3] = ["static", "dynamic", "kinematic"];
 
 /// Registers the tables every project starts with.
 ///
@@ -12,6 +18,10 @@ pub const BRUSH_SHAPES: [&str; 6] = ["box", "ramp", "cylinder", "cone", "sphere"
 /// - `Brush`: solid shape for building levels. `size` is width, height, depth in meters
 ///   (for round shapes: x and z are the diameters, y the height). `detail` is the number of
 ///   segments around a round shape, or the number of steps of a staircase.
+/// - `Mesh`: an editable polygon mesh (DR-22, option A): `geometry` holds the vertices and the
+///   faces themselves, in the object's own coordinates (meters, before `Transform`), and `color`
+///   paints every face. A brush becomes a mesh with "Tornar editável"; booleans, inset, loop cut,
+///   bevel and the other modeling operations replace `geometry`, one undo step each.
 /// - `Script`: attaches a script to an object: `file` is the name of a file in the project's
 ///   `scripts/` folder, without the `.aipo` extension; `enabled` switches it off without removing it.
 ///   The Script Host calls its `on_start`, `on_update` and `on_event` handlers.
@@ -26,6 +36,16 @@ pub const BRUSH_SHAPES: [&str; 6] = ["box", "ramp", "cylinder", "cone", "sphere"
 ///   inflate moves the surface (meters, negative deflates) or how hard flatten and smooth press
 ///   (0 to 1). Strokes apply in the order they were created.
 /// - `PlayerStart`: where the player (and the fly camera) starts, facing `yaw_degrees`.
+/// - `Collider`: one named collision shape of an object (DR-27). Each collider is its own entity,
+///   so an object can have many: `owner` is the object's persistent id and `name` is what scripts
+///   use ("pés", "corpo"). `shape` is `box` (`size`), `sphere` (`radius`), `capsule` (`radius`,
+///   total `height`) or `convex` (the hull of the owner's mesh). `center` and `rotation_degrees`
+///   place it in the owner's own axes; the owner's scale stretches it. A `trigger` reports contacts
+///   but nothing bumps into it. `friction` and `restitution` (0 to 1, bounce) are for contacts.
+/// - `RigidBody`: makes an object move with physics. `kind` is `static`, `dynamic` (gravity and
+///   contacts) or `kinematic` (moved by the game, pushes others). `mass` in kilograms,
+///   `gravity_scale` (1 normal, 0 floats), damping, and `lock_rotation` to keep it upright.
+///   Objects with colliders and no `RigidBody` are static.
 pub fn register_standard_tables(world: &mut World) -> Result<(), WorldError> {
     world.define_table(TableSpec::new("Name").column(
         "text",
@@ -44,6 +64,19 @@ pub fn register_standard_tables(world: &mut World) -> Result<(), WorldError> {
             .column("shape", ValueKind::Text, Value::Text("box".to_string()))
             .column("size", ValueKind::Vec3, Value::Vec3(Vec3::ONE))
             .column("detail", ValueKind::Int, Value::Int(16))
+            .column(
+                "color",
+                ValueKind::Color,
+                Value::Color(Color::rgb(0.8, 0.8, 0.8)),
+            ),
+    )?;
+    world.define_table(
+        TableSpec::new("Mesh")
+            .column(
+                "geometry",
+                ValueKind::Mesh,
+                Value::Mesh(PolygonMesh::default()),
+            )
             .column(
                 "color",
                 ValueKind::Color,
@@ -91,5 +124,28 @@ pub fn register_standard_tables(world: &mut World) -> Result<(), WorldError> {
         ValueKind::Float,
         Value::Float(0.0),
     ))?;
+    world.define_table(
+        TableSpec::new("Collider")
+            .column("owner", ValueKind::Int, Value::Int(0))
+            .column("name", ValueKind::Text, Value::Text("colisão".to_string()))
+            .column("shape", ValueKind::Text, Value::Text("box".to_string()))
+            .column("center", ValueKind::Vec3, Value::Vec3(Vec3::ZERO))
+            .column("rotation_degrees", ValueKind::Vec3, Value::Vec3(Vec3::ZERO))
+            .column("size", ValueKind::Vec3, Value::Vec3(Vec3::ONE))
+            .column("radius", ValueKind::Float, Value::Float(0.5))
+            .column("height", ValueKind::Float, Value::Float(2.0))
+            .column("trigger", ValueKind::Bool, Value::Bool(false))
+            .column("friction", ValueKind::Float, Value::Float(0.5))
+            .column("restitution", ValueKind::Float, Value::Float(0.0)),
+    )?;
+    world.define_table(
+        TableSpec::new("RigidBody")
+            .column("kind", ValueKind::Text, Value::Text("dynamic".to_string()))
+            .column("mass", ValueKind::Float, Value::Float(1.0))
+            .column("gravity_scale", ValueKind::Float, Value::Float(1.0))
+            .column("linear_damping", ValueKind::Float, Value::Float(0.0))
+            .column("angular_damping", ValueKind::Float, Value::Float(0.05))
+            .column("lock_rotation", ValueKind::Bool, Value::Bool(false)),
+    )?;
     Ok(())
 }

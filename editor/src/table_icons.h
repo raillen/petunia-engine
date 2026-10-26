@@ -20,6 +20,20 @@ inline QString forTable(const QString& table) {
     return QStringLiteral("parts");
 }
 
+// The name people read for a table. The engine's name (used by scripts) stays in the tooltip.
+inline QString displayName(const QString& table) {
+    if (table == QLatin1String("Name")) return QStringLiteral("Nome");
+    if (table == QLatin1String("Transform")) return QStringLiteral("Transformação");
+    if (table == QLatin1String("Brush")) return QStringLiteral("Forma");
+    if (table == QLatin1String("Floor")) return QStringLiteral("Andar");
+    if (table == QLatin1String("Door")) return QStringLiteral("Porta");
+    if (table == QLatin1String("PlayerStart")) return QStringLiteral("Início do jogador");
+    if (table == QLatin1String("Sculpt")) return QStringLiteral("Caverna");
+    if (table == QLatin1String("SculptStroke")) return QStringLiteral("Traço de caverna");
+    if (table == QLatin1String("Script")) return QStringLiteral("Script");
+    return table;
+}
+
 // An object is shown by its most telling table: a cave says more than its transform.
 inline QString forEntity(const QStringList& tables) {
     for (const char* table : {"PlayerStart", "Floor", "Sculpt", "Door", "Brush", "Script"}) {

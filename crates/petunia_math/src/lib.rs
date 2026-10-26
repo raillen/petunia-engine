@@ -4,6 +4,13 @@
 //! network protocol, so they never depend on a third-party math library. Renderer adapters
 //! convert them at the boundary.
 
+mod polygon;
+
+pub use polygon::{
+    MAX_FACE_CORNERS, MAX_MESH_CORNERS, MAX_MESH_FACES, MAX_MESH_VERTICES, PolygonError,
+    PolygonMesh,
+};
+
 use std::ops::{Add, Mul, Neg, Sub};
 
 use serde::{Deserialize, Serialize};

@@ -158,13 +158,15 @@ QPolygonF PetuniaNavCube::facePolygon(const Face &face) const {
 }
 
 QRectF PetuniaNavCube::bounds() const {
-    const double radius = kRingOuter * m_unit + 14.0;
-    return QRectF(m_center.x() - radius, m_center.y() - radius, radius * 2.0, radius * 2.0);
+    const double radius = kRingOuter * m_unit + 16.0;
+    const QRectF ringRect(m_center.x() - radius, m_center.y() - radius, radius * 2.0, radius * 2.0);
+    return ringRect.united(labelRect().adjusted(-3.0, -2.0, 3.0, 3.0));
 }
 
 bool PetuniaNavCube::contains(const QPointF &position) const {
-    const double radius = kRingOuter * m_unit + 14.0;
-    return std::hypot(position.x() - m_center.x(), position.y() - m_center.y()) <= radius;
+    const double radius = kRingOuter * m_unit + 16.0;
+    const bool insideCircle = std::hypot(position.x() - m_center.x(), position.y() - m_center.y()) <= radius;
+    return insideCircle || labelRect().adjusted(-3.0, -2.0, 3.0, 3.0).contains(position);
 }
 
 QRectF PetuniaNavCube::homeRect() const {
@@ -175,6 +177,10 @@ QRectF PetuniaNavCube::homeRect() const {
 QRectF PetuniaNavCube::menuRect() const {
     const double edge = kRingOuter * m_unit + 14.0;
     return QRectF(m_center.x() + edge - 18.0, m_center.y() + edge - 18.0, 20.0, 20.0);
+}
+
+QRectF PetuniaNavCube::labelRect() const {
+    return QRectF(m_center.x() - 40.0, m_center.y() + kRingOuter * m_unit + 4.0, 80.0, 14.0);
 }
 
 QPointF PetuniaNavCube::compassPoint(int index) const {
@@ -192,7 +198,8 @@ PetuniaNavCube::Hit PetuniaNavCube::hitTest(const QPointF &position) const {
         hit.id = QStringLiteral("home");
         return hit;
     }
-    if (menuRect().adjusted(-2, -2, 2, 2).contains(position)) {
+    if (menuRect().adjusted(-2, -2, 2, 2).contains(position) ||
+        labelRect().adjusted(-2, -2, 2, 2).contains(position)) {
         hit.type = Hit::Type::Menu;
         hit.id = QStringLiteral("menu");
         return hit;
@@ -417,11 +424,13 @@ void PetuniaNavCube::paint(QPainter &painter, const Hit &hover, bool active) con
     painter.drawPath(house);
 
     const QRectF menu = menuRect();
+    const QRectF label = labelRect();
     const bool menuHover = hover.type == Hit::Type::Menu;
     if (menuHover) {
         painter.setPen(Qt::NoPen);
         painter.setBrush(theme.bgSurfaceHover());
         painter.drawRoundedRect(menu, 5, 5);
+        painter.drawRoundedRect(label.adjusted(-3, -1, 3, 1), 3, 3);
     }
     painter.setPen(Qt::NoPen);
     painter.setBrush(menuHover ? theme.textPrimary() : theme.textSecondary());
@@ -435,8 +444,7 @@ void PetuniaNavCube::paint(QPainter &painter, const Hit &hover, bool active) con
     font.setPixelSize(std::max(9, int(m_unit * 0.58)));
     font.setBold(false);
     painter.setFont(font);
-    painter.setPen(theme.textMuted());
-    const QRectF label(m_center.x() - 40, m_center.y() + kRingOuter * m_unit + 4.0, 80, 14);
+    painter.setPen(menuHover ? theme.textPrimary() : theme.textMuted());
     painter.drawText(label, Qt::AlignCenter,
                      m_ortho ? petuniaTr(QStringLiteral("Ortográfica")) : petuniaTr(QStringLiteral("Perspectiva")));
     painter.restore();

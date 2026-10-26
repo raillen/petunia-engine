@@ -1,8 +1,11 @@
+use std::sync::Arc;
+
 use petunia_math::{Color, Transform, Vec3};
 use petunia_world::{EntityHandle, Value, World};
 
 use crate::camera::Camera;
 use crate::fly::FlyCamera;
+use crate::mesh::{MeshCache, MeshData};
 use crate::sculpt::SculptItem;
 
 /// The solid shapes a brush can take.
@@ -14,6 +17,8 @@ pub enum Shape {
     Cone,
     Sphere,
     Stairs,
+    /// An editable polygon mesh (`Mesh` table): the item carries its own triangles.
+    Mesh,
 }
 
 impl Shape {
@@ -31,7 +36,7 @@ impl Shape {
 }
 
 /// One thing to draw.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct DrawItem {
     /// Persistent id of the entity this item was built from (`0` when unknown).
     pub entity: u64,
@@ -45,6 +50,10 @@ pub struct DrawItem {
     pub detail: u32,
     pub transform: Transform,
     pub color: Color,
+    /// For [`Shape::Mesh`]: the triangles to draw (in the object's own coordinates) and the
+    /// fingerprint of the polygon mesh they came from (renderers key GPU buffers by it).
+    pub mesh: Option<Arc<MeshData>>,
+    pub mesh_fingerprint: u64,
 }
 
 /// A 2D-looking helper drawn on top of the scene (editor gizmos). Sizes are in pixels, so a
@@ -110,9 +119,24 @@ fn vec3(world: &World, handle: EntityHandle, table: &str, column: &str) -> Optio
     }
 }
 
-/// Builds the frame from the world: every entity with a `Brush` and a `Transform`. Entities with
-/// unknown shapes are skipped (the Project Doctor reports them).
+fn transform_of(world: &World, handle: EntityHandle) -> Transform {
+    Transform {
+        position: vec3(world, handle, "Transform", "position").unwrap_or(Vec3::ZERO),
+        rotation_degrees: vec3(world, handle, "Transform", "rotation_degrees")
+            .unwrap_or(Vec3::ZERO),
+        scale: vec3(world, handle, "Transform", "scale").unwrap_or(Vec3::ONE),
+    }
+}
+
+/// Builds the frame from the world: every entity with a `Brush` or a `Mesh`. Entities with
+/// unknown shapes are skipped (the Project Doctor reports them). Cuts every editable mesh into
+/// triangles; a host that extracts often uses [`extract_frame_cached`].
 pub fn extract_frame(world: &World, camera: Camera) -> RenderFrame {
+    extract_frame_cached(world, camera, &mut MeshCache::new())
+}
+
+/// [`extract_frame`] reusing the triangles of meshes that did not change.
+pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache) -> RenderFrame {
     let mut items = Vec::new();
     for handle in world.entities_with_table("Brush").unwrap_or_default() {
         let Ok(Value::Text(shape_name)) = world.get(handle, "Brush", "shape") else {
@@ -132,12 +156,7 @@ pub fn extract_frame(world: &World, camera: Camera) -> RenderFrame {
             Ok(Value::Color(color)) => *color,
             _ => Color::WHITE,
         };
-        let transform = Transform {
-            position: vec3(world, handle, "Transform", "position").unwrap_or(Vec3::ZERO),
-            rotation_degrees: vec3(world, handle, "Transform", "rotation_degrees")
-                .unwrap_or(Vec3::ZERO),
-            scale: vec3(world, handle, "Transform", "scale").unwrap_or(Vec3::ONE),
-        };
+        let transform = transform_of(world, handle);
         let entity = world.persistent_id(handle).map_or(0, |id| id.0);
         items.push(DrawItem {
             entity,
@@ -148,6 +167,33 @@ pub fn extract_frame(world: &World, camera: Camera) -> RenderFrame {
             detail,
             transform,
             color,
+            mesh: None,
+            mesh_fingerprint: 0,
+        });
+    }
+    for handle in world.entities_with_table("Mesh").unwrap_or_default() {
+        let Ok(Value::Mesh(geometry)) = world.get(handle, "Mesh", "geometry") else {
+            continue;
+        };
+        let Some((low, high)) = geometry.bounds() else {
+            continue;
+        };
+        let color = match world.get(handle, "Mesh", "color") {
+            Ok(Value::Color(color)) => *color,
+            _ => Color::WHITE,
+        };
+        let fingerprint = geometry.fingerprint();
+        items.push(DrawItem {
+            entity: world.persistent_id(handle).map_or(0, |id| id.0),
+            selected: false,
+            hovered: false,
+            shape: Shape::Mesh,
+            size: high - low,
+            detail: 0,
+            transform: transform_of(world, handle),
+            color,
+            mesh: Some(cache.drawing(fingerprint, geometry)),
+            mesh_fingerprint: fingerprint,
         });
     }
     RenderFrame {

@@ -1,12 +1,12 @@
 # Registro de dependências
 
-**Revisão:** 2026-10-24 · Regra do `AGENTS.md`: toda dependência direta entra aqui **antes** de entrar no `Cargo.toml`. `cargo xtask check-dependencies` *(planejado)* vai exigir isso automaticamente.
+**Revisão:** 2026-10-25 · Regra do `AGENTS.md`: toda dependência direta entra aqui **antes** de entrar no `Cargo.toml`. `cargo xtask check-dependencies` *(planejado)* vai exigir isso automaticamente.
 
-Versões: as resolvidas pelo `Cargo.lock` em 2026-10-24. O `Cargo.lock` completo tem **212 pacotes** (o do Petunia3D tem 379).
+Versões: as resolvidas pelo `Cargo.lock` em 2026-10-25. O `Cargo.lock` completo tem **245 pacotes** (o do Petunia3D tem 379). A edição de malha trouxe **12** deles (as 2 diretas e 10 indiretas, abaixo); o resto da diferença para os 212 de 2026-10-24 deve ter vindo do Script Host (DR-25; não conferi pacote a pacote).
 
 ## Resumo (TL;DR)
 
-8 dependências diretas do Cargo. Quatro fazem o trabalho de plataforma e ficam **atrás de adaptadores** (`petunia_render_gl` e `petunia_player`). As outras quatro são utilitários (serialização e erros). O editor soma **dependências do sistema** (Qt, CMake), listadas mais abaixo.
+10 dependências diretas do Cargo. Quatro fazem o trabalho de plataforma e ficam **atrás de adaptadores** (`petunia_render_gl` e `petunia_player`). Duas são geometria e ficam **só dentro** de `petunia_mesh` (`glam` e `manifold-rust`, desde 2026-10-25, DR-22). As outras quatro são utilitários (serialização e erros). O editor soma **dependências do sistema** (Qt, CMake), listadas mais abaixo.
 
 ## Registro
 
@@ -20,8 +20,12 @@ Versões: as resolvidas pelo `Cargo.lock` em 2026-10-24. O `Cargo.lock` completo
 | `glutin` | 0.32.3 | Criar o contexto OpenGL 3.3 | **`petunia_player`** (único) | Apache-2.0 | SDL3 | Médio |
 | `glutin-winit` | 0.5.0 | Liga o `glutin` ao `winit` | **`petunia_player`** (único) | MIT | Fazer à mão | Baixo |
 | `raw-window-handle` | 0.6.2 | Tipo comum entre janela e contexto | **`petunia_player`** (único) | MIT/Apache-2.0/Zlib | — | Baixo |
+| `glam` | 0.27.0 | Vetores e matrizes do código de malha copiado do Petunia3D. Aprovada em 2026-10-25 (DR-22) com a condição de ficar só dentro do crate | **`petunia_mesh`** (único; nunca na API, no schema, nos arquivos nem na rede) | MIT/Apache-2.0 | `petunia_math` (reescrever ~10,9 mil linhas de legado) | Médio: o legado inteiro usa |
+| `manifold-rust` | 0.13.1 | Booleanos de malha (fundir, cortar, interseção). **Aprovada por você em 2026-10-25** (DR-22) | **`petunia_mesh`** (único, `legacy/boolean.rs`) | Apache-2.0 | Escrever CSG robusto (meses) | Médio: só `boolean.rs` a troca |
 
 ## Observações
+
+- **`manifold-rust` traz 10 pacotes indiretos**, todos permissivos: `clipper2-rust` 1.1.0 (BSL-1.0, a licença Boost), `dashu-int`, `dashu-ratio` e `dashu-base` 0.5.1, `num-modular` 0.6.5, `num-traits` 0.2.19, `rustc-hash` 2.1.3, `static_assertions` 1.1.0, `rustversion` e `autocfg` (MIT ou Apache-2.0). Só o editor os usa: o runtime (`petunia_player`) e o `petunia_render` **não** dependem de `petunia_mesh` (desenhar uma malha só precisa de `petunia_math::PolygonMesh`). Conferido: o código do `manifold-rust` não tem `unsafe`; a opção `parallel` (Rayon) fica **desligada**, então os booleanos rodam numa thread só e dão o mesmo resultado sempre (teste de determinismo).
 
 - **`glutin` está há mais de um ano sem release** (0.32.3, 2025-04-30). Vigiar; plano B: binding de SDL3.
 - **Duplicações transitivas no `Cargo.lock`:** avisadas com `multiple-versions = "warn"` no `cargo deny check bans`:
@@ -32,7 +36,7 @@ Versões: as resolvidas pelo `Cargo.lock` em 2026-10-24. O `Cargo.lock` completo
 - **Avisos e exceções em `deny.toml`:**
   - `allow-wildcard-paths = true`: permite dependências de caminho relativas (`path = "crates/..."`) dentro do workspace sem exigir especificação artificial de `version` para pacotes locais (`publish = false`).
   - `[advisories] ignore = ["RUSTSEC-2026-0192"]`: aviso informativo de que `ttf-parser 0.25.1` foi declarado sem manutenção ativa pelo autor upstream. É dependência indireta transitiva do `winit 0.30.13` (`winit` -> `sctk-adwaita` -> `ab_glyph` -> `owned_ttf_parser` -> `ttf-parser`) para fontes das decorações de janela em Wayland. Não há vulnerabilidade de segurança reportada nem correção disponível no `winit 0.30.x`.
-- **Tipos de biblioteca não aparecem** na API pública, no schema, nos saves nem no protocolo. `glam` **não** foi adotado: `petunia_math` tem tipos próprios (`Vec3`, `Color`, `Transform`).
+- **Tipos de biblioteca não aparecem** na API pública, no schema, nos saves nem no protocolo. `glam` existe **só dentro** de `petunia_mesh`, para o código copiado do Petunia3D; o resto da engine usa os tipos próprios de `petunia_math` (`Vec3`, `Color`, `Transform`, `PolygonMesh`).
 - **Licença dos pacotes:** todas permissivas. `deny.toml` permite só licenças permissivas; MPL-2.0 (`symphonia`, via Kira) fica fora até haver uma exceção registrada.
 
 ## Dependências do sistema (editor Qt)

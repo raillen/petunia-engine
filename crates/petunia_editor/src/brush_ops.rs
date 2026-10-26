@@ -161,6 +161,11 @@ pub struct FaceDrag {
     start_position: Vec3,
     scale_along: f32,
     start_parameter: f32,
+    is_extrude: bool,
+    extruded_entity: Option<u64>,
+    previous_selection: Option<u64>,
+    has_dragged: bool,
+    grown: f32,
 }
 
 fn component(vector: Vec3, index: usize) -> f32 {
@@ -206,6 +211,64 @@ fn brush_row(
 }
 
 impl EditorSession {
+    fn spawn_preview_brush(
+        &mut self,
+        name: &str,
+        position: Vec3,
+        rotation: Vec3,
+        scale: Vec3,
+        size: Vec3,
+        color: Json,
+    ) -> Result<u64, Failure> {
+        let payload = brush_row(name, position, rotation, scale, size, color);
+        let project = self.project.as_mut().ok_or_else(Failure::no_project)?;
+        let handle = project.world.spawn()?;
+        let entity = project.world.persistent_id(handle)?.0;
+        if let Some(rows) = payload.get("rows").and_then(Json::as_object) {
+            for (table, values) in rows {
+                if let Some(values_object) = values.as_object() {
+                    project
+                        .world
+                        .insert_row_json(handle, table, values_object)
+                        .map_err(|error| {
+                            let _ = project.world.despawn(handle);
+                            Failure::from(error)
+                        })?;
+                }
+            }
+        }
+        Ok(entity)
+    }
+
+    fn despawn_preview_brush(&mut self, entity: u64) -> Result<(), Failure> {
+        let project = self.project.as_mut().ok_or_else(Failure::no_project)?;
+        let handle = project
+            .world
+            .handle_of(petunia_world::PersistentId(entity))?;
+        project.world.despawn(handle)?;
+        Ok(())
+    }
+
+    fn update_preview_property(
+        &mut self,
+        entity: u64,
+        table: &str,
+        column: &str,
+        value: &Json,
+    ) -> Result<(), Failure> {
+        let project = self.project.as_mut().ok_or_else(Failure::no_project)?;
+        let world = &mut project.world;
+        let handle = world.handle_of(petunia_world::PersistentId(entity))?;
+        let kind = world.column_kind(table, column)?;
+        let parsed = petunia_world::Value::from_json(kind, value, world.limits().max_text_bytes)
+            .map_err(|reason| petunia_world::WorldError::InvalidValue {
+                column: column.to_string(),
+                reason,
+            })?;
+        world.set(handle, table, column, parsed)?;
+        Ok(())
+    }
+
     fn box_parts(&self, entity: u64) -> Option<(Vec3, Vec3, Vec3, Vec3, Json)> {
         let item = self.item_of(entity)?;
         let world = &self.project.as_ref()?.world;
@@ -264,13 +327,16 @@ impl EditorSession {
         })
     }
 
-    /// Press with Push/Pull or Extrude. Extrude first creates a thin box on the face (one undo
-    /// step), then the drag grows it.
+    /// Press with Push/Pull or Extrude. Extrude first creates a thin preview box on the face,
+    /// then the drag grows it. The extrusion is committed as a single command on completion.
     pub fn face_drag_begin(&mut self, pointer: Pointer) -> Result<Json, Failure> {
         let Some(mut face) = self.face_under(pointer) else {
             return Ok(json!({ "started": false }));
         };
-        if self.tool == gizmo::Tool::Extrude {
+        let is_extrude = self.tool == gizmo::Tool::Extrude;
+        let previous_selection = self.selection;
+        let mut extruded_entity = None;
+        if is_extrude {
             let (position, rotation, scale, size, color) = self
                 .box_parts(face.entity)
                 .ok_or_else(|| Failure::bad_request("só brushes podem ser extrudados"))?;
@@ -281,18 +347,12 @@ impl EditorSession {
             let name = format!(
                 "{} (extrusão)",
                 self.world()
-                    .map(|w| display_name(w, face.entity))
+                    .map(|world| display_name(world, face.entity))
                     .unwrap_or_default()
             );
-            let record = CommandRecord::new(
-                "world.create",
-                brush_row(&name, new_position, rotation, scale, new_size, color),
-            );
-            let created = self.execute(&record)?;
-            let entity = created
-                .get("entity")
-                .and_then(Json::as_u64)
-                .ok_or_else(|| Failure::bad_request("a extrusão não criou a entidade"))?;
+            let entity =
+                self.spawn_preview_brush(&name, new_position, rotation, scale, new_size, color)?;
+            extruded_entity = Some(entity);
             self.selection = Some(entity);
             let _ = position;
             face = FaceHit {
@@ -302,13 +362,27 @@ impl EditorSession {
                 ..face
             };
         }
-        let (position, _, scale, size, _) = self
-            .box_parts(face.entity)
-            .ok_or_else(|| Failure::bad_request("só brushes podem ser empurrados ou puxados"))?;
+        let (position, _, scale, size, _) = match self.box_parts(face.entity) {
+            Some(parts) => parts,
+            None => {
+                if let Some(entity) = extruded_entity {
+                    let _ = self.despawn_preview_brush(entity);
+                }
+                return Err(Failure::bad_request(
+                    "só brushes podem ser empurrados ou puxados",
+                ));
+            }
+        };
         let view = self.view_for(pointer);
-        let ray = view
-            .ray(pointer.mouse())
-            .ok_or_else(|| Failure::bad_request("ponto inválido"))?;
+        let ray = match view.ray(pointer.mouse()) {
+            Some(ray) => ray,
+            None => {
+                if let Some(entity) = extruded_entity {
+                    let _ = self.despawn_preview_brush(entity);
+                }
+                return Err(Failure::bad_request("ponto inválido"));
+            }
+        };
         let start_parameter = closest_on_line(&ray, face.center, face.normal).unwrap_or(0.0);
         self.selection = Some(face.entity);
         self.face_drag = Some(FaceDrag {
@@ -318,6 +392,11 @@ impl EditorSession {
             start_position: position,
             scale_along: component(scale, face.axis).max(1.0e-4),
             start_parameter,
+            is_extrude,
+            extruded_entity,
+            previous_selection,
+            has_dragged: false,
+            grown: 0.0,
         });
         self.hud = Some(String::new());
         Ok(json!({ "started": true, "entity": face.entity }))
@@ -345,8 +424,18 @@ impl EditorSession {
         let grown = world_size - start_world;
         let size = with_component(drag.start_size, face.axis, world_size / drag.scale_along);
         let position = drag.start_position + face.normal * (grown * 0.5);
-        self.gesture_preview(face.entity, "Brush", "size", &vector_json(size))?;
-        self.gesture_preview(face.entity, "Transform", "position", &vector_json(position))?;
+        if drag.is_extrude {
+            self.update_preview_property(face.entity, "Brush", "size", &vector_json(size))?;
+            self.update_preview_property(
+                face.entity,
+                "Transform",
+                "position",
+                &vector_json(position),
+            )?;
+        } else {
+            self.gesture_preview(face.entity, "Brush", "size", &vector_json(size))?;
+            self.gesture_preview(face.entity, "Transform", "position", &vector_json(position))?;
+        }
         let shift = face.normal * grown;
         self.face_drag = Some(FaceDrag {
             face: FaceHit {
@@ -354,6 +443,8 @@ impl EditorSession {
                 corners: face.corners.map(|corner| corner + shift),
                 ..face
             },
+            has_dragged: true,
+            grown,
             ..drag
         });
         let summary = format!("{:+.2} m · espessura {:.2} m", grown, world_size).replace('.', ",");
@@ -362,14 +453,47 @@ impl EditorSession {
     }
 
     pub fn face_drag_end(&mut self) -> Result<Json, Failure> {
-        self.face_drag = None;
+        let drag = self.face_drag.take();
         self.hud = None;
+        if let Some(drag) = drag.filter(|drag| drag.is_extrude) {
+            let Some(extruded_entity) = drag.extruded_entity else {
+                return Ok(Json::Null);
+            };
+            if !drag.has_dragged {
+                self.despawn_preview_brush(extruded_entity)?;
+                self.selection = drag.previous_selection;
+                return Ok(Json::Null);
+            }
+            let name = self
+                .world()
+                .map(|world| display_name(world, extruded_entity))
+                .unwrap_or_default();
+            let (position, rotation, scale, size, color) = self
+                .box_parts(extruded_entity)
+                .ok_or_else(|| Failure::bad_request("a extrusão não tem brush"))?;
+            self.despawn_preview_brush(extruded_entity)?;
+            let mut payload = brush_row(&name, position, rotation, scale, size, color);
+            if let Some(map) = payload.as_object_mut() {
+                map.insert("persistent_id".to_string(), json!(extruded_entity));
+            }
+            let record = CommandRecord::new("world.create", payload);
+            let outcome = self.execute(&record)?;
+            self.selection = Some(extruded_entity);
+            return Ok(outcome);
+        }
         self.gesture_commit()
     }
 
     pub fn face_drag_cancel(&mut self) -> Result<Json, Failure> {
-        self.face_drag = None;
+        let drag = self.face_drag.take();
         self.hud = None;
+        if let Some(drag) = drag.filter(|drag| drag.is_extrude) {
+            if let Some(extruded_entity) = drag.extruded_entity {
+                self.despawn_preview_brush(extruded_entity)?;
+            }
+            self.selection = drag.previous_selection;
+            return Ok(Json::Null);
+        }
         self.gesture_cancel()
     }
 
@@ -571,5 +695,172 @@ mod tests {
             (volume - (6.0 * 3.0 * 4.0 - inner)).abs() < 1.0e-3,
             "{volume}"
         );
+    }
+
+    fn opened(label: &str) -> (EditorSession, std::path::PathBuf) {
+        let root = std::env::temp_dir().join(format!(
+            "petunia_editor_test_{label}_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let mut session = EditorSession::new().expect("session");
+        let reply = session.handle(&json!({
+            "op": "project.new_sample",
+            "path": root.display().to_string(),
+            "name": label,
+        }));
+        assert_eq!(reply["ok"], true, "{reply}");
+        (session, root)
+    }
+
+    fn look_down_at(session: &mut EditorSession, point: Vec3) {
+        session.camera.camera.position = point + Vec3::new(0.0, 10.0, 0.0);
+        session.camera.camera.yaw_degrees = 0.0;
+        session.camera.camera.pitch_degrees = -89.9;
+    }
+
+    fn brush_at(session: &mut EditorSession, shape: &str, position: Vec3) -> u64 {
+        let created = session.handle(&json!({ "op": "create.brush", "shape": shape }));
+        assert_eq!(created["ok"], true, "{created}");
+        let entity = created["result"]["entity"].as_u64().expect("brush");
+        let moved = session.handle(&json!({
+            "op": "command.execute",
+            "command": "row.set",
+            "payload": {
+                "entity": entity,
+                "table": "Transform",
+                "values": {
+                    "position": { "x": position.x, "y": position.y, "z": position.z }
+                }
+            }
+        }));
+        assert_eq!(moved["ok"], true, "{moved}");
+        entity
+    }
+
+    #[test]
+    fn extrude_no_op_click_leaves_no_leftover() {
+        let (mut session, root) = opened("extrude_noop");
+        let center = Vec3::new(40.0, 1.0, 40.0);
+        let entity = brush_at(&mut session, "box", center);
+        session.select(Some(entity)).expect("select");
+        look_down_at(&mut session, center);
+        session.set_tool(gizmo::Tool::Extrude);
+        let pointer = Pointer {
+            x: 400.0,
+            y: 300.0,
+            width: 800.0,
+            height: 600.0,
+        };
+        let count_before = session.draw_items().len();
+        let history_before = session.dispatcher.undo_depth().0;
+        let begin = session.face_drag_begin(pointer).expect("begin");
+        assert_eq!(begin["started"], true);
+        let _end = session.face_drag_end().expect("end");
+        let count_after = session.draw_items().len();
+        assert_eq!(
+            count_after, count_before,
+            "no leftover entity on no-op click"
+        );
+        assert_eq!(
+            session.dispatcher.undo_depth().0,
+            history_before,
+            "no command entered undo history on no-op click"
+        );
+        assert_eq!(session.selection, Some(entity), "selection preserved");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn extrude_escape_cancel_restores_world_and_selection() {
+        let (mut session, root) = opened("extrude_cancel");
+        let center = Vec3::new(40.0, 1.0, 40.0);
+        let entity = brush_at(&mut session, "box", center);
+        session.select(Some(entity)).expect("select");
+        look_down_at(&mut session, center);
+        session.set_tool(gizmo::Tool::Extrude);
+        let pointer_start = Pointer {
+            x: 400.0,
+            y: 300.0,
+            width: 800.0,
+            height: 600.0,
+        };
+        let pointer_move = Pointer {
+            x: 400.0,
+            y: 200.0,
+            width: 800.0,
+            height: 600.0,
+        };
+        let count_before = session.draw_items().len();
+        let history_before = session.dispatcher.undo_depth().0;
+
+        let begin = session.face_drag_begin(pointer_start).expect("begin");
+        assert_eq!(begin["started"], true);
+        let _drag = session.face_drag(pointer_move, false).expect("drag");
+        let _cancel = session.face_drag_cancel().expect("cancel");
+
+        let count_after = session.draw_items().len();
+        assert_eq!(count_after, count_before, "cancel removes extruded entity");
+        assert_eq!(
+            session.dispatcher.undo_depth().0,
+            history_before,
+            "cancel leaves no undo entry"
+        );
+        assert_eq!(session.selection, Some(entity), "cancel restores selection");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn extrude_drag_and_commit_is_single_undo_step() {
+        let (mut session, root) = opened("extrude_undo");
+        let center = Vec3::new(40.0, 1.0, 40.0);
+        let entity = brush_at(&mut session, "box", center);
+        session.select(Some(entity)).expect("select");
+        look_down_at(&mut session, center);
+        session.set_tool(gizmo::Tool::Extrude);
+        let pointer_start = Pointer {
+            x: 400.0,
+            y: 300.0,
+            width: 800.0,
+            height: 600.0,
+        };
+        let pointer_move = Pointer {
+            x: 400.0,
+            y: 200.0,
+            width: 800.0,
+            height: 600.0,
+        };
+        let count_before = session.draw_items().len();
+        let history_before = session.dispatcher.undo_depth().0;
+
+        let begin = session.face_drag_begin(pointer_start).expect("begin");
+        assert_eq!(begin["started"], true);
+        let _drag = session.face_drag(pointer_move, false).expect("drag");
+        let end = session.face_drag_end().expect("end");
+        let extruded_entity = end["entity"].as_u64().expect("extruded entity");
+
+        assert_eq!(session.draw_items().len(), count_before + 1);
+        assert_eq!(
+            session.dispatcher.undo_depth().0,
+            history_before + 1,
+            "exactly one undo entry for entire extrusion"
+        );
+        assert_eq!(session.selection, Some(extruded_entity));
+
+        // ONE undo must completely remove the extruded entity:
+        let undone = session.undo().expect("undo");
+        assert_eq!(undone["command"], "world.create");
+        assert_eq!(
+            session.draw_items().len(),
+            count_before,
+            "single undo removes extruded brush"
+        );
+
+        // ONE redo restores it:
+        let redone = session.redo().expect("redo");
+        assert_eq!(redone["command"], "world.create");
+        assert_eq!(session.draw_items().len(), count_before + 1);
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

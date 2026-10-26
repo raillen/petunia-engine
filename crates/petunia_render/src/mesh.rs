@@ -1,6 +1,9 @@
-use petunia_math::Vec3;
+use std::collections::HashMap;
+use std::sync::Arc;
 
-use crate::frame::Shape;
+use petunia_math::{PolygonMesh, Vec3};
+
+use crate::frame::{DrawItem, Shape};
 
 /// Segments around a round shape when the brush does not say.
 pub const DEFAULT_SEGMENTS: u32 = 16;
@@ -72,6 +75,81 @@ impl MeshData {
     }
 }
 
+/// The drawing mesh of an editable polygon mesh: flat shaded (one normal per face, so every
+/// face reads as a facet), concave faces cut into triangles. Degenerate faces are skipped.
+pub fn polygon_mesh_data(mesh: &PolygonMesh) -> MeshData {
+    let mut data = MeshData::default();
+    let mut triangles = Vec::new();
+    for face in &mesh.faces {
+        let normal = mesh.face_normal(face);
+        if normal.length_squared() == 0.0 {
+            continue;
+        }
+        triangles.clear();
+        mesh.triangulate_face(face, &mut triangles);
+        for triangle in &triangles {
+            for vertex in triangle {
+                let position = mesh
+                    .positions
+                    .get(*vertex as usize)
+                    .copied()
+                    .unwrap_or(Vec3::ZERO);
+                let index = data.push_vertex(position, normal);
+                data.indices.push(index);
+            }
+        }
+    }
+    data
+}
+
+/// Drawing meshes of editable meshes, by fingerprint: the editor extracts the scene many times
+/// per mouse move, and a mesh is cut into triangles only when it changes. Meshes not asked for
+/// since the previous [`MeshCache::sweep`] are forgotten.
+#[derive(Default)]
+pub struct MeshCache {
+    meshes: HashMap<u64, Arc<MeshData>>,
+    used: std::collections::HashSet<u64>,
+}
+
+impl MeshCache {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The drawing mesh for `mesh` (whose fingerprint is `fingerprint`).
+    pub fn drawing(&mut self, fingerprint: u64, mesh: &PolygonMesh) -> Arc<MeshData> {
+        self.used.insert(fingerprint);
+        self.meshes
+            .entry(fingerprint)
+            .or_insert_with(|| Arc::new(polygon_mesh_data(mesh)))
+            .clone()
+    }
+
+    /// Drops the meshes not used since the last sweep.
+    pub fn sweep(&mut self) {
+        let used = std::mem::take(&mut self.used);
+        self.meshes
+            .retain(|fingerprint, _| used.contains(fingerprint));
+    }
+
+    pub fn len(&self) -> usize {
+        self.meshes.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.meshes.is_empty()
+    }
+}
+
+/// The triangles an item draws: its own mesh for an editable mesh, else the shape's.
+pub fn item_mesh(item: &DrawItem) -> Result<Arc<MeshData>, MeshError> {
+    match (&item.shape, &item.mesh) {
+        (Shape::Mesh, Some(mesh)) => Ok(mesh.clone()),
+        (Shape::Mesh, None) => Ok(Arc::new(MeshData::default())),
+        _ => build_mesh(item.shape, item.size, item.detail).map(Arc::new),
+    }
+}
+
 /// Builds the mesh for a shape. `size` is width, height and depth in meters (for round shapes,
 /// x and z are the diameters). `detail` is the number of segments around a round shape
 /// (cylinder, cone, sphere) or the number of steps of a staircase; it is clamped to a sane range.
@@ -93,6 +171,8 @@ pub fn build_mesh(shape: Shape, size: Vec3, detail: u32) -> Result<MeshData, Mes
         Shape::Cone => cone_mesh(half, segments),
         Shape::Sphere => sphere_mesh(half, segments),
         Shape::Stairs => stairs_mesh(half, detail.clamp(1, MAX_STEPS)),
+        // An editable mesh carries its own triangles ([`item_mesh`]); there is no shape to build.
+        Shape::Mesh => MeshData::default(),
     })
 }
 

@@ -12,11 +12,13 @@ mod mesh;
 mod pick;
 mod sculpt;
 
-pub use camera::{Camera, Mat4, model_matrix, multiply};
+pub use camera::{Camera, Mat4, ProjectionMode, model_matrix, multiply};
 pub use fly::FlyCamera;
-pub use frame::{DrawItem, OverlayItem, RenderFrame, Shape, extract_frame, start_camera};
+pub use frame::{
+    DrawItem, OverlayItem, RenderFrame, Shape, extract_frame, extract_frame_cached, start_camera,
+};
 pub use grid::{GRID_LIFT, GridLine, axis_lines, grid_lines};
-pub use mesh::{MeshData, MeshError, build_mesh};
+pub use mesh::{MeshCache, MeshData, MeshError, build_mesh, item_mesh, polygon_mesh_data};
 pub use petunia_sculpt::{ChunkMesh, SurfaceMesh};
 pub use pick::{Ray, SurfaceHit, mesh_points, pick_entity, pick_surface, ray_through};
 pub use sculpt::{SculptCache, SculptItem, SculptVolume, extract_sculpt_volumes, hit_sculpt};

@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
@@ -7,7 +8,7 @@ use petunia_project::{
     ProjectManifest, Report, Severity, create_sample_project, load_project, save_scene,
 };
 use petunia_render::{
-    FlyCamera, RenderFrame, extract_frame, pick_entity, ray_through, start_camera,
+    FlyCamera, MeshCache, RenderFrame, extract_frame_cached, pick_entity, ray_through, start_camera,
 };
 use petunia_world::{PersistentId, Value, World};
 use serde_json::{Map, Value as Json, json};
@@ -16,6 +17,7 @@ use crate::brush_ops::{FaceDrag, FaceHit};
 use crate::failure::Failure;
 use crate::floors::AboveFloor;
 use crate::gizmo::{Drag, Handle, Orientation, Snap, Tool};
+use crate::mesh_tool::ComponentSelection;
 use crate::sculpt_tool::SculptState;
 use crate::tools::{DEFAULT_FLOOR_HEIGHT, FreeMode, PivotMode, SnapTarget};
 
@@ -92,8 +94,15 @@ pub struct EditorSession {
     pub(crate) hud: Option<String>,
     /// Gizmo rod length in logical pixels.
     pub(crate) gizmo_size: f32,
+    /// Color and thickness of the selection outline (editor preference).
+    pub(crate) outline: crate::tools::OutlineStyle,
     /// The sculpting tool (caves).
     pub(crate) sculpt: SculptState,
+    /// Faces, edges and vertices chosen on an editable mesh (`mesh.select`).
+    pub(crate) components: Option<ComponentSelection>,
+    /// Triangles of editable meshes, reused while they do not change (the tools extract the
+    /// scene many times per mouse move).
+    pub(crate) mesh_cache: RefCell<MeshCache>,
 }
 
 pub(crate) fn vector_json(vector: Vec3) -> Json {
@@ -154,7 +163,10 @@ impl EditorSession {
             face_drag: None,
             hud: None,
             gizmo_size: Self::default_gizmo_size(),
+            outline: crate::tools::OutlineStyle::default(),
             sculpt: SculptState::new(),
+            components: None,
+            mesh_cache: RefCell::new(MeshCache::new()),
         })
     }
 
@@ -582,8 +594,24 @@ impl EditorSession {
         boost: bool,
         elapsed_seconds: f32,
     ) {
-        self.camera
-            .advance(right, up, forward, boost, elapsed_seconds);
+        if self.camera.camera.projection_mode == petunia_render::ProjectionMode::Orthographic {
+            if forward.is_finite() && forward != 0.0 {
+                let zoom_speed = if boost { 1.30_f32 } else { 1.15_f32 };
+                let factor = zoom_speed.powf(forward.abs());
+                let new_height = if forward > 0.0 {
+                    self.camera.camera.orthographic_height / factor
+                } else {
+                    self.camera.camera.orthographic_height * factor
+                };
+                self.camera.camera.orthographic_height = new_height.clamp(0.1, 10_000.0);
+            }
+            if (right.is_finite() && right != 0.0) || (up.is_finite() && up != 0.0) {
+                self.camera.advance(right, up, 0.0, boost, elapsed_seconds);
+            }
+        } else {
+            self.camera
+                .advance(right, up, forward, boost, elapsed_seconds);
+        }
     }
 
     /// Back to the player start (or the origin).
@@ -620,13 +648,20 @@ impl EditorSession {
     /// What to draw this frame, with the selection marked. `None` when no project is open.
     pub fn frame(&self) -> Option<RenderFrame> {
         let world = &self.project.as_ref()?.world;
-        let mut frame = extract_frame(world, self.camera.camera);
+        let mut frame = {
+            let mut cache = self.mesh_cache.borrow_mut();
+            let frame = extract_frame_cached(world, self.camera.camera, &mut cache);
+            // Meshes no longer in the scene (edited, undone, deleted) leave the cache.
+            cache.sweep();
+            frame
+        };
         self.apply_floor_visibility(&mut frame.items);
         frame.sculpts = self.sculpt_items();
         frame.mark_selected(self.selection);
         frame.mark_hovered(self.hovered.filter(|id| Some(*id) != self.selection));
         frame.overlay = self.outline_overlay(&frame);
         self.sculpt_overlay(&mut frame.overlay);
+        self.mesh_overlay(&mut frame.overlay);
         frame.show_grid = true;
         frame.grid_height = self.floor_elevation();
         Some(frame)
@@ -641,6 +676,8 @@ impl EditorSession {
             "z": camera.position.z,
             "yaw_degrees": camera.yaw_degrees,
             "pitch_degrees": camera.pitch_degrees,
+            "projection_mode": camera.projection_mode.name(),
+            "orthographic_height": camera.orthographic_height,
         })
     }
 
@@ -711,6 +748,7 @@ impl EditorSession {
             "transform": self.transform_json(),
             "floor": self.floor_json(),
             "sculpt": self.sculpt_json(),
+            "mesh_selection": self.components_json(),
         })
     }
 
