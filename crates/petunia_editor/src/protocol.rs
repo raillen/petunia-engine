@@ -120,6 +120,9 @@ impl EditorSession {
             "script.api" => Ok(self.script_api()),
             "script.attach" => self.script_attach(text(request, "name")?),
 
+            "prefab.list" => Ok(self.prefab_list()),
+            "prefab.spawn" => self.prefab_spawn(text(request, "id")?),
+
             "graph.list" => self.graph_list(),
             "graph.new" => self.graph_new(text(request, "name")?),
             "graph.open" => self.graph_open(text(request, "name")?),

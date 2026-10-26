@@ -10,6 +10,20 @@ O essencial foi verificado **em display virtual** (nada apareceu na sua tela), c
 
 Três análises novas pedem a sua decisão: [paridade da interface](../02-arquitetura/12-paridade-ui-petunia3d.md), [edição de malha](../02-arquitetura/13-primitivas-e-edicao-de-malha.md) e [pintura e animação](../01-pesquisa/07-pintura-e-animacao.md).
 
+## Etapa atual: sistema de nós, passo N4 — prefabs e o nó Esperar (2026-10-26)
+
+Decisão: [DR-31](../06-decisoes/registro-de-decisoes.md).
+
+| Entrega | Evidência |
+|---|---|
+| Nó **Esperar**: compila para uma função por espera, contagem por objeto, reinício, aviso em repetição, só o objeto depois da espera | 4 testes de ponta a ponta no Script Host (a cadeia continua 1 s depois, duas esperas seguidas, não repete) |
+| **Prefabs** Porta, Item coletável e Ponto de nascimento (`prefab.list`, `prefab.spawn`), em **Criar** e na hierarquia | 4 testes: os grafos compilam sem aviso; **o jogador pega o item**; **a porta sobe, espera ~3 s e desce, uma vez por visita**; criar = um desfazer e grafo editado nunca é sobrescrito. Menu **visto** no display virtual |
+| **Defeito do motor corrigido:** personagem × sensor/parede estática nunca gerava `on_collision` | teste novo no `petunia_physics` (falha sem a correção); 18 testes do crate |
+
+**Não verificado:** a porta e o item **jogando de verdade na janela** com o teclado (só pelo motor de scripts com física e no teste do editor); uma execução isolada do teste de fumaça mostrou 9 de 10 e não vi qual (três repetições deram 10/10); leitor de tela.
+
+**Ainda falta:** a tela de caixas e fios (N3), a depuração (N5), prefabs do próprio projeto, porta animada.
+
 ## Etapa atual: sistema de nós, passo N2 (2026-10-26)
 
 Comandos `graph.*` e a **vista em contorno** no editor (workspace **Lógica**, `F7`). Decisão: [DR-30](../06-decisoes/registro-de-decisoes.md).

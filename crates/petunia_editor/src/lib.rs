@@ -17,6 +17,7 @@ mod graph_ops;
 mod lights;
 mod mesh_tool;
 mod play;
+mod prefabs;
 mod protocol;
 mod scripts;
 mod sculpt_tool;

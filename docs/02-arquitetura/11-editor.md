@@ -91,6 +91,8 @@ Se algo falha, a resposta explica o que fazer:
 | `create.light` | `kind` (`point` ou `sun`) | Luz na frente da câmera (um desfazer); com uma luz, só as luzes da cena valem (DR-29) |
 | `asset.list` | — | Modelos `.glb`/`.gltf` em `assets/` (caminhos do projeto; não segue links simbólicos) |
 | `asset.import` | `path` | Importa um modelo como **malhas editáveis**, um objeto por nó; copia o arquivo para `assets/` (um desfazer). Devolve `imported`, `names`, `asset`, `warnings` |
+| `prefab.list` | — | Os prefabs embutidos: `door` (Porta), `pickup` (Item coletável), `spawn` (Ponto de nascimento) (DR-31) |
+| `prefab.spawn` | `id` | Cria o prefab na frente da câmera, no andar atual, em **um** desfazer; grava os grafos de que precisa em `scripts/` sem sobrescrever os que já existem. Devolve `entity`, `graphs_written`, `graphs_kept` |
 | `graph.list` / `graph.new` `name` / `graph.open` `name` / `graph.close` | — | Grafos de nós (`scripts/<nome>.graph.json`, DR-30). Um grafo aberto por vez; cada edição **grava na hora** (atômico) e a primeira de uma abertura guarda o arquivo em `scripts/.backup/` |
 | `graph.view` | — | O grafo aberto como **contorno**: eventos com suas cadeias, entradas com a origem de cada valor, ramos, soltos e diagnósticos; `can_undo` / `can_redo` |
 | `graph.add` | `kind`, `after`? `{node,pin}`, `into`? `{node,pin}` | Põe um nó (na cadeia, depois de `after`; ou ligando o resultado a uma entrada `into`) |

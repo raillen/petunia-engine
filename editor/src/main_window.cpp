@@ -345,6 +345,28 @@ void MainWindow::buildActions() {
     pointLightAction_->setProperty("iconName", QStringLiteral("view_lit"));
     sunLightAction_ = make(QStringLiteral("Sol (luz direcional)"), QStringLiteral("Raios paralelos, como o sol: só a rotação do objeto importa"));
     sunLightAction_->setProperty("iconName", QStringLiteral("view_lit"));
+    {
+        // Ready-made objects with their behaviour (Porta, Item coletável, Ponto de nascimento).
+        const QList<std::tuple<QString, QString, QString, QString>> prefabs = {
+            {QStringLiteral("door"), QStringLiteral("Porta"), QStringLiteral("cube"),
+             QStringLiteral("Uma porta que sobe quando um personagem chega perto, espera e desce. O comportamento é o grafo `porta` (aba Lógica)")},
+            {QStringLiteral("pickup"), QStringLiteral("Item coletável"), QStringLiteral("favorite"),
+             QStringLiteral("Uma esfera que some quando um personagem a toca. O comportamento é o grafo `item` (aba Lógica)")},
+            {QStringLiteral("spawn"), QStringLiteral("Ponto de nascimento"), QStringLiteral("pin"),
+             QStringLiteral("Onde o jogador nasce ao jogar (PlayerStart), com uma marca que não bloqueia")},
+        };
+        for (const auto& [id, title, icon, tip] : prefabs) {
+            QAction* action = make(title, tip);
+            action->setProperty("iconName", icon);
+            connect(action, &QAction::triggered, this, [this, id, title] {
+                const Reply reply = perform(QStringLiteral("prefab.spawn"), QJsonObject{{"id", id}});
+                if (reply.ok) {
+                    statusBar()->showMessage(QStringLiteral("%1 criado na frente da câmera. Ctrl+Z desfaz.").arg(title), 8000);
+                }
+            });
+            prefabActions_.append(action);
+        }
+    }
     connect(pointLightAction_, &QAction::triggered, this, [this] {
         perform(QStringLiteral("create.light"), QJsonObject{{"kind", QStringLiteral("point")}});
         statusBar()->showMessage(QStringLiteral("Luz criada. Com uma luz na cena, só as luzes da cena valem (o sol e o ambiente padrão saem)."), 8000);
@@ -551,6 +573,10 @@ void MainWindow::buildMenus() {
     create->addAction(primitivesMenuAction_);
     create->addSeparator();
     for (QAction* action : shapeActions_) {
+        create->addAction(action);
+    }
+    create->addSeparator();
+    for (QAction* action : std::as_const(prefabActions_)) {
         create->addAction(action);
     }
     create->addSeparator();
@@ -847,6 +873,9 @@ void MainWindow::buildAppBar() {
     setActionIcon(openAction_, QStringLiteral("open_project"));
     setActionIcon(caveAction_, QStringLiteral("generate_volume"));
     setActionIcon(importModelAction_, QStringLiteral("cube"));
+    for (QAction* action : std::as_const(prefabActions_)) {
+        setActionIcon(action, action->property("iconName").toString());
+    }
     setActionIcon(pointLightAction_, QStringLiteral("view_lit"));
     setActionIcon(sunLightAction_, QStringLiteral("view_lit"));
     for (QAction* action : viewActions_) {
@@ -1141,6 +1170,10 @@ void MainWindow::buildDocks() {
         createMenu->addAction(action);
     }
     createMenu->addSeparator();
+    for (QAction* action : std::as_const(prefabActions_)) {
+        createMenu->addAction(action);
+    }
+    createMenu->addSeparator();
     createMenu->addAction(caveAction_);
     createMenu->addAction(randomCaveAction_);
     createMenu->addSeparator();
@@ -1291,6 +1324,9 @@ void MainWindow::onSnapshot() {
         action->setEnabled(project);
     }
     for (QAction* action : {caveAction_, randomCaveAction_, importModelAction_, pointLightAction_, sunLightAction_, sculptLargerAction_, sculptSmallerAction_}) {
+        action->setEnabled(project);
+    }
+    for (QAction* action : std::as_const(prefabActions_)) {
         action->setEnabled(project);
     }
     sculptRadius_ = snapshot.value("sculpt").toObject().value(QStringLiteral("radius")).toDouble(sculptRadius_);

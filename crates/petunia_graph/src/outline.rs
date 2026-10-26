@@ -470,6 +470,12 @@ impl<'a> Outliner<'a> {
                     .first()
                     .map_or("falta", |text| text.trim_start_matches("Quantas vezes: "))
             ),
+            (NodeClass::Flow, "flow.wait") => format!(
+                "ESPERAR {} SEGUNDOS",
+                shown
+                    .first()
+                    .map_or("falta", |text| text.trim_start_matches("Segundos: "))
+            ),
             (NodeClass::Flow, "flow.each") => format!(
                 "PARA CADA ITEM EM {}",
                 shown

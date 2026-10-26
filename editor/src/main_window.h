@@ -146,6 +146,7 @@ private:
     QAction* importModelAction_ = nullptr;
     QAction* pointLightAction_ = nullptr;
     QAction* sunLightAction_ = nullptr;
+    QList<QAction*> prefabActions_;
     QAction* randomCaveAction_ = nullptr;
     QAction* sculptLargerAction_ = nullptr;
     QAction* sculptSmallerAction_ = nullptr;
