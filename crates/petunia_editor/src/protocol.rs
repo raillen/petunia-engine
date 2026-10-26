@@ -239,6 +239,10 @@ impl EditorSession {
             "face.end" => self.face_drag_end(),
             "face.cancel" => self.face_drag_cancel(),
             "brush.carve" => self.carve_selection(),
+            "collider.add" => {
+                self.add_collider(request.get("shape").and_then(Json::as_str).unwrap_or("box"))
+            }
+            "collider.fit" => self.fit_collider(),
             op if op.starts_with("mesh.") => self.mesh_request(op, request),
             "brush.hollow" => self.hollow_selection(),
             "floor.step" => {

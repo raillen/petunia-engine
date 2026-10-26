@@ -1,6 +1,7 @@
 #include "hierarchy_panel.h"
 
 #include <QHBoxLayout>
+#include <QHash>
 #include <QHeaderView>
 #include <QJsonObject>
 #include <QLabel>
@@ -103,20 +104,37 @@ void HierarchyPanel::reload() {
             QFont bold = root_->font(0);
             bold.setWeight(QFont::DemiBold);
             root_->setFont(0, bold);
+            // Objects first; then each collider under the object it belongs to.
+            QHash<quint64, QTreeWidgetItem*> items;
+            for (const bool parts : {false, true}) {
             for (const QJsonValue& value : entities) {
                 const QJsonObject entity = value.toObject();
+                const bool owned = entity.contains(QStringLiteral("owner"));
+                if (owned != parts) {
+                    continue;
+                }
                 const quint64 id = static_cast<quint64>(entity.value(QStringLiteral("id")).toDouble());
                 QStringList tables;
                 for (const QJsonValue& table : entity.value(QStringLiteral("tables")).toArray()) {
                     tables << table.toString();
                 }
-                auto* item = new QTreeWidgetItem(root_);
+                QTreeWidgetItem* parent = root_;
+                if (owned) {
+                    parent = items.value(static_cast<quint64>(entity.value(QStringLiteral("owner")).toDouble()), root_);
+                }
+                auto* item = new QTreeWidgetItem(parent);
+                items.insert(id, item);
                 item->setText(0, entity.value(QStringLiteral("name")).toString());
                 item->setText(1, QStringLiteral("#%1").arg(id));
                 item->setTextAlignment(1, Qt::AlignRight | Qt::AlignVCenter);
                 item->setData(0, kEntityRole, id);
                 item->setData(0, kIconRole, TableIcons::forEntity(tables));
-                item->setToolTip(0, QStringLiteral("#%1 · %2").arg(id).arg(tables.join(QStringLiteral(", "))));
+                item->setToolTip(0, owned ? QStringLiteral("Colisão #%1 (scripts a acham pelo nome)").arg(id)
+                                          : QStringLiteral("#%1 · %2").arg(id).arg(tables.join(QStringLiteral(", "))));
+                if (owned) {
+                    parent->setExpanded(true);
+                }
+            }
             }
             root_->setExpanded(true);
         }
@@ -153,9 +171,16 @@ void HierarchyPanel::applyFilter() {
         return;
     }
     const QString needle = filter_->text().trimmed();
+    // An object stays visible when it or one of its colliders matches.
     for (int row = 0; row < root_->childCount(); ++row) {
         QTreeWidgetItem* item = root_->child(row);
-        item->setHidden(!needle.isEmpty() && !item->text(0).contains(needle, Qt::CaseInsensitive));
+        bool any = needle.isEmpty() || item->text(0).contains(needle, Qt::CaseInsensitive);
+        for (int child = 0; child < item->childCount(); ++child) {
+            const bool match = needle.isEmpty() || item->child(child)->text(0).contains(needle, Qt::CaseInsensitive);
+            item->child(child)->setHidden(!match && !any);
+            any = any || match;
+        }
+        item->setHidden(!any);
     }
 }
 
@@ -166,9 +191,9 @@ void HierarchyPanel::syncSelection() {
         tree_->setCurrentItem(nullptr);
     } else {
         const quint64 wanted = bridge_->selection();
-        for (int row = 0; row < root_->childCount(); ++row) {
-            QTreeWidgetItem* item = root_->child(row);
-            if (item->data(0, kEntityRole).toULongLong() == wanted) {
+        for (QTreeWidgetItemIterator it(tree_); *it; ++it) {
+            QTreeWidgetItem* item = *it;
+            if (item != root_ && item->data(0, kEntityRole).toULongLong() == wanted) {
                 tree_->setCurrentItem(item);
                 tree_->scrollToItem(item);
                 break;

@@ -550,6 +550,18 @@ impl Simulation {
         direction: Vec3,
         max_distance: f32,
     ) -> Result<Option<RayHit>, PhysicsError> {
+        self.raycast_ignoring(origin, direction, max_distance, None)
+    }
+
+    /// Like [`Simulation::raycast`], skipping every collider of `ignored` (a ray that starts
+    /// inside an object would otherwise hit the object itself).
+    pub fn raycast_ignoring(
+        &self,
+        origin: Vec3,
+        direction: Vec3,
+        max_distance: f32,
+        ignored: Option<u64>,
+    ) -> Result<Option<RayHit>, PhysicsError> {
         check_vector("origem", origin, MAX_MAGNITUDE)?;
         check_vector("direção", direction, MAX_MAGNITUDE)?;
         if !max_distance.is_finite() || max_distance <= 0.0 || max_distance > MAX_MAGNITUDE {
@@ -564,7 +576,14 @@ impl Simulation {
             ));
         }
         let ray = rapier::Ray::new(vector(origin), vector(unit));
-        let filter = rapier::QueryFilter::default().exclude_sensors();
+        let mut filter = rapier::QueryFilter::default().exclude_sensors();
+        if let Some(entity) = ignored {
+            let handle = *self
+                .bodies
+                .get(&entity)
+                .ok_or(PhysicsError::UnknownBody(entity))?;
+            filter = filter.exclude_rigid_body(handle);
+        }
         let Some((handle, hit)) =
             self.world
                 .cast_ray_and_get_normal(&ray, max_distance, true, filter)
@@ -1007,6 +1026,20 @@ mod tests {
                 .is_none(),
             "nothing within 10 cm above the floor"
         );
+
+        // From inside the ball: itself first, unless it is ignored.
+        let down = Vec3::new(0.0, -1.0, 0.0);
+        let inside = simulation
+            .raycast(Vec3::new(0.0, 3.0, 0.0), down, 50.0)
+            .expect("ok")
+            .expect("hit");
+        assert_eq!(inside.collider.name, "bola");
+        let past = simulation
+            .raycast_ignoring(Vec3::new(0.0, 3.0, 0.0), down, 50.0, Some(2))
+            .expect("ok")
+            .expect("hit");
+        assert_eq!(past.collider.name, "chão");
+        assert!((past.distance - 3.0).abs() < 1.0e-3);
 
         let resting = floor_and_ball(0.4);
         let touching = resting.overlapping(20).expect("known collider");

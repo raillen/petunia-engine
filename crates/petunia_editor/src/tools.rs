@@ -881,15 +881,14 @@ impl EditorSession {
         color: Option<Color>,
         width_pixels: Option<f32>,
     ) -> Result<Json, Failure> {
-        if let Some(width) = width_pixels {
-            if !width.is_finite()
-                || !(OUTLINE_WIDTH_RANGE.0..=OUTLINE_WIDTH_RANGE.1).contains(&width)
-            {
-                return Err(Failure::bad_request(&format!(
-                    "a espessura do contorno vai de {} a {} pixels",
-                    OUTLINE_WIDTH_RANGE.0, OUTLINE_WIDTH_RANGE.1
-                )));
-            }
+        if let Some(width) = width_pixels
+            && (!width.is_finite()
+                || !(OUTLINE_WIDTH_RANGE.0..=OUTLINE_WIDTH_RANGE.1).contains(&width))
+        {
+            return Err(Failure::bad_request(&format!(
+                "a espessura do contorno vai de {} a {} pixels",
+                OUTLINE_WIDTH_RANGE.0, OUTLINE_WIDTH_RANGE.1
+            )));
         }
         if let Some(color) = color {
             self.outline.color = color;

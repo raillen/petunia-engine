@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 
 use aipo_vm::{Value, Vm};
-use petunia_math::{Transform, Vec3};
+use petunia_math::Vec3;
 use petunia_physics::{BodyKind, ContactEvent, PhysicsSettings, Simulation, describe};
 use petunia_world::{PersistentId, World};
 use serde_json::json;
@@ -50,12 +50,21 @@ impl PhysicsRuntime {
     ) -> Result<(Self, Vec<String>), String> {
         let scene = describe(world, &|owner| hulls.get(&owner).cloned());
         let simulation = scene.build(settings).map_err(|error| error.to_string())?;
-        let kinds = scene.bodies.iter().map(|body| (body.entity, body.kind)).collect();
+        let kinds = scene
+            .bodies
+            .iter()
+            .map(|body| (body.entity, body.kind))
+            .collect();
         let written = scene
             .bodies
             .iter()
             .filter(|body| body.kind != BodyKind::Static)
-            .map(|body| (body.entity, (body.transform.position, body.transform.rotation_degrees)))
+            .map(|body| {
+                (
+                    body.entity,
+                    (body.transform.position, body.transform.rotation_degrees),
+                )
+            })
             .collect();
         Ok((
             Self {
@@ -114,10 +123,11 @@ impl PhysicsRuntime {
                 continue;
             };
             let current = (transform.position, transform.rotation_degrees);
-            if self.written.get(&entity) != Some(&current) && world.is_alive(handle) {
-                if self.simulation.move_body(entity, &transform).is_ok() {
-                    self.written.insert(entity, current);
-                }
+            if self.written.get(&entity) != Some(&current)
+                && world.is_alive(handle)
+                && self.simulation.move_body(entity, &transform).is_ok()
+            {
+                self.written.insert(entity, current);
             }
         }
         self.accumulator += seconds.clamp(0.0, MAX_FRAME_SECONDS);
@@ -138,14 +148,20 @@ impl PhysicsRuntime {
             let Ok(handle) = world.handle_of(PersistentId(pose.entity)) else {
                 continue;
             };
-            let _ = world.set(handle, "Transform", "position", petunia_world::Value::Vec3(pose.position));
+            let _ = world.set(
+                handle,
+                "Transform",
+                "position",
+                petunia_world::Value::Vec3(pose.position),
+            );
             let _ = world.set(
                 handle,
                 "Transform",
                 "rotation_degrees",
                 petunia_world::Value::Vec3(pose.rotation_degrees),
             );
-            self.written.insert(pose.entity, (pose.position, pose.rotation_degrees));
+            self.written
+                .insert(pose.entity, (pose.position, pose.rotation_degrees));
         }
         problems
     }
@@ -184,7 +200,10 @@ fn find_collider(world: &World, owner: u64, name: &str) -> Result<u64, String> {
             if names.is_empty() {
                 format!("o objeto {owner} não tem colisões")
             } else {
-                format!("o objeto {owner} não tem a colisão `{name}` (tem: {})", names.join(", "))
+                format!(
+                    "o objeto {owner} não tem a colisão `{name}` (tem: {})",
+                    names.join(", ")
+                )
             }
         })
 }
@@ -193,17 +212,29 @@ fn vector_arg(args: &[Value], index: usize, operation: &str) -> Result<Vec3, aip
     let Some(value) = args.get(index) else {
         return Err(internal("faltou o argumento"));
     };
-    let json = value_to_json(value);
+    let Ok(json) = value_to_json(value) else {
+        return Err(wrong_type(
+            &format!("Dict {{x, y, z}} em {operation}"),
+            value,
+        ));
+    };
     let component = |axis: &str| json.get(axis).and_then(serde_json::Value::as_f64);
     match (component("x"), component("y"), component("z")) {
         (Some(x), Some(y), Some(z)) if x.is_finite() && y.is_finite() && z.is_finite() => {
             Ok(Vec3::new(x as f32, y as f32, z as f32))
         }
-        _ => Err(wrong_type(&format!("Dict {{x, y, z}} em {operation}"), value)),
+        _ => Err(wrong_type(
+            &format!("Dict {{x, y, z}} em {operation}"),
+            value,
+        )),
     }
 }
 
-fn with_physics<T>(cell: &GameCell, operation: &str, work: impl FnOnce(&mut PhysicsRuntime, &World) -> Result<T, String>) -> Result<T, String> {
+fn with_physics<T>(
+    cell: &GameCell,
+    operation: &str,
+    work: impl FnOnce(&mut PhysicsRuntime, &World) -> Result<T, String>,
+) -> Result<T, String> {
     let mut state = cell.0.borrow_mut();
     let GameState { world, physics, .. } = &mut *state;
     match physics {
@@ -221,7 +252,10 @@ pub(crate) fn collision_list(vm: &mut Vm, args: &[Value]) -> Native {
     if state.world.handle_of(PersistentId(entity)).is_err() {
         return failure(format!("o objeto {entity} não existe"));
     }
-    let names = colliders_of(&state.world, entity).into_iter().map(|(_, name)| Value::string(name)).collect::<Vec<_>>();
+    let names = colliders_of(&state.world, entity)
+        .into_iter()
+        .map(|(_, name)| Value::string(name))
+        .collect::<Vec<_>>();
     Ok(Value::list(names))
 }
 
@@ -237,7 +271,11 @@ pub(crate) fn collision_get(vm: &mut Vm, args: &[Value]) -> Native {
     let Ok(handle) = state.world.handle_of(PersistentId(id)) else {
         return failure(format!("a colisão {id} não existe"));
     };
-    match state.world.row_to_json(handle, "Collider") {
+    let values = match state.world.row(handle, "Collider") {
+        Ok(values) => values,
+        Err(error) => return failure(error.to_string()),
+    };
+    match state.world.row_to_json("Collider", values) {
         Ok(mut row) => {
             row.insert("collider".to_string(), json!(id));
             Ok(json_to_value(&serde_json::Value::Object(row)))
@@ -269,7 +307,10 @@ pub(crate) fn collision_set(vm: &mut Vm, args: &[Value]) -> Native {
     match run_command(
         &cell,
         "world.set",
-        json!({ "entity": id, "table": "Collider", "column": column, "value": value_to_json(value) }),
+        json!({ "entity": id, "table": "Collider", "column": column, "value": match value_to_json(value) {
+            Ok(json) => json,
+            Err(message) => return failure(message),
+        } }),
     ) {
         Ok(_) => {
             if let Some(runtime) = cell.0.borrow_mut().physics.as_mut() {
@@ -287,7 +328,10 @@ pub(crate) fn collision_overlaps(vm: &mut Vm, args: &[Value]) -> Native {
     let name = text_arg(args, 1, "collision.overlaps")?;
     let found = with_physics(&cell, "collision.overlaps", |runtime, world| {
         let id = find_collider(world, entity, &name)?;
-        runtime.simulation.overlapping(id).map_err(|error| error.to_string())
+        runtime
+            .simulation
+            .overlapping(id)
+            .map_err(|error| error.to_string())
     });
     match found {
         Ok(found) => Ok(json_to_value(&json!(
@@ -308,8 +352,31 @@ pub(crate) fn physics_raycast(vm: &mut Vm, args: &[Value]) -> Native {
     let direction = vector_arg(args, 1, "physics.raycast")?;
     let distance = float_arg(args, 2, "physics.raycast")?;
     let hit = with_physics(&cell, "physics.raycast", |runtime, _| {
-        runtime.simulation.raycast(origin, direction, distance).map_err(|error| error.to_string())
+        runtime
+            .simulation
+            .raycast(origin, direction, distance)
+            .map_err(|error| error.to_string())
     });
+    hit_value(hit)
+}
+
+/// A ray from an object's position that ignores the object's own colliders.
+pub(crate) fn physics_raycast_from(vm: &mut Vm, args: &[Value]) -> Native {
+    let cell = context(vm, "world.read", "physics.raycast_from")?;
+    let entity = entity_arg(args, 0, "physics.raycast_from")?;
+    let direction = vector_arg(args, 1, "physics.raycast_from")?;
+    let distance = float_arg(args, 2, "physics.raycast_from")?;
+    let hit = with_physics(&cell, "physics.raycast_from", |runtime, world| {
+        let origin = read_transform(world, entity)?.position;
+        runtime
+            .simulation
+            .raycast_ignoring(origin, direction, distance, Some(entity))
+            .map_err(|error| error.to_string())
+    });
+    hit_value(hit)
+}
+
+fn hit_value(hit: Result<Option<petunia_physics::RayHit>, String>) -> Native {
     match hit {
         Ok(Some(hit)) => Ok(json_to_value(&json!({
             "entity": hit.collider.owner,
@@ -327,7 +394,10 @@ pub(crate) fn physics_velocity(vm: &mut Vm, args: &[Value]) -> Native {
     let cell = context(vm, "world.read", "physics.velocity")?;
     let entity = entity_arg(args, 0, "physics.velocity")?;
     match with_physics(&cell, "physics.velocity", |runtime, _| {
-        runtime.simulation.velocity(entity).map_err(|error| error.to_string())
+        runtime
+            .simulation
+            .velocity(entity)
+            .map_err(|error| error.to_string())
     }) {
         Ok(velocity) => Ok(vec3_to_value(velocity)),
         Err(message) => failure(message),
@@ -339,7 +409,10 @@ pub(crate) fn physics_set_velocity(vm: &mut Vm, args: &[Value]) -> Native {
     let entity = entity_arg(args, 0, "physics.set_velocity")?;
     let velocity = vector_arg(args, 1, "physics.set_velocity")?;
     match with_physics(&cell, "physics.set_velocity", |runtime, _| {
-        runtime.simulation.set_velocity(entity, velocity).map_err(|error| error.to_string())
+        runtime
+            .simulation
+            .set_velocity(entity, velocity)
+            .map_err(|error| error.to_string())
     }) {
         Ok(()) => Ok(Value::None),
         Err(message) => failure(message),
@@ -351,15 +424,12 @@ pub(crate) fn physics_impulse(vm: &mut Vm, args: &[Value]) -> Native {
     let entity = entity_arg(args, 0, "physics.impulse")?;
     let impulse = vector_arg(args, 1, "physics.impulse")?;
     match with_physics(&cell, "physics.impulse", |runtime, _| {
-        runtime.simulation.apply_impulse(entity, impulse).map_err(|error| error.to_string())
+        runtime
+            .simulation
+            .apply_impulse(entity, impulse)
+            .map_err(|error| error.to_string())
     }) {
         Ok(()) => Ok(Value::None),
         Err(message) => failure(message),
     }
-}
-
-/// The transform the host keeps in step with (used by tests).
-#[cfg(test)]
-pub(crate) fn transform_of(world: &World, entity: u64) -> Option<Transform> {
-    read_transform(world, entity).ok()
 }

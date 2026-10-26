@@ -115,6 +115,9 @@ Se algo falha, a resposta explica o que fazer:
 | `floor.step` · `floor.height` | `delta` / `meters` | Sobe ou desce o **andar** (grade e criação); além do último, **cria** o andar (um desfazer) |
 | `floor.select` · `floor.above` | `entity` / `mode` (`ghost`, `hide`, `show`) | Vai a um andar da lista; como aparecem os objetos acima dele |
 | `viewport.overlay` | `width`, `height` | Modelo em pixels do gizmo, guias, marcadores, painel do gesto e eixos da câmera |
+| `viewport.outline_style` | `color` `{r,g,b}` (0 a 1), `width` (1 a 8 px) | Cor e espessura do contorno da seleção (preferência do editor, não é comando) |
+| `collider.add` | `shape` (`box`, `sphere`, `capsule`, `convex`) | Colisão com nome no objeto selecionado, ajustada a ele; nome livre ("colisão", "colisão 2"…); um passo de desfazer |
+| `collider.fit` | — | A colisão selecionada volta a envolver o objeto |
 | `camera.view_direction` · `camera.yaw` · `camera.orbit` · `camera.projection` | `x`, `y`, `z` / `degrees` / `dx`, `dy` / `mode`, `height` | Usados pelo cubo de navegação e menus de projeção |
 
 ## Layout da janela
@@ -145,6 +148,10 @@ As regras de tamanho, cor e texto estão em [design da interface](15-design-da-i
 **Paleta de comandos** (`Ctrl+K` ou `Ctrl+Shift+P`): digite parte do nome, em qualquer ordem de letras ("cvr" acha "Caverna"); `↑ ↓` escolhem, `Enter` executa, `Esc` fecha. Os comandos usados por último aparecem primeiro.
 
 **Exibir > Menus por extenso na barra** troca o `≡` pelos nomes dos menus. Cada workspace lembra quais painéis estavam abertos e o tamanho deles.
+
+**Preferências** (`Ctrl+,`, menu Editar): tema, densidade e o **contorno da seleção** (cor e espessura). O contorno gira com o objeto.
+
+**Colisões** (DR-27): *Adicionar colisão* no inspetor ou em **Operações › Colisão** (e na paleta). Elas aparecem **sob o objeto** na Hierarquia e em **verde** no viewport (gatilhos em amarelo; a selecionada mais clara). Clique numa para editar centro, tamanho, raio, altura, gatilho, atrito e quique; `⋯` › *Ajustar ao objeto*. Duplicar e excluir o objeto levam as colisões junto. O corpo físico é a tabela **Corpo físico** (`RigidBody`): *Adicionar tabela*.
 
 **Não há botão Jogar**: o modo Jogar ainda não existe, e um botão sem efeito engana.
 

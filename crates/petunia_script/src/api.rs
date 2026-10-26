@@ -84,7 +84,12 @@ pub const API: &[ApiFunction] = &[
     ApiFunction {
         module: "collision",
         name: "set",
-        params: &[("entity", "Int"), ("name", "String"), ("column", "String"), ("value", "Value")],
+        params: &[
+            ("entity", "Int"),
+            ("name", "String"),
+            ("column", "String"),
+            ("value", "Value"),
+        ],
         returns: "None",
         summary: "Muda uma coluna de uma colisão (validado como no inspetor; a física se refaz no próximo quadro).",
         permission: "world.write",
@@ -104,11 +109,29 @@ pub const API: &[ApiFunction] = &[
     ApiFunction {
         module: "physics",
         name: "raycast",
-        params: &[("origin", "Dict"), ("direction", "Dict"), ("distance", "Float")],
+        params: &[
+            ("origin", "Dict"),
+            ("direction", "Dict"),
+            ("distance", "Float"),
+        ],
         returns: "Value",
         summary: "O primeiro objeto sólido na linha: {entity, collider, point, normal, distance}, ou nada.",
         permission: "world.read",
         example: "let alvo = physics.raycast(transform.get_position(entity), transform.forward(entity), 20.0)",
+        variadic: false,
+    },
+    ApiFunction {
+        module: "physics",
+        name: "raycast_from",
+        params: &[
+            ("entity", "Int"),
+            ("direction", "Dict"),
+            ("distance", "Float"),
+        ],
+        returns: "Value",
+        summary: "Um raio que sai da posição do objeto e ignora as colisões dele mesmo (para olhar ao redor).",
+        permission: "world.read",
+        example: "let chao = physics.raycast_from(entity, {\"x\": 0.0, \"y\": -1.0, \"z\": 0.0}, 2.0)",
         variadic: false,
     },
     ApiFunction {

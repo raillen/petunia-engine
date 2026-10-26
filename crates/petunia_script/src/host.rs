@@ -110,6 +110,7 @@ fn callback_for(module: &str, name: &str) -> Option<HostNativeCallback> {
         ("collision", "set") => physics_api::collision_set,
         ("collision", "overlaps") => physics_api::collision_overlaps,
         ("physics", "raycast") => physics_api::physics_raycast,
+        ("physics", "raycast_from") => physics_api::physics_raycast_from,
         ("physics", "velocity") => physics_api::physics_velocity,
         ("physics", "set_velocity") => physics_api::physics_set_velocity,
         ("physics", "impulse") => physics_api::physics_impulse,
@@ -530,7 +531,10 @@ impl ScriptHost {
                 petunia_physics::ContactPhase::Started => "on_collision",
                 petunia_physics::ContactPhase::Stopped => "on_collision_end",
             };
-            for (mine, theirs) in [(&contact.first, &contact.second), (&contact.second, &contact.first)] {
+            for (mine, theirs) in [
+                (&contact.first, &contact.second),
+                (&contact.second, &contact.first),
+            ] {
                 if mine.owner == theirs.owner || self.disabled.contains(&mine.owner) {
                     continue;
                 }
@@ -539,7 +543,11 @@ impl ScriptHost {
                         mine.owner,
                         &script,
                         handler,
-                        &[Value::Int(theirs.owner as i64), Value::string(mine.name.clone()), Value::string(theirs.name.clone())],
+                        &[
+                            Value::Int(theirs.owner as i64),
+                            Value::string(mine.name.clone()),
+                            Value::string(theirs.name.clone()),
+                        ],
                     );
                 }
             }

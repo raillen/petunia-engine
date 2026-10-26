@@ -177,6 +177,8 @@ private:
     QAction* primitivesMenuAction_ = nullptr;
     QAction* aboutAction_ = nullptr;
     QAction* preferencesAction_ = nullptr;
+    // Operações > Colisão: add a named collider of each shape, fit the selected one (DR-27).
+    QList<QAction*> colliderActions_;
 
     QList<QPair<QAction*, QString>> iconActions_;
     QList<QPair<QToolButton*, QString>> iconButtons_;

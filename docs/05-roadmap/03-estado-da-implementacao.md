@@ -10,7 +10,23 @@ O essencial foi verificado **em display virtual** (nada apareceu na sua tela), c
 
 Três análises novas pedem a sua decisão: [paridade da interface](../02-arquitetura/12-paridade-ui-petunia3d.md), [edição de malha](../02-arquitetura/13-primitivas-e-edicao-de-malha.md) e [pintura e animação](../01-pesquisa/07-pintura-e-animacao.md).
 
-## Última etapa: edição de malha do Petunia3D (2026-10-25)
+## Última etapa: contorno girado e colisão com física (2026-10-25)
+
+| O quê | Verificação |
+|---|---|
+| **Contorno da seleção acompanha a rotação** (caixa no espaço do objeto); cor e espessura em **Preferências** (`Ctrl+,`) | 1 teste (arestas inclinadas, estilo aplicado, limites recusados) + **visto (display virtual)** |
+| Crate **`petunia_physics`** (Rapier 0.36.1, determinístico) e leitor de cena ([DR-27](../06-decisoes/registro-de-decisoes.md)) | **10 testes** |
+| Tabelas `Collider` (várias **com nome** por objeto) e `RigidBody` | leitor de cena testado |
+| Script Host: física por quadro, `on_collision`, `collision.*`, `physics.*` (inclui `raycast_from`) | **4 testes** pelo script |
+| Editor: adicionar (caixa, esfera, cápsula, convexa), ajustar, listar sob o objeto, desenhar em verde, duplicar e excluir com o objeto | 1 teste de fluxo + **visto (display virtual)** |
+| `petunia run` liga a física quando há colisões | compila; **não rodou com janela** |
+| Workspace inteiro | **326 testes, 0 falhas**; clippy `-D warnings` e fmt ok; teste de fumaça **8/8** |
+
+**Atenção, verificação:** existe uma cópia do projeto (`~/Documentos/Projetos/petunia-engine-system-modules`) com a **mesma pasta de build**. Por isso os números acima saíram de pastas isoladas (`/tmp/petunia-ui-target`, `/tmp/petunia-ui-editor`).
+
+**Não verificado:** a sua sessão real; o jogo com física numa janela; alças no viewport para redimensionar colisões (hoje pelo inspetor).
+
+## Antes: edição de malha do Petunia3D (2026-10-25)
 
 Booleanos (fundir, cortar, interseção), inset, extrudar, loop cut, bevel, subdividir, dissolver, fundir vértices, apagar e virar faces, faca. Decisão: [DR-22](../06-decisoes/registro-de-decisoes.md) (a malha pronta fica guardada na cena). Detalhes: [edição de malha](../02-arquitetura/13-primitivas-e-edicao-de-malha.md#nível-3-o-que-foi-feito-2026-10-25).
 
@@ -30,7 +46,7 @@ Booleanos (fundir, cortar, interseção), inset, extrudar, loop cut, bevel, subd
 
 **Não verificado:** nada disso foi **visto** em janela (nem no display virtual), porque a interface Qt ainda não tem os botões. Os ganchos que faltam estão [listados aqui](../02-arquitetura/13-primitivas-e-edicao-de-malha.md#ganchos-da-interface-que-faltam). Malhas acima de 6,5 mil vértices ainda não foram medidas.
 
-## Última etapa: design da interface, workspaces e paleta de comandos (2026-10-25)
+## Antes: design da interface, workspaces e paleta de comandos (2026-10-25)
 
 Pesquisa e regras em [design da interface](../02-arquitetura/15-design-da-interface.md); decisão [DR-26](../06-decisoes/registro-de-decisoes.md) (revista).
 

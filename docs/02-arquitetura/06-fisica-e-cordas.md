@@ -2,6 +2,18 @@
 
 **Revisão:** 2026-10-24 · **Estado:** proposta; precisa do experimento S6
 
+## O que já existe (2026-10-25, DR-27)
+
+| Parte | Estado |
+|---|---|
+| Crate **`petunia_physics`**: adaptador do Rapier 0.36.1 (determinístico); só tipos do Petunia na API | 10 testes (queda, gatilho, raio, sobreposição, convexa e cápsula com escala, entrada hostil, determinismo bit a bit, cinemático) |
+| Tabelas **`Collider`** (várias com nome por objeto, cada uma é uma entidade com `owner`) e **`RigidBody`** (`static`, `dynamic`, `kinematic`) | leitor de cena testado (colisões quebradas viram aviso com o número do objeto) |
+| Script Host: passo fixo de 1/60 s, até 8 passos por quadro, poses de volta no `Transform`, `on_collision` / `on_collision_end`, API `collision.*` e `physics.*` | 4 testes pelo script |
+| `petunia run` liga a física quando há colisões ou corpos | compila; **não rodou com janela** |
+| Editor: adicionar, ajustar, listar sob o objeto, desenhar, duplicar e excluir colisões | 1 teste de fluxo + **visto (display virtual)** |
+
+**Ainda não:** alças no viewport para redimensionar a colisão (hoje pelo inspetor), camadas e máscaras de colisão, personagem cinemático com degraus, juntas, cordas (XPBD) e simular a física dentro do editor.
+
 ## Resumo (TL;DR)
 
 **Física leve** significa: corpos simples, personagem com controle próprio, gatilhos, raios e **orçamento**. Sem veículos, ragdolls ou destruição na versão 1.

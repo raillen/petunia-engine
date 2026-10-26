@@ -531,8 +531,10 @@ impl EditorSession {
                 json!({ "tags": snapshot.tags, "rows": rows }),
             )
         };
-        // A cave is copied with its strokes, pointing at the copy: one batch, one undo step.
-        let strokes = self.copy_strokes_records(id, 0);
+        // A cave is copied with its strokes and an object with its colliders, pointing at the
+        // copy: one batch, one undo step.
+        let mut strokes = self.copy_strokes_records(id, 0);
+        strokes.extend(self.copy_collider_records(id, 0));
         if strokes.is_empty() {
             return self.create_and_select(&record);
         }
@@ -560,12 +562,13 @@ impl EditorSession {
     /// Removes the selected entity (undoable).
     pub fn delete_selection(&mut self) -> Result<Json, Failure> {
         let id = self.selection.ok_or_else(no_selection)?;
-        // A cave goes with its strokes, as one undo step.
+        // A cave goes with its strokes and an object with its colliders, as one undo step.
         let mut records: Vec<CommandRecord> = self
             .strokes_of(id)
             .into_iter()
             .map(|stroke| CommandRecord::new("world.remove", json!({ "entity": stroke })))
             .collect();
+        records.extend(self.remove_collider_records(id));
         records.push(CommandRecord::new("world.remove", json!({ "entity": id })));
         let record = if records.len() == 1 {
             records.remove(0)
@@ -662,6 +665,7 @@ impl EditorSession {
         frame.overlay = self.outline_overlay(&frame);
         self.sculpt_overlay(&mut frame.overlay);
         self.mesh_overlay(&mut frame.overlay);
+        self.collider_overlay(&frame.items, &mut frame.overlay);
         frame.show_grid = true;
         frame.grid_height = self.floor_elevation();
         Some(frame)
@@ -717,6 +721,16 @@ impl EditorSession {
             if tables.iter().any(|table| table == "SculptStroke") {
                 continue;
             }
+            // A collider is listed under its object, by its own name.
+            if let Some(owner) = crate::colliders::owner_of(world, identity.0) {
+                entities.push(json!({
+                    "id": identity.0,
+                    "name": crate::colliders::collider_name(world, identity.0).unwrap_or_default(),
+                    "tables": tables,
+                    "owner": owner,
+                }));
+                continue;
+            }
             entities.push(json!({
                 "id": identity.0,
                 "name": display_name(world, identity.0),
@@ -733,9 +747,10 @@ impl EditorSession {
             },
             "entities": entities,
             "entity_count": world.entity_count(),
-            // What people count as objects: cave strokes are part of their cave.
+            // What people count as objects: cave strokes and colliders are parts of something.
             "object_count": world.entity_count().saturating_sub(
                 world.entities_with_table("SculptStroke").map_or(0, |strokes| strokes.len())
+                    + world.entities_with_table("Collider").map_or(0, |colliders| colliders.len())
             ),
             "truncated": truncated,
             "selection": self.selection,
@@ -781,22 +796,32 @@ impl EditorSession {
                     entry.insert("name".to_string(), json!(column.name));
                     entry.insert("kind".to_string(), json!(column.kind.as_str()));
                     entry.insert("value".to_string(), value.to_json());
-                    if table == "Brush" && column.name == "shape" {
-                        entry.insert("choices".to_string(), json!(petunia_project::BRUSH_SHAPES));
+                    let choices: Option<&[&str]> = match (table.as_str(), column.name.as_str()) {
+                        ("Brush", "shape") => Some(&petunia_project::BRUSH_SHAPES),
+                        ("Collider", "shape") => Some(&petunia_project::COLLIDER_SHAPES),
+                        ("RigidBody", "kind") => Some(&petunia_project::BODY_KINDS),
+                        _ => None,
+                    };
+                    if let Some(choices) = choices {
+                        entry.insert("choices".to_string(), json!(choices));
                     }
                     Json::Object(entry)
                 })
                 .collect();
             tables.push(json!({ "name": table, "columns": columns }));
         }
+        // Parts that belong to another object are added from that object ("Adicionar colisão",
+        // the sculpting tool), never as a table here: they would point at nothing.
         let addable: Vec<String> = world
             .table_names()
             .into_iter()
             .filter(|name| !snapshot.rows.contains_key(name))
+            .filter(|name| !matches!(name.as_str(), "Collider" | "SculptStroke"))
             .collect();
         Ok(json!({
             "id": entity,
-            "name": display_name(world, entity),
+            "name": crate::colliders::collider_name(world, entity)
+                .unwrap_or_else(|| display_name(world, entity)),
             "tags": snapshot.tags,
             "tables": tables,
             "addable_tables": addable,

@@ -8,6 +8,7 @@
 // Creating a GL context and surface is `unsafe` in glutin; this adapter is where that is allowed.
 #![allow(unsafe_code)]
 
+use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Instant;
@@ -21,9 +22,11 @@ use glutin::prelude::*;
 use glutin::surface::{Surface, SwapInterval, WindowSurface};
 use glutin_winit::{DisplayBuilder, GlWindow};
 use petunia_input::{ActionMap, ActionState, actions};
-use petunia_render::{FlyCamera, SculptCache, extract_frame, extract_sculpt_volumes, start_camera};
+use petunia_render::{
+    Camera, FlyCamera, SculptCache, extract_frame, extract_sculpt_volumes, item_mesh, start_camera,
+};
 use petunia_render_gl::GlRenderer;
-use petunia_script::{LoadReport, ScriptHost};
+use petunia_script::{LoadReport, PhysicsSettings, ScriptHost};
 use petunia_world::World;
 use raw_window_handle::HasWindowHandle;
 use winit::application::ApplicationHandler;
@@ -115,20 +118,38 @@ impl App {
     #[allow(clippy::print_stderr)]
     fn new(world: World, config: PlayerConfig) -> Self {
         let fly = start_camera(&world);
-        let scene = match config
-            .scripts
-            .as_deref()
-            .map(|folder| (ScriptHost::new(world.clone()), folder))
-        {
-            Some((Ok(mut host), folder)) => {
-                report_scripts(&host.load_directory(folder));
-                Scene::Scripted(Box::new(host))
+        // Colliders or bodies turn physics on, with or without scripts.
+        let physical = ["Collider", "RigidBody"].iter().any(|table| {
+            !world
+                .entities_with_table(table)
+                .unwrap_or_default()
+                .is_empty()
+        });
+        let scene = if config.scripts.is_none() && !physical {
+            Scene::Plain(world)
+        } else {
+            match ScriptHost::new(world.clone()) {
+                Ok(mut host) => {
+                    if let Some(folder) = config.scripts.as_deref() {
+                        report_scripts(&host.load_directory(folder));
+                    }
+                    if physical {
+                        match host.attach_physics(PhysicsSettings::default(), hull_points(&world)) {
+                            Ok(problems) => {
+                                for problem in problems {
+                                    eprintln!("física: {problem}");
+                                }
+                            }
+                            Err(message) => eprintln!("física desligada: {message}"),
+                        }
+                    }
+                    Scene::Scripted(Box::new(host))
+                }
+                Err(message) => {
+                    eprintln!("scripts e física desligados: {message}");
+                    Scene::Plain(world)
+                }
             }
-            Some((Err(message), _)) => {
-                eprintln!("scripts desligados: {message}");
-                Scene::Plain(world)
-            }
-            None => Scene::Plain(world),
         };
         Self {
             scene,
@@ -364,6 +385,24 @@ fn create_graphics(
 
 /// Scripts that did not load are said once, at the start.
 // The player is the program the person sees: its console is the terminal it was started from.
+/// Points of every drawn object's mesh in its own coordinates, for `convex` colliders on brushes
+/// (the physics crate does not know how a brush shape becomes a mesh; the renderer does).
+fn hull_points(world: &World) -> BTreeMap<u64, Vec<petunia_math::Vec3>> {
+    extract_frame(world, Camera::default())
+        .items
+        .iter()
+        .filter_map(|item| {
+            let mesh = item_mesh(item).ok()?;
+            let points = mesh
+                .positions
+                .iter()
+                .map(|[x, y, z]| petunia_math::Vec3::new(*x, *y, *z))
+                .collect();
+            Some((item.entity, points))
+        })
+        .collect()
+}
+
 #[allow(clippy::print_stderr)]
 fn report_scripts(report: &LoadReport) {
     for (name, diagnostics) in &report.failed {
