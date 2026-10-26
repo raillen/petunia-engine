@@ -42,6 +42,14 @@ pub const BODY_KINDS: [&str; 3] = ["static", "dynamic", "kinematic"];
 ///   total `height`) or `convex` (the hull of the owner's mesh). `center` and `rotation_degrees`
 ///   place it in the owner's own axes; the owner's scale stretches it. A `trigger` reports contacts
 ///   but nothing bumps into it. `friction` and `restitution` (0 to 1, bounce) are for contacts.
+///   `layer` and `mask` are bit sets (a whole number): the collider is on the layers whose bits
+///   are set in `layer` and only touches colliders whose `layer` shares a bit with its `mask`
+///   (layer 1 and a full mask is "everything touches everything").
+/// - `Character`: makes an object walk (DR-28). It needs a solid collider (a capsule is best) and
+///   gets a kinematic body. `speed` is meters per second, `jump_speed` the upward speed of a jump,
+///   `step_height` the tallest step it climbs, `max_slope_degrees` the steepest slope it walks up,
+///   `coyote_seconds` how long a jump still works after leaving a ledge (accessibility aid) and
+///   `gravity_scale` its gravity. `player` makes the keyboard drive it in Play mode.
 /// - `RigidBody`: makes an object move with physics. `kind` is `static`, `dynamic` (gravity and
 ///   contacts) or `kinematic` (moved by the game, pushes others). `mass` in kilograms,
 ///   `gravity_scale` (1 normal, 0 floats), damping, and `lock_rotation` to keep it upright.
@@ -136,7 +144,19 @@ pub fn register_standard_tables(world: &mut World) -> Result<(), WorldError> {
             .column("height", ValueKind::Float, Value::Float(2.0))
             .column("trigger", ValueKind::Bool, Value::Bool(false))
             .column("friction", ValueKind::Float, Value::Float(0.5))
-            .column("restitution", ValueKind::Float, Value::Float(0.0)),
+            .column("restitution", ValueKind::Float, Value::Float(0.0))
+            .column("layer", ValueKind::Int, Value::Int(1))
+            .column("mask", ValueKind::Int, Value::Int(4_294_967_295)),
+    )?;
+    world.define_table(
+        TableSpec::new("Character")
+            .column("speed", ValueKind::Float, Value::Float(5.0))
+            .column("jump_speed", ValueKind::Float, Value::Float(6.5))
+            .column("step_height", ValueKind::Float, Value::Float(0.4))
+            .column("max_slope_degrees", ValueKind::Float, Value::Float(50.0))
+            .column("coyote_seconds", ValueKind::Float, Value::Float(0.12))
+            .column("gravity_scale", ValueKind::Float, Value::Float(1.0))
+            .column("player", ValueKind::Bool, Value::Bool(false)),
     )?;
     world.define_table(
         TableSpec::new("RigidBody")

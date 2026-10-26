@@ -19,6 +19,8 @@
 #include <QFormLayout>
 #include <QFrame>
 #include <QSlider>
+#include <QSet>
+#include <QStyle>
 #include <QHBoxLayout>
 #include <QFileDialog>
 #include <QInputDialog>
@@ -92,6 +94,19 @@ MainWindow::MainWindow() : bridge_(std::make_unique<EngineBridge>()) {
     connect(bridge_.get(), &EngineBridge::snapshotChanged, this, &MainWindow::onSnapshot);
     connect(viewport_, &ViewportWidget::selectionChanged, this, [this] { bridge_->refresh(); });
     connect(viewport_, &ViewportWidget::cameraChanged, this, &MainWindow::updateCameraLabel);
+    connect(viewport_, &ViewportWidget::playStopRequested, this, &MainWindow::stopPlay);
+    connect(viewport_, &ViewportWidget::playOutput, this, [this](const QJsonArray& log, const QJsonArray& faults) {
+        for (const QJsonValue& value : log) {
+            const QJsonObject line = value.toObject();
+            code_->appendConsole(QStringLiteral("[%1] %2").arg(line.value("level").toString(), line.value("text").toString()));
+        }
+        for (const QJsonValue& value : faults) {
+            const QJsonObject fault = value.toObject();
+            const QString text = QStringLiteral("%1.%2: %3").arg(fault.value("script").toString(), fault.value("function").toString(), fault.value("message").toString());
+            code_->appendConsole(QStringLiteral("[erro] %1").arg(text));
+            statusBar()->showMessage(QStringLiteral("Erro no script: %1").arg(text), 8000);
+        }
+    });
     connect(viewport_, &ViewportWidget::gizmoPreviewed, this, [this] {
         inspector_->reload();
         updateCameraLabel();
@@ -309,6 +324,11 @@ void MainWindow::buildActions() {
     paletteAction_ = make(QStringLiteral("Buscar comando…"), QStringLiteral("Acha qualquer comando pelo nome e executa (Ctrl+K)"));
     paletteAction_->setShortcuts({QKeySequence(Qt::CTRL | Qt::Key_K), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_P)});
     paletteAction_->setShortcutContext(Qt::ApplicationShortcut);
+    playAction_ = make(QStringLiteral("Jogar"), QStringLiteral("Roda a cena numa cópia, com scripts, física e o personagem do jogador (F6). Parar descarta a cópia"));
+    playAction_->setShortcut(QKeySequence(Qt::Key_F6));
+    playAction_->setShortcutContext(Qt::ApplicationShortcut);
+    playAction_->setProperty("iconName", QStringLiteral("play"));
+    connect(playAction_, &QAction::triggered, this, &MainWindow::togglePlay);
     caveAction_ = make(QStringLiteral("Caverna"), QStringLiteral("Um bloco de rocha com um primeiro túnel; esculpa com a ferramenta Esculpir (B)"));
     caveAction_->setProperty("iconName", QStringLiteral("generate_volume"));
     randomCaveAction_ = make(QStringLiteral("Caverna aleatória"), QStringLiteral("Um bloco de rocha com salas e túneis sinuosos gerados por uma semente; tudo vira traços editáveis"));
@@ -554,6 +574,7 @@ void MainWindow::buildMenus() {
     viewMenu_ = view;
     view->addAction(paletteAction_);
     view->addSeparator();
+    view->addAction(playAction_);
     view->addAction(sceneAction_);
     view->addAction(codeAction_);
     view->addSeparator();
@@ -730,6 +751,14 @@ void MainWindow::buildAppBar() {
         (id == QLatin1String("code") ? codeAction_ : sceneAction_)->trigger();
     });
     layout->addWidget(workspaces_);
+    layout->addSpacing(8);
+    playButton_ = new QToolButton(bar);
+    playButton_->setProperty("role", QStringLiteral("play"));
+    playButton_->setDefaultAction(playAction_);
+    playButton_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    playButton_->setIconSize(QSize(14, 14));
+    playButton_->setAutoRaise(false);
+    layout->addWidget(playButton_);
     layout->addStretch(1);
 
     // The command search, visible so it is not a secret shortcut.
@@ -773,6 +802,11 @@ void MainWindow::buildAppBar() {
     setActionIcon(sceneAction_, QStringLiteral("cube"));
     setActionIcon(paletteAction_, QStringLiteral("search"));
     setActionIcon(preferencesAction_, QStringLiteral("settings"));
+    playAction_->setIcon(PetuniaIcons::get(QStringLiteral("play"), PetuniaTheme::instance().textActive().name()));
+    connect(&PetuniaTheme::instance(), &PetuniaTheme::changed, this, [this] {
+        playAction_->setIcon(PetuniaIcons::get(viewport_->isPlaying() ? QStringLiteral("stop") : QStringLiteral("play"),
+                                               PetuniaTheme::instance().textActive().name()));
+    });
     setActionIcon(newAction_, QStringLiteral("new_file"));
     setActionIcon(openAction_, QStringLiteral("open_project"));
     setActionIcon(caveAction_, QStringLiteral("generate_volume"));
@@ -1306,6 +1340,87 @@ void MainWindow::refreshIcons() {
     }
     for (const auto& pair : std::as_const(iconButtons_)) {
         pair.first->setIcon(PetuniaIcons::get(pair.second));
+    }
+}
+
+void MainWindow::togglePlay() {
+    if (viewport_->isPlaying()) {
+        stopPlay();
+    } else {
+        startPlay();
+    }
+}
+
+void MainWindow::startPlay() {
+    if (!bridge_->hasProject() || viewport_->isPlaying()) {
+        return;
+    }
+    const Reply reply = perform(QStringLiteral("play.start"), {}, true);
+    if (!reply.ok) {
+        return;
+    }
+    const QJsonObject result = reply.result.toObject();
+    code_->appendConsole(QStringLiteral("— jogo iniciado —"));
+    for (const QJsonValue& problem : result.value("problems").toArray()) {
+        code_->appendConsole(QStringLiteral("[aviso] %1").arg(problem.toString()));
+    }
+    viewport_->setPlaying(true);
+    setEditingLocked(true);
+    playAction_->setText(QStringLiteral("Parar"));
+    playAction_->setIcon(PetuniaIcons::get(QStringLiteral("stop"), PetuniaTheme::instance().textActive().name()));
+    playButton_->setProperty("running", true);
+    playButton_->style()->unpolish(playButton_);
+    playButton_->style()->polish(playButton_);
+    const bool player = result.value("has_player").toBool();
+    statusBar()->showMessage(player ? QStringLiteral("Jogando: W A S D andam, Espaço pula, botão direito gira a câmera, Esc para.")
+                                    : QStringLiteral("Jogando (sem personagem do jogador: dê a um objeto a tabela Personagem com \"Jogador\" ligado). Esc para."));
+}
+
+void MainWindow::stopPlay() {
+    if (!viewport_->isPlaying()) {
+        return;
+    }
+    viewport_->setPlaying(false);
+    perform(QStringLiteral("play.stop"), {}, false);
+    setEditingLocked(false);
+    code_->appendConsole(QStringLiteral("— jogo parado —"));
+    playAction_->setText(QStringLiteral("Jogar"));
+    playAction_->setIcon(PetuniaIcons::get(QStringLiteral("play"), PetuniaTheme::instance().textActive().name()));
+    playButton_->setProperty("running", false);
+    playButton_->style()->unpolish(playButton_);
+    playButton_->style()->polish(playButton_);
+    statusBar()->showMessage(QStringLiteral("Jogo parado: a cena está como estava."), 5000);
+    viewport_->update();
+}
+
+// While the game runs the scene is not editable (the engine refuses too); the controls that
+// would only produce a refusal are greyed out, and given back exactly as they were.
+void MainWindow::setEditingLocked(bool locked) {
+    header_->setEnabled(!locked);
+    hierarchy_->setEnabled(!locked);
+    inspector_->setEnabled(!locked);
+    if (auto* palette = viewport_->findChild<QFrame*>(QStringLiteral("PetuniaToolPalette"))) {
+        palette->setEnabled(!locked);
+    }
+    if (locked) {
+        const QSet<QAction*> keep = {playAction_, paletteAction_, sceneAction_, codeAction_, preferencesAction_,
+                                     shortcutsAction_, aboutAction_, largerTextAction_, smallerTextAction_,
+                                     normalTextAction_, reducedMotionAction_, fullMenusAction_};
+        lockedActions_.clear();
+        for (QAction* action : findChildren<QAction*>()) {
+            if (!action->menu() && action->isEnabled() && !keep.contains(action) && !action->text().isEmpty() &&
+                !action->property("alwaysOn").toBool() && action->parent() != nullptr &&
+                qobject_cast<QDockWidget*>(action->parent()) == nullptr) {
+                lockedActions_.append(action);
+                action->setEnabled(false);
+            }
+        }
+    } else {
+        for (QAction* action : std::as_const(lockedActions_)) {
+            action->setEnabled(true);
+        }
+        lockedActions_.clear();
+        bridge_->refresh();
     }
 }
 

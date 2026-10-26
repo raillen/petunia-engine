@@ -15,7 +15,8 @@ mod sculpt;
 pub use camera::{Camera, Mat4, ProjectionMode, model_matrix, multiply};
 pub use fly::FlyCamera;
 pub use frame::{
-    DrawItem, OverlayItem, RenderFrame, Shape, extract_frame, extract_frame_cached, start_camera,
+    DrawItem, OverlayItem, RenderFrame, Shape, extract_frame, extract_frame_cached, solid_shapes,
+    start_camera,
 };
 pub use grid::{GRID_LIFT, GridLine, axis_lines, grid_lines};
 pub use mesh::{MeshCache, MeshData, MeshError, build_mesh, item_mesh, polygon_mesh_data};

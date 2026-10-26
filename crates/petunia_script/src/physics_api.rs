@@ -6,8 +6,8 @@
 use std::collections::BTreeMap;
 
 use aipo_vm::{Value, Vm};
-use petunia_math::Vec3;
-use petunia_physics::{BodyKind, ContactEvent, PhysicsSettings, Simulation, describe};
+use petunia_math::{Transform, Vec3};
+use petunia_physics::{BodyKind, ContactEvent, PhysicsSettings, Simulation, SolidShape, describe};
 use petunia_world::{PersistentId, World};
 use serde_json::json;
 
@@ -27,7 +27,7 @@ pub struct PhysicsRuntime {
     pub simulation: Simulation,
     settings: PhysicsSettings,
     /// Hull points of objects without a `Mesh` (brushes), kept to rebuild after a change.
-    hulls: BTreeMap<u64, Vec<Vec3>>,
+    solids: BTreeMap<u64, SolidShape>,
     /// Seconds not yet simulated.
     accumulator: f64,
     /// The pose this runtime last wrote (or applied) per moving body: a different value in the
@@ -40,15 +40,92 @@ pub struct PhysicsRuntime {
     pub dirty: bool,
 }
 
+/// What the person asks of the player's character this frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PlayerInput {
+    /// -1 to 1: backward to forward, relative to `yaw_degrees`.
+    pub forward: f32,
+    /// -1 to 1: left to right.
+    pub right: f32,
+    pub jump: bool,
+    /// The direction the camera looks, in degrees around the vertical axis.
+    pub yaw_degrees: f32,
+}
+
 impl PhysicsRuntime {
+    /// Walks every `Character` with `player` set: speed from its table, direction from the camera.
+    /// The character turns to face where it goes.
+    pub fn drive_players(&mut self, world: &mut World, input: PlayerInput) {
+        let finite = |value: f32| {
+            if value.is_finite() {
+                value.clamp(-1.0, 1.0)
+            } else {
+                0.0
+            }
+        };
+        let (forward, right) = (finite(input.forward), finite(input.right));
+        let heading = Transform {
+            rotation_degrees: Vec3::new(
+                0.0,
+                if input.yaw_degrees.is_finite() {
+                    input.yaw_degrees
+                } else {
+                    0.0
+                },
+                0.0,
+            ),
+            ..Transform::IDENTITY
+        };
+        let mut direction = heading.forward() * forward + heading.right() * right;
+        if direction.length() > 1.0 {
+            direction = direction.normalized_or_zero();
+        }
+        for handle in world.entities_with_table("Character").unwrap_or_default() {
+            if !matches!(
+                world.get(handle, "Character", "player"),
+                Ok(petunia_world::Value::Bool(true))
+            ) {
+                continue;
+            }
+            let Ok(PersistentId(id)) = world.persistent_id(handle) else {
+                continue;
+            };
+            let speed = match world.get(handle, "Character", "speed") {
+                Ok(petunia_world::Value::Float(speed)) => *speed as f32,
+                _ => 0.0,
+            };
+            let velocity = direction * speed.clamp(0.0, 100.0);
+            if self.simulation.set_character_intent(id, velocity).is_err() {
+                continue;
+            }
+            if input.jump {
+                let _ = self.simulation.character_jump(id);
+            }
+            if direction.length() > 0.1 {
+                let yaw = (-direction.x).atan2(-direction.z).to_degrees();
+                if let Ok(petunia_world::Value::Vec3(current)) =
+                    world.get(handle, "Transform", "rotation_degrees")
+                {
+                    let turned = Vec3::new(current.x, yaw, current.z);
+                    let _ = world.set(
+                        handle,
+                        "Transform",
+                        "rotation_degrees",
+                        petunia_world::Value::Vec3(turned),
+                    );
+                }
+            }
+        }
+    }
+
     /// Builds the simulation from the world's `Collider` and `RigidBody` tables. Returns the
     /// runtime and the problems (colliders and bodies that were left out).
     pub fn new(
         world: &World,
         settings: PhysicsSettings,
-        hulls: BTreeMap<u64, Vec<Vec3>>,
+        solids: BTreeMap<u64, SolidShape>,
     ) -> Result<(Self, Vec<String>), String> {
-        let scene = describe(world, &|owner| hulls.get(&owner).cloned());
+        let scene = describe(world, &solids);
         let simulation = scene.build(settings).map_err(|error| error.to_string())?;
         let kinds = scene
             .bodies
@@ -70,7 +147,7 @@ impl PhysicsRuntime {
             Self {
                 simulation,
                 settings,
-                hulls,
+                solids,
                 accumulator: 0.0,
                 written,
                 kinds,
@@ -89,7 +166,7 @@ impl PhysicsRuntime {
             .filter(|(_, kind)| **kind == BodyKind::Dynamic)
             .filter_map(|(entity, _)| Some((*entity, self.simulation.velocity(*entity).ok()?)))
             .collect();
-        match Self::new(world, self.settings, std::mem::take(&mut self.hulls)) {
+        match Self::new(world, self.settings, std::mem::take(&mut self.solids)) {
             Ok((mut fresh, problems)) => {
                 for (entity, velocity) in velocities {
                     let _ = fresh.simulation.set_velocity(entity, velocity);
@@ -142,7 +219,9 @@ impl PhysicsRuntime {
             self.accumulator = 0.0;
         }
         for pose in self.simulation.poses() {
-            if self.kinds.get(&pose.entity) != Some(&BodyKind::Dynamic) {
+            let moves_itself = self.kinds.get(&pose.entity) == Some(&BodyKind::Dynamic)
+                || self.simulation.is_character(pose.entity);
+            if !moves_itself {
                 continue;
             }
             let Ok(handle) = world.handle_of(PersistentId(pose.entity)) else {
@@ -168,6 +247,32 @@ impl PhysicsRuntime {
 }
 
 // ---- reading the colliders of an object -------------------------------------------------------
+
+/// Whether a command changes colliders or bodies (so the simulation must be rebuilt).
+pub(crate) fn touches_physics(command: &str, payload: &serde_json::Value) -> bool {
+    let physical = |table: &str| matches!(table, "Collider" | "RigidBody");
+    match command {
+        "world.set" | "row.set" | "row.create" | "row.remove" => payload
+            .get("table")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(physical),
+        "world.create" => payload
+            .get("rows")
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|rows| rows.keys().any(|table| physical(table))),
+        // Removing an object may remove its body: rebuild to be safe.
+        "world.remove" => true,
+        _ => false,
+    }
+}
+
+/// Persistent ids of the colliders of `owner`.
+pub(crate) fn collider_ids_of(world: &World, owner: u64) -> Vec<u64> {
+    colliders_of(world, owner)
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect()
+}
 
 /// The colliders of `owner`, as (collider entity id, name), in id order.
 fn colliders_of(world: &World, owner: u64) -> Vec<(u64, String)> {
@@ -340,6 +445,52 @@ pub(crate) fn collision_overlaps(vm: &mut Vm, args: &[Value]) -> Native {
                 .map(|other| json!({ "entity": other.owner, "collider": other.name }))
                 .collect::<Vec<_>>()
         ))),
+        Err(message) => failure(message),
+    }
+}
+
+// ---- character.* --------------------------------------------------------------------------------
+
+pub(crate) fn character_move(vm: &mut Vm, args: &[Value]) -> Native {
+    let cell = context(vm, "world.write", "character.move")?;
+    let entity = entity_arg(args, 0, "character.move")?;
+    let x = float_arg(args, 1, "character.move")?;
+    let z = float_arg(args, 2, "character.move")?;
+    match with_physics(&cell, "character.move", |runtime, _| {
+        runtime
+            .simulation
+            .set_character_intent(entity, Vec3::new(x, 0.0, z))
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(()) => Ok(Value::None),
+        Err(message) => failure(message),
+    }
+}
+
+pub(crate) fn character_jump(vm: &mut Vm, args: &[Value]) -> Native {
+    let cell = context(vm, "world.write", "character.jump")?;
+    let entity = entity_arg(args, 0, "character.jump")?;
+    match with_physics(&cell, "character.jump", |runtime, _| {
+        runtime
+            .simulation
+            .character_jump(entity)
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(()) => Ok(Value::None),
+        Err(message) => failure(message),
+    }
+}
+
+pub(crate) fn character_grounded(vm: &mut Vm, args: &[Value]) -> Native {
+    let cell = context(vm, "world.read", "character.grounded")?;
+    let entity = entity_arg(args, 0, "character.grounded")?;
+    match with_physics(&cell, "character.grounded", |runtime, _| {
+        runtime
+            .simulation
+            .character_grounded(entity)
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(grounded) => Ok(Value::Bool(grounded)),
         Err(message) => failure(message),
     }
 }

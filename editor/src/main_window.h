@@ -177,6 +177,15 @@ private:
     QAction* primitivesMenuAction_ = nullptr;
     QAction* aboutAction_ = nullptr;
     QAction* preferencesAction_ = nullptr;
+    // Jogar (F6): runs the scene on a copy; the panels that edit it are locked until it stops.
+    void togglePlay();
+    void startPlay();
+    void stopPlay();
+    void setEditingLocked(bool locked);
+    QAction* playAction_ = nullptr;
+    QToolButton* playButton_ = nullptr;
+    // Actions disabled while the game runs, so they can be given back.
+    QList<QAction*> lockedActions_;
     // Operações > Colisão: add a named collider of each shape, fit the selected one (DR-27).
     QList<QAction*> colliderActions_;
 

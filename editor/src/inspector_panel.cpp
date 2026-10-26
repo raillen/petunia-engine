@@ -96,6 +96,14 @@ QString propertyLabel(const QString& table, const QString& column) {
         {QStringLiteral("linear_damping"), QStringLiteral("Freio")},
         {QStringLiteral("angular_damping"), QStringLiteral("Freio do giro")},
         {QStringLiteral("lock_rotation"), QStringLiteral("Sem girar")},
+        {QStringLiteral("speed"), QStringLiteral("Velocidade")},
+        {QStringLiteral("jump_speed"), QStringLiteral("Pulo")},
+        {QStringLiteral("step_height"), QStringLiteral("Degrau")},
+        {QStringLiteral("max_slope_degrees"), QStringLiteral("Rampa máx.")},
+        {QStringLiteral("coyote_seconds"), QStringLiteral("Coiote")},
+        {QStringLiteral("player"), QStringLiteral("Jogador")},
+        {QStringLiteral("layer"), QStringLiteral("Camada")},
+        {QStringLiteral("mask"), QStringLiteral("Máscara")},
     };
     if (table == QLatin1String("Collider") && column == QLatin1String("height")) {
         return QStringLiteral("Altura");
@@ -389,7 +397,16 @@ QWidget* InspectorPanel::makeSection(const QString& tableName, const QJsonArray&
         field->show(field->current);
         auto* label = new QLabel(propertyLabel(tableName, field->column), body);
         label->setProperty("role", QStringLiteral("propertyLabel"));
-        label->setToolTip(QStringLiteral("%1.%2").arg(tableName, field->column));
+        static const QHash<QString, QString> help = {
+            {QStringLiteral("player"), QStringLiteral("O teclado controla este personagem no modo Jogar (W A S D, Espaço pula)")},
+            {QStringLiteral("coyote_seconds"), QStringLiteral("Tempo de coiote: o pulo ainda funciona por este tempo depois de sair de uma borda (ajuda de acessibilidade)")},
+            {QStringLiteral("step_height"), QStringLiteral("Altura do degrau que o personagem sobe sem pular, em metros")},
+            {QStringLiteral("max_slope_degrees"), QStringLiteral("Inclinação máxima da rampa que o personagem sobe, em graus")},
+            {QStringLiteral("layer"), QStringLiteral("Camadas em que a colisão está (bits; 1 é a camada 1)")},
+            {QStringLiteral("mask"), QStringLiteral("Só toca colisões cuja camada divide um bit com esta máscara (todos os bits ligados = toca tudo)")},
+        };
+        label->setToolTip(QStringLiteral("%1.%2%3").arg(tableName, field->column,
+                                                        help.contains(field->column) ? QStringLiteral("\n") + help.value(field->column) : QString()));
         label->setBuddy(editor);
         grid->addWidget(label, row, 0, Qt::AlignVCenter);
         grid->addWidget(editor, row, 1);

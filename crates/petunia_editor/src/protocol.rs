@@ -74,6 +74,25 @@ impl EditorSession {
 
     fn dispatch(&mut self, request: &Json) -> Result<Json, Failure> {
         let operation = text(request, "op")?;
+        // While the game runs, only looking and reading are accepted: nothing edits the scene.
+        if self.is_playing() {
+            const ALLOWED: [&str; 11] = [
+                "play.",
+                "camera.",
+                "viewport.",
+                "editor.",
+                "entity.",
+                "schema.",
+                "diagnostics.",
+                "history.",
+                "script.",
+                "pointer.",
+                "selection.",
+            ];
+            if !ALLOWED.iter().any(|prefix| operation.starts_with(prefix)) {
+                return self.ensure_not_playing().map(|()| Json::Null);
+            }
+        }
         match operation {
             "project.new_sample" => {
                 let path = text(request, "path")?;
@@ -243,6 +262,18 @@ impl EditorSession {
                 self.add_collider(request.get("shape").and_then(Json::as_str).unwrap_or("box"))
             }
             "collider.fit" => self.fit_collider(),
+            "play.start" => self.play_start(),
+            "play.stop" => self.play_stop(),
+            "play.tick" => self.play_tick(
+                number_or(request, "seconds", 0.016),
+                number_or(request, "forward", 0.0),
+                number_or(request, "right", 0.0),
+                request.get("jump").and_then(Json::as_bool).unwrap_or(false),
+                (
+                    number_or(request, "look_x", 0.0),
+                    number_or(request, "look_y", 0.0),
+                ),
+            ),
             op if op.starts_with("mesh.") => self.mesh_request(op, request),
             "brush.hollow" => self.hollow_selection(),
             "floor.step" => {

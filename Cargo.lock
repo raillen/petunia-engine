@@ -1564,6 +1564,7 @@ dependencies = [
  "glutin-winit",
  "petunia_input",
  "petunia_math",
+ "petunia_project",
  "petunia_render",
  "petunia_render_gl",
  "petunia_script",

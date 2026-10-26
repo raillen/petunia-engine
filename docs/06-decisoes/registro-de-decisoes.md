@@ -42,6 +42,7 @@ São **24 decisões**. Estados possíveis:
 | **DR-25** | Script Host: Aipo embutida, sem acesso ao sistema | **ACEITA** (2026-10-25, a seu pedido) | Aipo por dependência de caminho; módulos `sh`/`fs`/`env`/`io` **removidos**; permissões fixas; orçamento por chamada ([doc](../03-linguagens-e-api/05-script-host.md)) |
 | **DR-26** | Layout e design da janela do editor | **ACEITA** (2026-10-25, a seu pedido; revista) | Medidas do Unity com piso da WCAG; menus no `≡`; paleta `Ctrl+K`; workspaces Cena e Código ([design](../02-arquitetura/15-design-da-interface.md)) |
 | **DR-27** | Colisão e corpos físicos | **ACEITA** (2026-10-25, suas escolhas) | Colisões com nome como entidades; `RigidBody`; Rapier em `petunia_physics`; API `collision.*` e `physics.*` ([física](../02-arquitetura/06-fisica-e-cordas.md)) |
+| **DR-28** | Personagem, modo Jogar e solidez automática | **ACEITA** (2026-10-26) | `Character` com tempo de coiote; `F6` roda a cena numa cópia; tudo que é desenhado é sólido; camadas de colisão ([física](../02-arquitetura/06-fisica-e-cordas.md)) |
 | **DR-24** | Workspaces e prioridades antes da API | **EM PARTE ACEITA** (andares, cavernas B) | Mapa (com Jogar), Pintura sem UV, Animação, Efeitos por nós; antes da API: andares, cavernas, terreno, prefabs, Jogar ([análise](../02-arquitetura/14-workspaces-e-prioridades.md)) |
 
 ---
@@ -490,6 +491,25 @@ Números, opções e o que mudaria a recomendação: [pintura e animação](../0
 4. Scripts: `collision.list/get/set/overlaps`, `physics.raycast/raycast_from/velocity/set_velocity/impulse`, `on_collision` e `on_collision_end`.
 
 **Reabrir se:** o experimento S6 mostrar que o Rapier não cabe no orçamento, ou se camadas de colisão pedirem outro formato.
+
+---
+
+## DR-28 — Personagem, modo Jogar e solidez automática · ACEITA (2026-10-26)
+
+**Pedido:** "prossiga com pendências soltas e fases 1 a 6" (primeiro bloco: fim da fase 3).
+
+**Decisão:**
+
+1. **Tudo que é desenhado é sólido**, sem configurar: caixa → caixa; rampa, escada, cilindro, malha e caverna → superfície exata de triângulos; com corpo dinâmico → casco convexo; personagem → cápsula. Quem quiser controle põe colisões próprias (DR-27); onde há uma, a automática não entra.
+2. **Tabela `Character`**: `speed`, `jump_speed`, `step_height`, `max_slope_degrees`, `coyote_seconds` (**tempo de coiote**, ajuda de acessibilidade), `gravity_scale`, `player`. O corpo é cinemático; o movimento usa o controlador de personagem do Rapier (desliza em paredes, sobe degraus e rampas, cola no chão ao descer).
+3. **Modo Jogar** (`F6`, `Esc` para): roda a cena numa **cópia** do mundo com scripts e física; parar descarta a cópia. Sem personagem do jogador, nasce um **herói de reserva** no `PlayerStart`, só na cópia. Enquanto joga, o motor recusa qualquer edição (`PLAY_ACTIVE`).
+4. **Camadas e máscaras** (`layer`, `mask`) em cada colisão.
+5. Scripts: `character.move/jump/grounded`; colisão e física recebem mais efeitos (apagar um objeto leva as colisões; mudar `Collider` ou `RigidBody` refaz a física).
+6. `petunia run` usa o mesmo caminho: herói garantido, câmera atrás do jogador.
+
+**Por quê:** sem isso o motor montava cenas mas não deixava andar nelas. A solidez automática evita o "atravessei o chão" na primeira tentativa.
+
+**Reabrir se:** o custo das superfícies exatas de cavernas grandes passar do orçamento (experimento S6).
 
 ---
 

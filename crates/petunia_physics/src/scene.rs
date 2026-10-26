@@ -3,12 +3,13 @@
 
 use std::collections::BTreeMap;
 
-use petunia_math::{Transform, Vec3};
+use petunia_math::{SolidShape, Transform, Vec3};
 use petunia_world::{EntityHandle, PersistentId, Value, World};
 
 use crate::{
-    BodyDescription, BodyKind, ColliderDescription, ColliderShape, MAX_HULL_POINTS,
-    PhysicsSettings, Simulation, check_body, check_collider,
+    BodyDescription, BodyKind, CharacterDescription, ColliderDescription, ColliderShape,
+    DEFAULT_LAYER, DEFAULT_MASK, MAX_HULL_POINTS, PhysicsSettings, Simulation, check_body,
+    check_collider,
 };
 
 /// What a world holds for physics, plus what was wrong with it.
@@ -16,6 +17,8 @@ use crate::{
 pub struct SceneDescription {
     pub bodies: Vec<BodyDescription>,
     pub colliders: Vec<ColliderDescription>,
+    /// Objects that walk (`Character` table): their body is kinematic.
+    pub characters: Vec<CharacterDescription>,
     /// One line per collider or body that was left out, naming the object.
     pub problems: Vec<String>,
 }
@@ -26,14 +29,22 @@ impl SceneDescription {
     }
 
     pub fn build(&self, settings: PhysicsSettings) -> Result<Simulation, crate::PhysicsError> {
-        Simulation::build(settings, &self.bodies, &self.colliders)
+        let mut simulation = Simulation::build(settings, &self.bodies, &self.colliders)?;
+        simulation.add_characters(&self.characters)?;
+        Ok(simulation)
     }
 }
 
-/// Reads the physics of `world`. A `convex` collider wraps the owner's `Mesh` when it has one;
-/// otherwise `hull_points(owner)` gives the points (the caller builds them from the brush shape,
-/// which this crate does not know).
-pub fn describe(world: &World, hull_points: &dyn Fn(u64) -> Option<Vec<Vec3>>) -> SceneDescription {
+/// Colliders made by the engine itself (an object with a shape and no collider) have an id with
+/// this bit set, so they never clash with an entity id.
+pub const AUTO_COLLIDER_FLAG: u64 = 1 << 62;
+
+/// Reads the physics of `world`. `solids` is the drawn surface of each object (the renderer
+/// knows how a brush becomes a mesh, this crate does not): a `convex` collider wraps it, and an
+/// object that has a surface but no collider becomes **solid by itself**: a box for a box brush, a
+/// capsule for a character, a convex hull for something with a dynamic body, an exact surface for
+/// everything else. A scene is walkable without setting anything up.
+pub fn describe(world: &World, solids: &BTreeMap<u64, SolidShape>) -> SceneDescription {
     let mut scene = SceneDescription::default();
     let mut owners: BTreeMap<u64, ()> = BTreeMap::new();
 
@@ -41,7 +52,7 @@ pub fn describe(world: &World, hull_points: &dyn Fn(u64) -> Option<Vec<Vec3>>) -
         let Ok(PersistentId(id)) = world.persistent_id(handle) else {
             continue;
         };
-        match read_collider(world, handle, id, hull_points) {
+        match read_collider(world, handle, id, solids) {
             Ok(collider) => {
                 if let Err(error) = check_collider(&collider) {
                     scene.problems.push(format!("colisão #{id}: {error}"));
@@ -74,6 +85,117 @@ pub fn describe(world: &World, hull_points: &dyn Fn(u64) -> Option<Vec<Vec3>>) -
                 .problems
                 .push(format!("corpo do objeto #{id}: {problem}")),
         }
+    }
+
+    // Solid by themselves: drawn objects without a collider of their own.
+    let mut automatic = Vec::new();
+    for (entity, solid) in solids {
+        if owners.contains_key(entity) {
+            continue;
+        }
+        let Ok(handle) = world.handle_of(PersistentId(*entity)) else {
+            continue;
+        };
+        let walker = world.has_row(handle, "Character");
+        let dynamic = matches!(
+            world.get(handle, "RigidBody", "kind"),
+            Ok(Value::Text(kind)) if kind == "dynamic"
+        );
+        let size = solid.size();
+        let shape = if walker {
+            ColliderShape::Capsule {
+                radius: (size.x.max(size.z) * 0.5).max(0.05),
+                height: size.y.max(0.2),
+            }
+        } else if solid.is_box {
+            ColliderShape::Box { size }
+        } else if dynamic {
+            let mut points = solid.points.clone();
+            if points.len() > MAX_HULL_POINTS {
+                let stride = points.len().div_ceil(MAX_HULL_POINTS);
+                points = points.into_iter().step_by(stride).collect();
+            }
+            ColliderShape::Convex { points }
+        } else {
+            ColliderShape::TriMesh {
+                points: solid.points.clone(),
+                triangles: solid.triangles.clone(),
+            }
+        };
+        let collider = ColliderDescription {
+            collider: AUTO_COLLIDER_FLAG | *entity,
+            owner: *entity,
+            name: "sólido".to_string(),
+            shape,
+            center: if solid.is_box || walker {
+                solid.center()
+            } else {
+                Vec3::ZERO
+            },
+            rotation_degrees: Vec3::ZERO,
+            trigger: false,
+            friction: 0.5,
+            restitution: 0.0,
+            layer: DEFAULT_LAYER,
+            mask: DEFAULT_MASK,
+        };
+        match check_collider(&collider) {
+            Ok(()) => automatic.push(collider),
+            Err(error) => scene
+                .problems
+                .push(format!("objeto #{entity}: sem colisão automática: {error}")),
+        }
+    }
+    for collider in automatic {
+        owners.insert(collider.owner, ());
+        scene.colliders.push(collider);
+    }
+
+    // Characters walk: their body is kinematic, with or without a `RigidBody` row.
+    for handle in world.entities_with_table("Character").unwrap_or_default() {
+        let Ok(PersistentId(id)) = world.persistent_id(handle) else {
+            continue;
+        };
+        let description = match read_character(world, handle, id) {
+            Ok(description) => description,
+            Err(problem) => {
+                scene.problems.push(format!("personagem #{id}: {problem}"));
+                continue;
+            }
+        };
+        if let Err(error) = crate::character::check_character(&description) {
+            scene.problems.push(format!("personagem #{id}: {error}"));
+            continue;
+        }
+        if !scene
+            .colliders
+            .iter()
+            .any(|collider| collider.owner == id && !collider.trigger)
+        {
+            scene.problems.push(format!(
+                "personagem #{id}: precisa de uma colisão sólida (uma cápsula é o melhor); ficou parado"
+            ));
+            continue;
+        }
+        match scene.bodies.iter_mut().find(|body| body.entity == id) {
+            Some(body) if body.kind == BodyKind::Static => {
+                body.kind = BodyKind::Kinematic;
+            }
+            Some(body) if body.kind == BodyKind::Dynamic => {
+                scene.problems.push(format!(
+                    "personagem #{id}: o corpo é dinâmico; o personagem precisa de um corpo cinemático"
+                ));
+                continue;
+            }
+            Some(_) => {}
+            None => {
+                let mut body = BodyDescription::fixed(id, transform_of(world, handle));
+                body.kind = BodyKind::Kinematic;
+                scene.bodies.push(body);
+                with_body.insert(id, ());
+            }
+        }
+        scene.characters.push(description);
     }
 
     // Objects with colliders and no body stand still.
@@ -124,7 +246,7 @@ fn read_collider(
     world: &World,
     handle: EntityHandle,
     id: u64,
-    hull_points: &dyn Fn(u64) -> Option<Vec<Vec3>>,
+    solids: &BTreeMap<u64, SolidShape>,
 ) -> Result<ColliderDescription, String> {
     let owner = match world.get(handle, "Collider", "owner") {
         Ok(Value::Int(owner)) if *owner > 0 => *owner as u64,
@@ -163,7 +285,7 @@ fn read_collider(
                     },
                 );
             let mut points = from_mesh
-                .or_else(|| hull_points(owner))
+                .or_else(|| solids.get(&owner).map(|solid| solid.points.clone()))
                 .ok_or_else(|| "forma convexa num objeto sem malha".to_string())?;
             if points.len() > MAX_HULL_POINTS {
                 // Evenly spaced points keep the outline of a dense mesh.
@@ -192,7 +314,34 @@ fn read_collider(
         trigger,
         friction: float(world, handle, "Collider", "friction")?,
         restitution: float(world, handle, "Collider", "restitution")?,
+        layer: bits(world, handle, "layer", DEFAULT_LAYER)?,
+        mask: bits(world, handle, "mask", DEFAULT_MASK)?,
     })
+}
+
+/// A layer or mask column: a whole number from 0 to 4294967295 (older projects have no column).
+fn bits(world: &World, handle: EntityHandle, column: &str, default: u32) -> Result<u32, String> {
+    match world.get(handle, "Collider", column) {
+        Ok(Value::Int(value)) => {
+            u32::try_from(*value).map_err(|_| format!("`{column}` vai de 0 a {}", u32::MAX))
+        }
+        Ok(_) => Err(format!("a coluna `{column}` não é um número inteiro")),
+        Err(_) => Ok(default),
+    }
+}
+
+fn read_character(
+    world: &World,
+    handle: EntityHandle,
+    id: u64,
+) -> Result<CharacterDescription, String> {
+    let mut description = CharacterDescription::new(id);
+    description.max_slope_degrees = float(world, handle, "Character", "max_slope_degrees")?;
+    description.step_height = float(world, handle, "Character", "step_height")?;
+    description.jump_speed = float(world, handle, "Character", "jump_speed")?;
+    description.coyote_seconds = float(world, handle, "Character", "coyote_seconds")?;
+    description.gravity_scale = float(world, handle, "Character", "gravity_scale")?;
+    Ok(description)
 }
 
 fn read_body(world: &World, handle: EntityHandle, id: u64) -> Result<BodyDescription, String> {
@@ -279,7 +428,7 @@ mod tests {
             json!({ "Collider": { "owner": ball, "name": "negativa", "shape": "sphere", "radius": -1.0 } }),
         );
 
-        let scene = describe(&world, &|_| None);
+        let scene = describe(&world, &BTreeMap::new());
         assert_eq!(scene.problems.len(), 3, "{:?}", scene.problems);
         assert!(
             scene
@@ -333,22 +482,23 @@ mod tests {
             &mut world,
             json!({ "Collider": { "owner": rock, "name": "rocha", "shape": "convex" } }),
         );
-        let without = describe(&world, &|_| None);
+        let without = describe(&world, &BTreeMap::new());
         assert!(
             without.colliders.is_empty() && without.problems.len() == 1,
             "{:?}",
             without.problems
         );
-        let cube = |_: u64| {
-            Some(
-                [-1.0f32, 1.0]
-                    .iter()
-                    .flat_map(|&x| [-1.0f32, 1.0].map(move |y| Vec3::new(x, y, 0.0)))
-                    .flat_map(|point| [-1.0f32, 1.0].map(move |z| Vec3::new(point.x, point.y, z)))
-                    .collect(),
-            )
-        };
-        let with = describe(&world, &cube);
+        let corners: Vec<[f32; 3]> = [-1.0f32, 1.0]
+            .iter()
+            .flat_map(|&x| [-1.0f32, 1.0].map(move |y| [x, y, 0.0]))
+            .flat_map(|point| [-1.0f32, 1.0].map(move |z| [point[0], point[1], z]))
+            .collect();
+        let mut solids = BTreeMap::new();
+        solids.insert(
+            rock,
+            SolidShape::from_triangles(&corners, &[0, 1, 2], false).expect("valid points"),
+        );
+        let with = describe(&world, &solids);
         assert_eq!(with.colliders.len(), 1, "{:?}", with.problems);
         assert!(with.build(PhysicsSettings::default()).is_ok());
     }

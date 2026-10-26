@@ -9,6 +9,7 @@ description = "Window and event loop adapter: opens a window with an OpenGL 3.3 
 [dependencies]
 petunia_input.workspace = true
 petunia_math.workspace = true
+petunia_project.workspace = true
 petunia_render.workspace = true
 petunia_render_gl.workspace = true
 petunia_script.workspace = true

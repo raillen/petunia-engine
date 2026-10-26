@@ -29,6 +29,8 @@ public:
     bool maybeSave();
     // Puts the cursor in the editor.
     void focusEditor();
+    // Writes a line to the Console tab (the game's output goes here too).
+    void appendConsole(const QString& line) { console(line); }
     // Opens a script by name (after it was created or attached elsewhere).
     void open(const QString& name);
 

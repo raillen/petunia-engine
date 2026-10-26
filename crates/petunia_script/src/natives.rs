@@ -210,9 +210,17 @@ pub(crate) fn run_command(cell: &GameCell, command: &str, payload: Json) -> Resu
         ..
     } = &mut *state;
     *commands_run += 1;
-    dispatcher
+    let touches_physics = crate::physics_api::touches_physics(command, &payload);
+    let result = dispatcher
         .execute(world, &CommandRecord::new(command, payload))
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string());
+    if result.is_ok() && touches_physics {
+        // A collider or a body changed: the simulation is rebuilt before the next step.
+        if let Some(runtime) = state.physics.as_mut() {
+            runtime.dirty = true;
+        }
+    }
+    result
 }
 
 pub(crate) fn world_get(vm: &mut Vm, args: &[Value]) -> Native {
@@ -342,6 +350,13 @@ pub(crate) fn world_create(vm: &mut Vm, args: &[Value]) -> Native {
 pub(crate) fn world_remove(vm: &mut Vm, args: &[Value]) -> Native {
     let cell = context(vm, "world.write", "world.remove")?;
     let entity = entity_arg(args, 0, "world.remove")?;
+    // An object takes its colliders with it, like deleting it in the editor.
+    let parts = crate::physics_api::collider_ids_of(&cell.0.borrow().world, entity);
+    for part in parts {
+        if let Err(message) = run_command(&cell, "world.remove", json!({ "entity": part })) {
+            return failure(message);
+        }
+    }
     match run_command(&cell, "world.remove", json!({ "entity": entity })) {
         Ok(_) => Ok(Value::None),
         Err(message) => failure(message),

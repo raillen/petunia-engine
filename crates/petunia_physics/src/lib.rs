@@ -14,15 +14,20 @@ use std::sync::Mutex;
 use petunia_math::{Transform, Vec3};
 use rapier3d::prelude as rapier;
 
+mod character;
 mod scene;
 
-pub use scene::{SceneDescription, describe};
+pub use character::CharacterDescription;
+pub use petunia_math::SolidShape;
+pub use scene::{AUTO_COLLIDER_FLAG, SceneDescription, describe};
 
 /// Most bodies and colliders one simulation accepts; bigger scenes fail with a clear error.
 pub const MAX_BODIES: usize = 20_000;
 pub const MAX_COLLIDERS: usize = 50_000;
 /// Most points a convex collider is built from (the hull keeps fewer).
 pub const MAX_HULL_POINTS: usize = 4_096;
+/// Most points an exact surface keeps.
+pub const MAX_TRIMESH_POINTS: usize = 400_000;
 /// Largest size, distance or mass accepted, in meters or kilograms.
 pub const MAX_MAGNITUDE: f32 = 100_000.0;
 /// Smallest size: thinner shapes make the solver unstable.
@@ -111,6 +116,11 @@ pub enum ColliderShape {
     Convex {
         points: Vec<Vec3>,
     },
+    /// An exact surface (stairs, caves, editable meshes): for things that do not move.
+    TriMesh {
+        points: Vec<Vec3>,
+        triangles: Vec<[u32; 3]>,
+    },
 }
 
 /// One named collider of an object.
@@ -131,7 +141,15 @@ pub struct ColliderDescription {
     pub friction: f32,
     /// 0 does not bounce, 1 bounces back fully.
     pub restitution: f32,
+    /// Bits of the layers this collider is on (bit 0 is layer 1).
+    pub layer: u32,
+    /// It only touches colliders whose `layer` shares a bit with this mask.
+    pub mask: u32,
 }
+
+/// Layer bits and mask every collider starts with: layer 1, touching everything.
+pub const DEFAULT_LAYER: u32 = 1;
+pub const DEFAULT_MASK: u32 = u32::MAX;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PhysicsSettings {
@@ -261,6 +279,7 @@ pub struct Simulation {
     /// Indexed by the `user_data` of each Rapier collider.
     references: Vec<ColliderRef>,
     collector: ContactCollector,
+    characters: BTreeMap<u64, character::CharacterState>,
 }
 
 impl Simulation {
@@ -369,6 +388,11 @@ impl Simulation {
                 .sensor(collider.trigger)
                 .friction(collider.friction)
                 .restitution(collider.restitution)
+                .collision_groups(rapier::InteractionGroups::new(
+                    rapier::Group::from_bits_truncate(collider.layer),
+                    rapier::Group::from_bits_truncate(collider.mask),
+                    rapier::InteractionTestMode::And,
+                ))
                 .active_events(rapier::ActiveEvents::COLLISION_EVENTS)
                 .user_data(references.len() as u128);
             if collider.trigger {
@@ -412,6 +436,7 @@ impl Simulation {
             colliders: collider_handles,
             references,
             collector,
+            characters: BTreeMap::new(),
         })
     }
 
@@ -422,6 +447,7 @@ impl Simulation {
     /// Advances one fixed step and returns the contacts that started or stopped in it, sorted so
     /// the order never depends on the library's internals.
     pub fn step(&mut self) -> Vec<ContactEvent> {
+        self.drive_characters();
         self.world.step_with_events(&(), &self.collector);
         let raw = match self.collector.events.lock() {
             Ok(mut events) => std::mem::take(&mut *events),
@@ -488,6 +514,10 @@ impl Simulation {
             .get_mut(handle)
             .ok_or(PhysicsError::UnknownBody(entity))?;
         match kind {
+            // A character moves itself every step; a move from outside is a teleport.
+            BodyKind::Kinematic if self.characters.contains_key(&entity) => {
+                body.set_position(pose, true);
+            }
             BodyKind::Kinematic => body.set_next_kinematic_position(pose),
             BodyKind::Dynamic => body.set_position(pose, true),
             BodyKind::Static => {
@@ -645,7 +675,7 @@ fn check_settings(settings: &PhysicsSettings) -> Result<(), PhysicsError> {
     Ok(())
 }
 
-fn check_vector(what: &str, value: Vec3, limit: f32) -> Result<(), PhysicsError> {
+pub(crate) fn check_vector(what: &str, value: Vec3, limit: f32) -> Result<(), PhysicsError> {
     if !value.is_finite() || value.x.abs() > limit || value.y.abs() > limit || value.z.abs() > limit
     {
         return Err(PhysicsError::Invalid(format!(
@@ -655,7 +685,7 @@ fn check_vector(what: &str, value: Vec3, limit: f32) -> Result<(), PhysicsError>
     Ok(())
 }
 
-fn check_range(what: &str, value: f32, low: f32, high: f32) -> Result<(), PhysicsError> {
+pub(crate) fn check_range(what: &str, value: f32, low: f32, high: f32) -> Result<(), PhysicsError> {
     if !value.is_finite() || value < low || value > high {
         return Err(PhysicsError::Invalid(format!(
             "{what} vai de {low} a {high}"
@@ -719,6 +749,34 @@ pub(crate) fn check_collider(collider: &ColliderDescription) -> Result<(), Physi
                 )));
             }
         }
+        ColliderShape::TriMesh { points, triangles } => {
+            if points.len() < 3 || points.len() > MAX_TRIMESH_POINTS {
+                return Err(PhysicsError::Invalid(format!(
+                    "a superfície de colisão precisa de 3 a {MAX_TRIMESH_POINTS} pontos (tem {})",
+                    points.len()
+                )));
+            }
+            if triangles.is_empty() || triangles.len() > petunia_math::MAX_SOLID_TRIANGLES {
+                return Err(PhysicsError::Invalid(format!(
+                    "a superfície de colisão precisa de 1 a {} triângulos (tem {})",
+                    petunia_math::MAX_SOLID_TRIANGLES,
+                    triangles.len()
+                )));
+            }
+            for point in points {
+                check_vector("ponto da superfície de colisão", *point, MAX_MAGNITUDE)?;
+            }
+            let count = points.len() as u32;
+            if triangles
+                .iter()
+                .any(|corner| corner.iter().any(|index| *index >= count))
+            {
+                return Err(PhysicsError::Invalid(
+                    "a superfície de colisão tem um triângulo que aponta para fora da lista de pontos"
+                        .to_string(),
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -755,7 +813,7 @@ fn spans_volume(points: &[Vec3]) -> bool {
 
 // ---- conversions ------------------------------------------------------------------------------
 
-fn vector(value: Vec3) -> rapier::Vector {
+pub(crate) fn vector(value: Vec3) -> rapier::Vector {
     rapier::Vector::new(value.x, value.y, value.z)
 }
 
@@ -832,6 +890,18 @@ fn shape_builder(
                 ))
             })?
         }
+        ColliderShape::TriMesh { points, triangles } => {
+            let scaled: Vec<rapier::Vector> = points
+                .iter()
+                .map(|point| vector(multiply(*point, scale)))
+                .collect();
+            rapier::ColliderBuilder::trimesh(scaled, triangles.clone()).map_err(|error| {
+                PhysicsError::Invalid(format!(
+                    "a superfície de colisão #{} não serve: {error}",
+                    collider.collider
+                ))
+            })?
+        }
     })
 }
 
@@ -857,6 +927,8 @@ mod tests {
             trigger: false,
             friction: 0.5,
             restitution: 0.0,
+            layer: DEFAULT_LAYER,
+            mask: DEFAULT_MASK,
         }
     }
 

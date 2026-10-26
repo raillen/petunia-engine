@@ -10,7 +10,26 @@ O essencial foi verificado **em display virtual** (nada apareceu na sua tela), c
 
 Três análises novas pedem a sua decisão: [paridade da interface](../02-arquitetura/12-paridade-ui-petunia3d.md), [edição de malha](../02-arquitetura/13-primitivas-e-edicao-de-malha.md) e [pintura e animação](../01-pesquisa/07-pintura-e-animacao.md).
 
-## Última etapa: contorno girado e colisão com física (2026-10-25)
+## Última etapa: personagem, modo Jogar e solidez automática (2026-10-26)
+
+Bloco 1 do pedido "pendências e fases 1 a 6": fecha o essencial da fase 3. Decisão: [DR-28](../06-decisoes/registro-de-decisoes.md).
+
+| O quê | Verificação |
+|---|---|
+| **Corrigido (da revisão do PR #1):** apagar objeto por script leva as colisões; mudar `Collider`/`RigidBody` por script refaz a física | 1 teste pelo script |
+| **Camadas e máscaras** de colisão (`layer`, `mask`) | teste: um piso em outra camada é atravessado |
+| **Personagem** (`Character`): andar, degraus, rampas, pulo, **tempo de coiote**; API `character.*` | **6 testes** no adaptador + 2 pelo script; determinismo bit a bit |
+| **Solidez automática**: tudo que é desenhado é sólido sem configurar; `SolidShape` (novo, em `petunia_math`, 2 testes) | teste: a sala de exemplo é andável, o herói pisa no chão e **para na parede** |
+| **Modo Jogar** (`F6`) numa cópia da cena; herói de reserva no `PlayerStart` (`petunia_project::ensure_player`, 1 teste); câmera em terceira pessoa que **não entra na parede** | 2 testes pelo JSON + **visto (display virtual)**, 3 quadros: início, pulo, parar |
+| `petunia run` usa o mesmo caminho | compila; **não rodou com janela** |
+| Teste de fumaça ganhou Jogar/Parar e a prova de que a cena salva **não** guarda o herói | **9/9** |
+| Workspace inteiro | **341 testes, 0 falhas** (build isolado); fmt e clippy `-D warnings` ok |
+
+**Não verificado:** a sua sessão real; o jogo no `petunia run` numa janela; teclado e mouse reais no modo Jogar (só `xdotool` no display virtual); leitor de tela.
+
+**Ainda falta do bloco:** alças no viewport para redimensionar colisões; prefabs (Porta, Pickup, Spawn); Event Sheet; módulo `grid`/A\*; material por face; painel de assets.
+
+## Antes: contorno girado e colisão com física (2026-10-25)
 
 | O quê | Verificação |
 |---|---|

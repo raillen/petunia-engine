@@ -13,6 +13,7 @@ mod failure;
 mod floors;
 mod gizmo;
 mod mesh_tool;
+mod play;
 mod protocol;
 mod scripts;
 mod sculpt_tool;

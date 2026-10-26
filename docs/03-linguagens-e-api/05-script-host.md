@@ -30,6 +30,8 @@ fn on_update(entity, dt) {
 | `game` | `tick`, `seconds`, `emit` | `game` |
 | `log` | `debug`, `info`, `warning`, `error` (e `print`) | nenhuma |
 | `transform` | posição, rotação, escala, mover, girar, frente/direita/cima | `world.read` / `world.write` |
+| `character` | `grounded` | `world.read` |
+| `character` | `move` (velocidade no plano do chão), `jump` | `world.write` |
 | `collision` | `list`, `get`, `overlaps` | `world.read` |
 | `collision` | `set` (muda uma coluna de uma colisão; a física se refaz no quadro seguinte) | `world.write` |
 | `physics` | `raycast`, `raycast_from` (ignora o próprio objeto), `velocity` | `world.read` |
@@ -58,6 +60,8 @@ fn on_collision(entity, outro, minha, dele) {
 
 - Um objeto pode ter **várias colisões com nome**; o script as acha pelo nome (`"pés"`, `"corpo"`).
 - `on_collision(entity, outro, minha, dele)` e `on_collision_end(...)` são chamados quando duas colisões começam ou deixam de se tocar (gatilhos também).
+- **Personagem** (`Character`): `character.move(entity, x, z)` manda andar em m/s; o motor desvia de paredes, sobe degraus e rampas e cola no chão ao descer. `character.jump(entity)` pula (vale também por um instante depois de sair de uma borda: **tempo de coiote**).
+- Apagar um objeto com `world.remove` leva as colisões dele; mudar `Collider` ou `RigidBody` com `world.set` refaz a física no quadro seguinte.
 - Sem colisões ou corpos no mundo, `physics.*` e `collision.overlaps` devolvem uma falha que explica: "a física não está ligada".
 
 ## O que um script **não** pode
