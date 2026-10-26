@@ -53,7 +53,17 @@ pub struct Compiled {
 
 /// Compiles, or returns every error found (warnings travel inside `Compiled`).
 pub fn compile(document: &GraphDocument, catalog: &Catalog) -> Result<Compiled, Vec<Diagnostic>> {
-    let report = check(document, catalog);
+    compile_with(document, catalog, false)
+}
+
+/// Compiles with the marks play mode reads (N5): the node that ran, and the condition that decided
+/// an `if`. `false` gives exactly the text [`compile`] gives, byte for byte.
+pub fn compile_with(
+    document: &GraphDocument,
+    catalog: &Catalog,
+    debug: bool,
+) -> Result<Compiled, Vec<Diagnostic>> {
+    let report = check_with(document, catalog, debug);
     match report.compiled {
         Some(compiled) => Ok(compiled),
         None => Err(report.diagnostics),
@@ -72,7 +82,11 @@ pub struct Report {
 }
 
 pub fn check(document: &GraphDocument, catalog: &Catalog) -> Report {
-    let mut generator = Generator::new(document, catalog);
+    check_with(document, catalog, false)
+}
+
+pub fn check_with(document: &GraphDocument, catalog: &Catalog, debug: bool) -> Report {
+    let mut generator = Generator::new(document, catalog, debug);
     generator.run();
     let has_error = generator
         .diagnostics
@@ -119,6 +133,8 @@ struct Generator<'a> {
     pending: Vec<(u32, u32, u32)>,
     current_event: u32,
     loop_depth: usize,
+    /// Whether the generated code says what ran, for play mode (N5).
+    debug: bool,
 }
 
 fn error(node: Option<u32>, pin: Option<&str>, code: &'static str, message: String) -> Diagnostic {
@@ -142,7 +158,7 @@ fn warning(node: Option<u32>, code: &'static str, message: String) -> Diagnostic
 }
 
 impl<'a> Generator<'a> {
-    fn new(document: &'a GraphDocument, catalog: &'a Catalog) -> Self {
+    fn new(document: &'a GraphDocument, catalog: &'a Catalog, debug: bool) -> Self {
         let nodes = document
             .nodes
             .iter()
@@ -172,6 +188,7 @@ impl<'a> Generator<'a> {
             pending: Vec::new(),
             current_event: 0,
             loop_depth: 0,
+            debug,
         }
     }
 
@@ -440,6 +457,40 @@ impl<'a> Generator<'a> {
         self.exec_out.get(&(id, pin.to_string())).copied()
     }
 
+    /// Tells the editor this node ran (play mode only; see [`compile_with`]).
+    fn mark(&mut self, id: u32) {
+        if self.debug {
+            self.line(&format!("graph_debug.node(entity, {id})"), Some(id));
+        }
+    }
+
+    /// Records the values the condition of an `if` was made of, so a false result can be explained.
+    /// Only the pure nodes wired straight into the condition, and only in play mode; they are
+    /// evaluated again on purpose, which is safe because they change nothing.
+    fn debug_condition(&mut self, id: u32, scope: &Scope) {
+        let Some(source) = self.data_in.get(&(id, "condition".to_string())).cloned() else {
+            return;
+        };
+        let Some(entry) = self.nodes.get(&source.node).copied() else {
+            return;
+        };
+        let Some(spec) = entry.spec else {
+            return;
+        };
+        if spec.class != NodeClass::Value {
+            return;
+        }
+        for pin in data_inputs(spec) {
+            self.parts = 0;
+            if let Some(text) = self.input(source.node, &pin, scope, &mut Vec::new()) {
+                self.line(
+                    &format!("graph_debug.value(entity, {}, {text})", source.node),
+                    Some(source.node),
+                );
+            }
+        }
+    }
+
     fn emit_event(&mut self, id: u32, handler: &str) {
         let Some(NodeRef {
             spec: Some(spec), ..
@@ -467,6 +518,7 @@ impl<'a> Generator<'a> {
         self.current_event = id;
         self.line(&format!("fn {handler}({}) {{", params.join(", ")), Some(id));
         self.indent += 1;
+        self.mark(id);
         if handler == "on_update" {
             // Replaced by the call that counts the waits down, or dropped when there are none.
             self.line(TICK_MARKER, Some(id));
@@ -567,6 +619,8 @@ impl<'a> Generator<'a> {
             };
             match (&spec.lowering, spec.class) {
                 (Lowering::Api { module, name }, NodeClass::Action) => {
+                    self.parts = 0;
+                    self.mark(id);
                     let mut arguments = Vec::new();
                     let mut ok = true;
                     for pin in data_inputs(spec) {
@@ -591,6 +645,7 @@ impl<'a> Generator<'a> {
                 }
                 (Lowering::VarSet, NodeClass::Action) => {
                     self.parts = 0;
+                    self.mark(id);
                     if let Some(value) = self.input(id, "value", &scope, &mut Vec::new()) {
                         self.uses_state = true;
                         let name = text_setting(node, "name");
@@ -603,10 +658,21 @@ impl<'a> Generator<'a> {
                 }
                 (Lowering::If, NodeClass::Flow) => {
                     self.parts = 0;
+                    self.mark(id);
                     let condition = self.input(id, "condition", &scope, &mut Vec::new());
                     let then_start = self.next(id, "then");
                     let else_start = self.next(id, "else");
                     if let Some(condition) = condition {
+                        // In play mode the condition is kept in a name, so its value reaches the
+                        // editor and "por que esta condição falhou?" has an answer.
+                        let test = if self.debug {
+                            self.debug_condition(id, &scope);
+                            self.line(&format!("let c{id} = {condition}"), Some(id));
+                            self.line(&format!("graph_debug.check(entity, {id}, c{id})"), Some(id));
+                            format!("c{id}")
+                        } else {
+                            condition
+                        };
                         match (then_start, else_start) {
                             (None, None) => {
                                 let message = format!(
@@ -617,7 +683,7 @@ impl<'a> Generator<'a> {
                                     .push(warning(Some(id), "FLOW_EMPTY", message));
                             }
                             (Some(then_start), else_start) => {
-                                self.line(&format!("if {condition} {{"), Some(id));
+                                self.line(&format!("if {test} {{"), Some(id));
                                 self.indent += 1;
                                 self.emit_chain(then_start, scope.clone(), depth + 1);
                                 self.indent -= 1;
@@ -630,7 +696,7 @@ impl<'a> Generator<'a> {
                                 self.line("}", Some(id));
                             }
                             (None, Some(else_start)) => {
-                                self.line(&format!("if not ({condition}) {{"), Some(id));
+                                self.line(&format!("if not ({test}) {{"), Some(id));
                                 self.indent += 1;
                                 self.emit_chain(else_start, scope.clone(), depth + 1);
                                 self.indent -= 1;
@@ -642,6 +708,7 @@ impl<'a> Generator<'a> {
                 }
                 (Lowering::Wait, NodeClass::Flow) => {
                     self.parts = 0;
+                    self.mark(id);
                     if let Some(seconds) = self.input(id, "seconds", &scope, &mut Vec::new()) {
                         self.waits.insert(id);
                         self.line(
@@ -665,6 +732,7 @@ impl<'a> Generator<'a> {
                 }
                 (Lowering::Repeat, NodeClass::Flow) => {
                     self.parts = 0;
+                    self.mark(id);
                     let count = self.input(id, "count", &scope, &mut Vec::new());
                     if let (Some(count), Some(body)) = (count, self.next(id, "body")) {
                         self.line(&format!("repeat {count} as i{id} {{"), Some(id));
@@ -686,6 +754,7 @@ impl<'a> Generator<'a> {
                 }
                 (Lowering::Each, NodeClass::Flow) => {
                     self.parts = 0;
+                    self.mark(id);
                     let list = self.input(id, "list", &scope, &mut Vec::new());
                     if let (Some(list), Some(body)) = (list, self.next(id, "body")) {
                         self.line(
@@ -1099,6 +1168,111 @@ fn quote(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog::{ApiSpec, EventSpec};
+    use crate::model::{GraphEdge, PinRef as TestPin};
+
+    #[test]
+    fn debug_marks_name_the_nodes_and_the_condition_without_changing_normal_text() {
+        let catalog = Catalog::new(
+            &[ApiSpec {
+                module: "log".to_string(),
+                name: "info".to_string(),
+                params: vec![("message".to_string(), "Text".to_string())],
+                returns: "None".to_string(),
+                summary: "Escreve".to_string(),
+                permission: String::new(),
+            }],
+            &[EventSpec {
+                handler: "on_update".to_string(),
+                title: "A cada quadro".to_string(),
+                summary: "Todo quadro".to_string(),
+                params: vec![
+                    ("entity".to_string(), "Int".to_string()),
+                    ("dt".to_string(), "Float".to_string()),
+                ],
+            }],
+        );
+        let mut document = GraphDocument::new();
+        document.nodes.push(GraphNode {
+            id: 1,
+            kind: "event.on_update".to_string(),
+            params: BTreeMap::new(),
+        });
+        document.nodes.push(GraphNode {
+            id: 2,
+            kind: "flow.if".to_string(),
+            params: BTreeMap::new(),
+        });
+        document.nodes.push(GraphNode {
+            id: 3,
+            kind: "op.compare".to_string(),
+            params: BTreeMap::from([
+                ("operator".to_string(), Json::from("<")),
+                ("a".to_string(), Json::from(1.0)),
+                ("b".to_string(), Json::from(2.0)),
+            ]),
+        });
+        document.nodes.push(GraphNode {
+            id: 4,
+            kind: "api.log.info".to_string(),
+            params: BTreeMap::from([("message".to_string(), Json::from("sim"))]),
+        });
+        document.edges.push(GraphEdge {
+            from: TestPin {
+                node: 1,
+                pin: "then".to_string(),
+            },
+            to: TestPin {
+                node: 2,
+                pin: "in".to_string(),
+            },
+        });
+        document.edges.push(GraphEdge {
+            from: TestPin {
+                node: 3,
+                pin: "result".to_string(),
+            },
+            to: TestPin {
+                node: 2,
+                pin: "condition".to_string(),
+            },
+        });
+        document.edges.push(GraphEdge {
+            from: TestPin {
+                node: 2,
+                pin: "then".to_string(),
+            },
+            to: TestPin {
+                node: 4,
+                pin: "in".to_string(),
+            },
+        });
+
+        let plain = compile(&document, &catalog).expect("compiles");
+        assert!(!plain.text.contains("graph_debug"), "{}", plain.text);
+        let debug = compile_with(&document, &catalog, true).expect("compiles");
+        assert_eq!(
+            compile_with(&document, &catalog, false)
+                .expect("compiles")
+                .text,
+            plain.text,
+            "debug off is exactly the normal text"
+        );
+        for expected in [
+            "graph_debug.node(entity, 1)",
+            "let c2 = (1.0 < 2.0)",
+            "graph_debug.check(entity, 2, c2)",
+            "graph_debug.value(entity, 3, 1.0)",
+            "graph_debug.value(entity, 3, 2.0)",
+            "graph_debug.node(entity, 4)",
+        ] {
+            assert!(
+                debug.text.contains(expected),
+                "missing `{expected}` in\n{}",
+                debug.text
+            );
+        }
+    }
 
     #[test]
     fn constants_are_written_as_aipo_literals() {

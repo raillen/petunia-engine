@@ -620,6 +620,24 @@ Se uma biblioteca for necessária mais tarde, passa no checklist de admissão an
 
 **Reabrir se:** os moldes precisarem de variantes por projeto antes do sistema de pacotes, ou se a contagem de esperas por objeto pesar com muitos objetos.
 
+## DR-32 — Tela de caixas e fios e depuração (N3 e N5) · ACEITA (2026-10-26)
+
+**Pedido:** "prossiga com a implementação" (passos N3 e N5 do DR-30).
+
+**Decisão:**
+
+1. **A tela de nós é uma vista, não outra interface.** `QGraphicsView` desenha o mesmo grafo que o contorno mostra (`graph.view.canvas`), e **toda ação dela passa pelas mesmas operações** (`graph.add`, `graph.connect`, `graph.remove`, `graph.set_layout`). Nada é alcançável só com o mouse: Tab e setas andam entre as caixas, Enter edita, Delete remove, `+` `-` `0` e Ctrl+roda dão zoom (25 % a 400 %). O contorno continua sendo **a** interface acessível: cada caixa é um item gráfico sem árvore de acessibilidade nativa, então o canvas **não finge** ser um; ele anuncia a caixa escolhida numa frase (título, resumo, problemas, "rodou no último quadro", "esta condição deu falso") pelo mesmo canal de mensagens do painel. Quem usa leitor de tela trabalha no contorno.
+2. **Posições em `scripts/<nome>.layout.json`**, como o DR-30 já previa: arrastar uma caixa grava **só** esse arquivo e **não** entra no histórico de desfazer (posição não é lógica). Grafo sem layout abre com posições **calculadas** a partir das ligações (eventos na coluna 0, o que eles rodam à direita; coluna 300, linha 180), determinísticas, para um teste poder comparar bytes. Layout quebrado **nunca impede abrir o grafo**: é ignorado, as caixas são calculadas e a barra de estado diz por quê (`graph.view.layout_problem`). Nós removidos têm a posição podada do arquivo.
+3. **Marcas de depuração são opcionais no compilador.** `compile_with(document, catalog, debug)`: com `debug: false` o texto é **byte a byte igual** ao de `compile` (teste que compara os dois), então nada muda para o jogo nem para o arquivo salvo. Com `debug: true` cada nó que roda chama `graph_debug.node`, cada `Se` chama `graph_debug.check` com o que decidiu, e cada valor que a condição usou chama `graph_debug.value`. O módulo `graph_debug` **não** entra em `API`: não aparece na paleta de nós, não é coisa que uma pessoa escreve; ele é registrado no host e somado à superfície do compilador.
+4. **A depuração é uma consulta, não um modo novo de rodar.** `play.start` liga as marcas (`set_debug_marks(true)`) — custo pequeno e limitado (últimos quadros, texto truncado) — e `play.debug` devolve o que o último quadro reportou (`tick`, `marks` com `ran`/`check`/`value`) mais `playing`. A janela consulta a cada 200 ms enquanto o jogo roda (um `QTimer`, não o laço do viewport: 200 ms é o suficiente para ler e não compete com o desenho), pinta as caixas que rodaram e, para "por que esta condição falhou?", lista as condições que deram **falso** com os valores lidos; Enter na linha leva ao nó.
+5. **A consulta continua respondendo com o jogo parado** (`playing: false`, nada marcado), para a janela não precisar de estado próprio.
+
+**Fora desta etapa (declarado):** ler as marcas de quadros anteriores (só o último), depurar passo a passo ou com ponto de parada, marcas no jogo exportado, e editar o grafo dentro do canvas com o mouse além de arrastar, clicar e ligar dois pinos.
+
+**Não verificado:** leitor de tela no canvas (o contorno tem texto e descrição falados; **não ouvi** nenhum dos dois), e o destaque com um grafo grande (os testes usam dois ou três nós).
+
+**Reabrir se:** o contorno não bastar para quem usa leitor de tela depois de um teste com uma pessoa real (era a condição do DR-30), ou se 200 ms não acompanharem um grafo grande.
+
 ---
 
 ## Como registrar uma decisão

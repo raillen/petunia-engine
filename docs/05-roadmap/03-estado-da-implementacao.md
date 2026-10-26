@@ -22,7 +22,26 @@ Decisão: [DR-31](../06-decisoes/registro-de-decisoes.md).
 
 **Não verificado:** a porta e o item **jogando de verdade na janela** com o teclado (só pelo motor de scripts com física e no teste do editor); uma execução isolada do teste de fumaça mostrou 9 de 10 e não vi qual (três repetições deram 10/10); leitor de tela.
 
-**Ainda falta:** a tela de caixas e fios (N3), a depuração (N5), prefabs do próprio projeto, porta animada.
+**Ainda falta:** prefabs do próprio projeto, porta animada.
+
+## Etapa atual: sistema de nós, passos N3 e N5 (2026-10-26)
+
+A **tela de caixas e fios** (workspace **Lógica**, alternador Contorno | Caixas e fios) e a **depuração**
+(destaque do nó que rodou e "por que esta condição falhou?"). Decisão: [DR-32](../06-decisoes/registro-de-decisoes.md).
+
+| Entrega | Evidência |
+|---|---|
+| `petunia_graph`: `scripts/<nome>.layout.json` (ler, gravar, podar, recusar arquivo hostil) e `canvas` com caixas, pinos, fios e posições calculadas quando não há layout | 5 testes novos; o mesmo grafo sempre dá as mesmas posições |
+| Marcas de depuração no compilador (`compile_with`): `graph_debug.node/check/value`, com o texto **idêntico** ao normal quando desligadas | teste que compara os dois textos byte a byte, e um que roda o grafo e vê a condição falsa com os valores usados |
+| `play.debug` + marcas ligadas ao jogar no Script Host | teste do host e teste do editor (monta um `Se` falso pelo protocolo, joga um quadro e lê as marcas) |
+| Editor: `graph.view` traz `canvas` e `layout_problem`; `graph.set_layout` grava só o layout, fora do desfazer | teste do editor que move uma caixa, confere a posição e que `gira.graph.json` continua sem coordenadas |
+| Janela: `QGraphicsView` com caixas, fios, arrastar (grava o layout), clicar (seleciona, o contorno acompanha), clicar saída → entrada (liga), Tab/setas/Enter/Delete/`+`/`-`/`0`, zoom com Ctrl+roda, destaque do que rodou e lista das condições falsas | **visto no display virtual**: quadro do canvas e quadro **jogando** com o nó do evento destacado; teste de fumaça **11/11**, incluindo o arrastar que muda só o `.layout.json` |
+
+**Corrigido ao conferir no display virtual:** depois de arrastar uma caixa, os fios e os pontos de clique dos pinos ficavam no lugar antigo; agora o canvas se redesenha ao soltar a caixa. A captura do jogo com o grafo ligado a um objeto mostra as duas caixas destacadas como "rodou".
+
+**Não verificado:** leitor de tela no canvas (o contorno continua sendo a interface acessível; **não ouvi** nenhum dos dois); grafo grande no canvas; o `F7` com teclado real.
+
+**Ainda falta:** prefabs do próprio projeto, porta animada, spawn de criaturas, pontuação do item (declarados fora do DR-31).
 
 ## Etapa atual: sistema de nós, passo N2 (2026-10-26)
 
@@ -36,7 +55,7 @@ Comandos `graph.*` e a **vista em contorno** no editor (workspace **Lógica**, `
 
 **Não verificado:** leitor de tela (as linhas têm texto e descrição falados prontos, mas **não ouvi**); o `F7` com teclado real (no teste de fumaça o `xdotool` desmapeia a tecla depois de digitar, então ele clica na aba); grafos grandes.
 
-**Ainda falta:** a tela de caixas e fios (N3), os prefabs como grafos (N4) e a depuração (N5).
+**Ainda falta:** os prefabs como grafos (N4).
 
 ## Etapa atual: sistema de nós, passo N1 (2026-10-26)
 

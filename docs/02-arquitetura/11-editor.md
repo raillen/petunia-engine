@@ -94,7 +94,7 @@ Se algo falha, a resposta explica o que fazer:
 | `prefab.list` | — | Os prefabs embutidos: `door` (Porta), `pickup` (Item coletável), `spawn` (Ponto de nascimento) (DR-31) |
 | `prefab.spawn` | `id` | Cria o prefab na frente da câmera, no andar atual, em **um** desfazer; grava os grafos de que precisa em `scripts/` sem sobrescrever os que já existem. Devolve `entity`, `graphs_written`, `graphs_kept` |
 | `graph.list` / `graph.new` `name` / `graph.open` `name` / `graph.close` | — | Grafos de nós (`scripts/<nome>.graph.json`, DR-30). Um grafo aberto por vez; cada edição **grava na hora** (atômico) e a primeira de uma abertura guarda o arquivo em `scripts/.backup/` |
-| `graph.view` | — | O grafo aberto como **contorno**: eventos com suas cadeias, entradas com a origem de cada valor, ramos, soltos e diagnósticos; `can_undo` / `can_redo` |
+| `graph.view` | — | O grafo aberto como **contorno** (eventos com suas cadeias, entradas com a origem de cada valor, ramos, soltos e diagnósticos) **e** como **canvas** (`canvas`: caixas com posição, pinos, problemas e fios); `layout_problem` quando o `.layout.json` foi ignorado; `can_undo` / `can_redo` |
 | `graph.add` | `kind`, `after`? `{node,pin}`, `into`? `{node,pin}` | Põe um nó (na cadeia, depois de `after`; ou ligando o resultado a uma entrada `into`) |
 | `graph.remove` | `node` | Tira o nó e fecha a cadeia sobre o buraco |
 | `graph.set` | `node`, `name`, `value` | Constante de uma entrada ou opção do nó (`null` limpa); uma constante substitui o fio |
@@ -103,6 +103,7 @@ Se algo falha, a resposta explica o que fazer:
 | `graph.search` | `query`, `want` (`chain`, `event`, `value`, `any`), `for`? | A paleta: nós que combinam (sem acento, qualquer ordem) |
 | `graph.sources` | `for` `{node,pin}` | O que uma entrada pode receber: valores que já existem quando o nó roda |
 | `graph.code` | — | **Ver como código**: o texto Aipo e o nó de cada linha, ou os problemas |
+| `graph.set_layout` | `node`, `x`, `y` | Onde a caixa fica em `scripts/<nome>.layout.json` (DR-32). Não entra no desfazer: posição não é lógica |
 | `sculpt.begin` · `sculpt.drag` · `sculpt.end` · `sculpt.cancel` | pixels, `invert` | Esculpe a caverna sob o mouse; o arrasto vira **um** `world.batch` |
 | `sculpt.mode` | `mode` (`carve`, `add`, `inflate`, `flatten`, `smooth`), `force` (0 a 1) | Modo e força do pincel |
 | `sculpt.radius` | `meters` (0,25 a 16) | Raio do pincel |
@@ -134,7 +135,8 @@ Se algo falha, a resposta explica o que fazer:
 | `collider.add` | `shape` (`box`, `sphere`, `capsule`, `convex`) | Colisão com nome no objeto selecionado, ajustada a ele; nome livre ("colisão", "colisão 2"…); um passo de desfazer |
 | `collider.fit` | — | A colisão selecionada volta a envolver o objeto |
 | `play.start` | — | **Jogar**: roda a cena numa **cópia** com scripts, física e o personagem do jogador (cria um herói de reserva no `PlayerStart` se não houver). Devolve `problems`, `has_player` |
-| `play.tick` | `seconds`, `forward`, `right`, `jump`, `look_x`, `look_y` | Um quadro do jogo; devolve o `log` dos scripts e as `faults` |
+| `play.tick` | `seconds`, `forward`, `right`, `jump`, `look_x`, `look_y` | Um quadro do jogo; devolve o `log` dos scripts, as `faults` e o `debug` do quadro |
+| `play.debug` | — | O que o último quadro reportou (`tick`, `marks` com `ran` / `check` / `value`) e `playing`; responde também com o jogo parado (DR-32) |
 | `play.stop` | — | Descarta a cópia e devolve a câmera do editor |
 | `camera.view_direction` · `camera.yaw` · `camera.orbit` · `camera.projection` | `x`, `y`, `z` / `degrees` / `dx`, `dy` / `mode`, `height` | Usados pelo cubo de navegação e menus de projeção |
 

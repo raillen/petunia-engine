@@ -10,7 +10,9 @@
 
 use petunia_commands::{CommandRecord, Dispatcher};
 use petunia_project::register_standard_tables;
-use petunia_script::{GRAPH_EVENTS, HANDLERS, LogLevel, ScriptHost, compile_graph, graph_catalog};
+use petunia_script::{
+    GRAPH_EVENTS, HANDLERS, LogLevel, ScriptHost, compile_graph, compile_graph_with, graph_catalog,
+};
 use petunia_world::{PersistentId, Value, World};
 use serde_json::{Value as Json, json};
 
@@ -590,4 +592,61 @@ fn a_wait_inside_a_loop_warns() {
     );
     let compiled = compile_graph(&text).expect("compiles");
     assert!(compiled.warnings.iter().any(|w| w.code == "WAIT_IN_LOOP"));
+}
+
+#[test]
+fn play_mode_reports_what_ran_and_why_a_condition_was_false() {
+    let text = graph(
+        &[
+            (1, "event.on_update", json!({})),
+            (2, "flow.if", json!({})),
+            (
+                3,
+                "op.compare",
+                json!({ "operator": ">", "a": 1.0, "b": 2.0 }),
+            ),
+            (4, "api.log.info", json!({ "message": "entrou" })),
+        ],
+        &[
+            ("1.then", "2.in"),
+            ("3.result", "2.condition"),
+            ("2.then", "4.in"),
+        ],
+    );
+    let plain = compile_graph(&text).expect("compiles");
+    assert!(!plain.text.contains("graph_debug"), "{}", plain.text);
+    assert_eq!(
+        compile_graph_with(&text, false).expect("compiles").text,
+        plain.text,
+        "the marks are the only difference"
+    );
+    let (world, _) = world_with("depurar");
+    let mut host = ScriptHost::new(world).expect("host");
+    host.set_debug_marks(true);
+    host.load_graph("depurar", &text).expect("loads");
+    host.update(0.5);
+    let snapshot = host.debug_snapshot();
+    let marks = snapshot["marks"].as_array().expect("marks").clone();
+    let kind = |node: u32, wanted: &str| {
+        marks
+            .iter()
+            .any(|mark| mark["node"] == node && mark["kind"] == wanted)
+    };
+    assert!(kind(1, "ran"), "the event ran: {snapshot}");
+    assert!(kind(2, "ran"), "the If ran: {snapshot}");
+    assert!(
+        marks
+            .iter()
+            .any(|mark| mark["node"] == 2 && mark["kind"] == "check" && mark["value"] == false),
+        "the condition decided false: {snapshot}"
+    );
+    assert_eq!(
+        marks
+            .iter()
+            .filter(|mark| mark["node"] == 3 && mark["kind"] == "value")
+            .count(),
+        2,
+        "both values the condition used: {snapshot}"
+    );
+    assert!(!kind(4, "ran"), "the 'then' branch did not run: {snapshot}");
 }

@@ -21,10 +21,13 @@
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
 #include <QVBoxLayout>
+#include <QHash>
 
 #include "engine_bridge.h"
+#include "node_canvas.h"
 #include "petunia_icons.h"
 #include "petunia_theme.h"
+#include "ui_kit/shell/petunia_segmented.h"
 
 namespace {
 
@@ -182,6 +185,14 @@ GraphPanel::GraphPanel(EngineBridge* bridge, QWidget* parent) : QWidget(parent),
                                QStringLiteral("Remove o nó da linha escolhida, ou esvazia a entrada (Delete)"));
     undoButton_ = makeButton(QStringLiteral("Desfazer"), QStringLiteral("undo"), QStringLiteral("Desfaz a última mudança deste grafo (Ctrl+Z)"));
     redoButton_ = makeButton(QStringLiteral("Refazer"), QStringLiteral("redo"), QStringLiteral("Refaz o que foi desfeito (Ctrl+Shift+Z)"));
+    switch_ = new PetuniaSegmented(barWidget);
+    switch_->setGroupLabel(QStringLiteral("Como ver o grafo"));
+    switch_->setItems({
+        {QStringLiteral("outline"), QStringLiteral("Contorno"), QStringLiteral("As linhas, editáveis pelo teclado"), QStringLiteral("list_view")},
+        {QStringLiteral("canvas"), QStringLiteral("Caixas e fios"), QStringLiteral("O mesmo grafo desenhado; arrastar muda só a posição"), QStringLiteral("connect")},
+    });
+    switch_->setCurrent(QStringLiteral("outline"));
+    bar->addWidget(switch_);
     bar->addStretch(1);
     codeButton_ = makeButton(QStringLiteral("Ver como código"), QStringLiteral("terminal"),
                              QStringLiteral("Mostra o texto Aipo que este grafo gera. Só leitura: editar o grafo é pelas linhas"));
@@ -211,6 +222,8 @@ GraphPanel::GraphPanel(EngineBridge* bridge, QWidget* parent) : QWidget(parent),
     code_->setAccessibleName(QStringLiteral("Código gerado pelo grafo"));
     code_->setLineWrapMode(QPlainTextEdit::NoWrap);
     views_->addWidget(code_);
+    canvas_ = new NodeCanvas;
+    views_->addWidget(canvas_);
     splitter->addWidget(views_);
     diagnostics_ = new QListWidget;
     diagnostics_->setAccessibleName(QStringLiteral("Problemas do grafo"));
@@ -219,6 +232,14 @@ GraphPanel::GraphPanel(EngineBridge* bridge, QWidget* parent) : QWidget(parent),
     diagnostics_->setMaximumHeight(150);
     diagnostics_->setMinimumHeight(1);
     splitter->addWidget(diagnostics_);
+    debugRows_ = new QListWidget;
+    debugRows_->setAccessibleName(QStringLiteral("Por que esta condição falhou"));
+    debugRows_->setToolTip(QStringLiteral("Enter vai até o nó da condição"));
+    debugRows_->setIconSize(QSize(16, 16));
+    debugRows_->setMaximumHeight(120);
+    debugRows_->setMinimumHeight(1);
+    debugRows_->hide();
+    splitter->addWidget(debugRows_);
     splitter->setStretchFactor(0, 4);
     splitter->setStretchFactor(1, 1);
     layout->addWidget(splitter, 1);
@@ -254,20 +275,70 @@ GraphPanel::GraphPanel(EngineBridge* bridge, QWidget* parent) : QWidget(parent),
     connect(redoButton_, &QToolButton::clicked, this, &GraphPanel::redo);
     connect(attachButton_, &QToolButton::clicked, this, &GraphPanel::attach);
     connect(codeButton_, &QToolButton::toggled, this, [this](bool on) {
-        views_->setCurrentIndex(on ? 1 : 0);
+        showMode(on ? QStringLiteral("code") : switch_->current());
         if (on) {
             showCode();
         }
-        updateButtons();
+    });
+    connect(switch_, &PetuniaSegmented::activated, this, [this](const QString& mode) {
+        switch_->setCurrent(mode);
+        if (codeButton_->isChecked()) {
+            codeButton_->setChecked(false);
+        }
+        showMode(mode);
+    });
+    connect(debugRows_, &QListWidget::itemActivated, this, [this](QListWidgetItem* item) {
+        if (item == nullptr) {
+            return;
+        }
+        const int node = item->data(Qt::UserRole).toInt();
+        selectNode(node);
+        if (canvas_ != nullptr) {
+            canvas_->selectNode(node);
+        }
     });
     connect(tree_, &QTreeWidget::itemActivated, this, [this] { editCurrent(); });
     connect(tree_, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem* item) {
         if (!rendering_) {
             selectedKey_ = item != nullptr ? item->data(0, kKeyRole).toString() : QString();
+            if (canvas_ != nullptr && item != nullptr) {
+                const QJsonObject row = item->data(0, kRowRole).toJsonObject();
+                const QString type = textOf(row, "type");
+                if (type == QLatin1String("step") || type == QLatin1String("event")) {
+                    canvas_->selectNode(row.value(QStringLiteral("node")).toInt());
+                }
+            }
         }
         updateButtons();
     });
     connect(tree_, &QTreeWidget::customContextMenuRequested, this, &GraphPanel::contextMenu);
+    connect(canvas_, &NodeCanvas::nodeSelected, this, [this](int node) {
+        selectNode(node);
+        updateButtons();
+    });
+    connect(canvas_, &NodeCanvas::nodeActivated, this, [this](int node) {
+        selectNode(node);
+        editCurrent();
+    });
+    connect(canvas_, &NodeCanvas::nodeRemoveRequested, this, [this](int node) {
+        selectNode(node);
+        removeCurrent();
+    });
+    connect(canvas_, &NodeCanvas::nodeMoved, this, [this](int node, double x, double y) {
+        const Reply reply = bridge_->call(
+            QStringLiteral("graph.set_layout"),
+            QJsonObject{{"node", node}, {"x", x}, {"y", y}});
+        if (!reply.ok) {
+            emit message(reply.message);
+        }
+    });
+    connect(canvas_, &NodeCanvas::connectRequested, this, [this](const QJsonObject& from, const QJsonObject& to) {
+        if (run(QStringLiteral("graph.connect"), QJsonObject{{"from", from}, {"to", to}})) {
+            refreshView();
+            emit message(QStringLiteral("Ligado. Ctrl+Z desfaz."));
+        }
+    });
+    connect(canvas_, &NodeCanvas::message, this, &GraphPanel::message);
     connect(diagnostics_, &QListWidget::itemActivated, this, [this](QListWidgetItem* item) {
         goToDiagnostic(item->data(Qt::UserRole).toJsonObject());
     });
@@ -552,8 +623,16 @@ void GraphPanel::renderView(const QJsonObject& view) {
     }
     if (wanted != nullptr) {
         tree_->setCurrentItem(wanted);
+        const QJsonObject row = wanted->data(0, kRowRole).toJsonObject();
+        const QString type = textOf(row, "type");
+        if (canvas_ != nullptr && (type == QLatin1String("step") || type == QLatin1String("event"))) {
+            canvas_->selectNode(row.value(QStringLiteral("node")).toInt());
+        }
     }
     rendering_ = false;
+    if (canvas_ != nullptr) {
+        canvas_->setGraph(view.value(QStringLiteral("canvas")).toObject());
+    }
 
     diagnostics_->clear();
     int errors = 0;
@@ -565,12 +644,84 @@ void GraphPanel::renderView(const QJsonObject& view) {
         item->setIcon(PetuniaIcons::get(isError ? QStringLiteral("warning") : QStringLiteral("circle_dot")));
         item->setData(Qt::UserRole, finding);
     }
-    status_->setText(errors == 0 ? QStringLiteral("%1 — %2 nó(s), nenhum erro. Tudo é salvo na hora.").arg(openName_).arg(outline.value(QStringLiteral("nodes")).toInt())
-                                 : QStringLiteral("%1 — %2 erro(s): este grafo ainda não roda.").arg(openName_).arg(errors));
+    QString state = errors == 0 ? QStringLiteral("%1 — %2 nó(s), nenhum erro. Tudo é salvo na hora.").arg(openName_).arg(outline.value(QStringLiteral("nodes")).toInt())
+                                : QStringLiteral("%1 — %2 erro(s): este grafo ainda não roda.").arg(openName_).arg(errors);
+    const QString layoutProblem = textOf(view, "layout_problem");
+    if (!layoutProblem.isEmpty()) {
+        state += QStringLiteral(" ") + layoutProblem;
+    }
+    status_->setText(state);
     if (codeButton_->isChecked()) {
         showCode();
     }
     updateButtons();
+}
+
+void GraphPanel::showMode(const QString& mode) {
+    int index = 0;
+    if (mode == QLatin1String("code")) {
+        index = 1;
+    } else if (mode == QLatin1String("canvas")) {
+        index = 2;
+    }
+    views_->setCurrentIndex(index);
+    updateButtons();
+}
+
+void GraphPanel::setPlaying(bool playing) {
+    if (canvas_ != nullptr) {
+        canvas_->setPlaying(playing);
+    }
+    if (!playing && debugRows_ != nullptr) {
+        debugRows_->clear();
+        debugRows_->hide();
+    }
+}
+
+// The answer to "por que esta condição falhou?": the condition that decided false, with the values
+// it was made of (the generated code records them while playing, N5).
+void GraphPanel::showDebug(const QJsonObject& debug) {
+    if (canvas_ == nullptr || debugRows_ == nullptr) {
+        return;
+    }
+    canvas_->setMarks(debug);
+    debugRows_->clear();
+    if (!debug.value(QStringLiteral("playing")).toBool()) {
+        debugRows_->hide();
+        return;
+    }
+    QHash<int, QStringList> values;
+    QList<int> failed;
+    for (const QJsonValue& value : debug.value(QStringLiteral("marks")).toArray()) {
+        const QJsonObject mark = value.toObject();
+        const int node = mark.value(QStringLiteral("node")).toInt();
+        const QString kind = textOf(mark, "kind");
+        if (kind == QLatin1String("value")) {
+            values[node].append(textOf(mark, "text"));
+        } else if (kind == QLatin1String("check") && !mark.value(QStringLiteral("value")).toBool()
+                   && !failed.contains(node)) {
+            failed.append(node);
+        }
+    }
+    if (failed.isEmpty()) {
+        auto* item = new QListWidgetItem(PetuniaIcons::get(QStringLiteral("circle_dot")),
+                                         QStringLiteral("Nenhuma condição deu falso neste quadro."), debugRows_);
+        item->setFlags(Qt::ItemIsEnabled);
+        debugRows_->show();
+        return;
+    }
+    for (int node : std::as_const(failed)) {
+        const QStringList seen = values.value(node);
+        const QString text = seen.isEmpty()
+            ? QStringLiteral("%1 (nó %2): a condição deu FALSO; não há valores ligados direto nela.")
+                  .arg(canvas_->titleOf(node)).arg(node)
+            : QStringLiteral("%1 (nó %2): a condição deu FALSO. Valores lidos: %3.")
+                  .arg(canvas_->titleOf(node)).arg(node).arg(seen.join(QStringLiteral(", ")));
+        auto* item = new QListWidgetItem(PetuniaIcons::get(QStringLiteral("warning")), text, debugRows_);
+        item->setData(Qt::UserRole, node);
+        item->setData(Qt::AccessibleDescriptionRole, text);
+    }
+    debugRows_->show();
 }
 
 void GraphPanel::showCode() {
@@ -613,6 +764,9 @@ void GraphPanel::selectNode(int node) {
         if ((type == QLatin1String("step") || type == QLatin1String("event")) && row.value(QStringLiteral("node")).toInt() == node) {
             tree_->setCurrentItem(*it);
             tree_->scrollToItem(*it);
+            if (canvas_ != nullptr) {
+                canvas_->selectNode(node);
+            }
             return;
         }
     }
@@ -622,7 +776,8 @@ void GraphPanel::updateButtons() {
     const bool open = !openName_.isEmpty();
     const QJsonObject row = currentRow();
     const QString type = textOf(row, "type");
-    const bool inTree = views_->currentIndex() == 0;
+    const int mode = views_->currentIndex();
+    const bool inTree = mode != 1;
     addEventButton_->setEnabled(open && inTree);
     addButton_->setEnabled(open && inTree && !anchorOf(tree_->currentItem()).isEmpty());
     editButton_->setEnabled(open && inTree && (type == QLatin1String("input") || type == QLatin1String("setting")));

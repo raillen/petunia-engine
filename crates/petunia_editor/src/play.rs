@@ -62,6 +62,9 @@ impl EditorSession {
             })?
             .is_some();
         let mut problems: Vec<String> = Vec::new();
+        // Play mode reads the marks the graphs write (N5): which node ran and why a condition
+        // failed. Cheap and bounded, so it is always on while playing.
+        host.set_debug_marks(true);
         let mut loaded = Vec::new();
         for name in self.script_names() {
             let Ok(text) = self.read_script_file(&name) else {
@@ -163,7 +166,7 @@ impl EditorSession {
         self.camera.look(look.0, look.1);
         // The camera turns the opposite way around the vertical axis from a Transform.
         let yaw_degrees = -self.camera.camera.yaw_degrees;
-        let (log, faults) = {
+        let (log, faults, debug) = {
             let Some(state) = self.play.as_mut() else {
                 return Ok(Json::Null);
             };
@@ -186,10 +189,23 @@ impl EditorSession {
                 .into_iter()
                 .map(|fault| json!({ "script": fault.script, "function": fault.function, "code": fault.code, "message": fault.message }))
                 .collect();
-            (log, faults)
+            (log, faults, state.host.debug_snapshot())
         };
         self.follow_player();
-        Ok(json!({ "log": log, "faults": faults }))
+        Ok(json!({ "log": log, "faults": faults, "debug": debug }))
+    }
+
+    /// `play.debug`: what ran in the newest frame, for the canvas highlight and "por que esta
+    /// condição falhou?". Cheap enough to ask every frame while playing.
+    pub fn play_debug(&self) -> Result<Json, Failure> {
+        let Some(state) = self.play.as_ref() else {
+            return Ok(json!({ "playing": false, "tick": 0, "marks": [] }));
+        };
+        let mut snapshot = state.host.debug_snapshot();
+        if let Some(object) = snapshot.as_object_mut() {
+            object.insert("playing".to_string(), json!(true));
+        }
+        Ok(snapshot)
     }
 
     /// Puts the camera behind the player (when there is one), looking where the mouse looks.
@@ -510,6 +526,114 @@ mod tests {
         );
         assert!(end.y > 0.5 && end.y < 1.5, "still on the floor: {end:?}");
         call(&mut session, json!({ "op": "play.stop" }));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn playing_reports_which_nodes_ran_and_why_a_condition_was_false() {
+        let root = std::env::temp_dir().join(format!(
+            "petunia_editor_test_play_debug_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let mut session = EditorSession::new().expect("session");
+        call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "depurar" }),
+        );
+        call(&mut session, json!({ "op": "graph.new", "name": "cond" }));
+        let event = call(
+            &mut session,
+            json!({ "op": "graph.add", "kind": "event.on_update" }),
+        )["node"]
+            .as_u64()
+            .expect("event");
+        let decide = call(
+            &mut session,
+            json!({ "op": "graph.add", "kind": "flow.if", "after": { "node": event, "pin": "then" } }),
+        )["node"]
+            .as_u64()
+            .expect("if");
+        let compare = call(
+            &mut session,
+            json!({ "op": "graph.add", "kind": "op.compare", "into": { "node": decide, "pin": "condition" } }),
+        )["node"]
+            .as_u64()
+            .expect("compare");
+        for (name, value) in [
+            ("operator", json!(">")),
+            ("a", json!(1.0)),
+            ("b", json!(2.0)),
+        ] {
+            call(
+                &mut session,
+                json!({ "op": "graph.set", "node": compare, "name": name, "value": value }),
+            );
+        }
+        let inside = call(
+            &mut session,
+            json!({ "op": "graph.add", "kind": "api.log.info", "after": { "node": decide, "pin": "then" } }),
+        )["node"]
+            .as_u64()
+            .expect("log");
+        call(
+            &mut session,
+            json!({ "op": "graph.set", "node": inside, "name": "message", "value": "entrou" }),
+        );
+
+        let runner = call(
+            &mut session,
+            json!({ "op": "command.execute", "command": "world.create", "payload": { "rows": {
+                "Name": { "text": "Alvo" },
+                "Transform": { "position": { "x": 0.0, "y": 1.0, "z": 0.0 } },
+                "Brush": { "shape": "box", "size": { "x": 1.0, "y": 1.0, "z": 1.0 } }
+            } } }),
+        )["entity"]
+            .as_u64()
+            .expect("entity");
+        call(
+            &mut session,
+            json!({ "op": "selection.set", "entity": runner }),
+        );
+        call(
+            &mut session,
+            json!({ "op": "script.attach", "name": "cond" }),
+        );
+        let started = call(&mut session, json!({ "op": "play.start" }));
+        assert!(
+            started["problems"].as_array().expect("list").is_empty(),
+            "{started}"
+        );
+        call(
+            &mut session,
+            json!({ "op": "play.tick", "seconds": 1.0 / 60.0 }),
+        );
+        let debug = call(&mut session, json!({ "op": "play.debug" }));
+        assert_eq!(debug["playing"], true, "{debug}");
+        let marks = debug["marks"].as_array().expect("marks").clone();
+        assert!(
+            marks.iter().any(|mark| mark["node"] == decide
+                && mark["kind"] == "check"
+                && mark["value"] == false),
+            "the If decided false: {debug}"
+        );
+        assert!(
+            marks
+                .iter()
+                .any(|mark| mark["node"] == compare && mark["kind"] == "value"),
+            "the values the condition used: {debug}"
+        );
+        assert!(
+            !marks
+                .iter()
+                .any(|mark| mark["node"] == inside && mark["kind"] == "ran"),
+            "the 'then' branch did not run: {debug}"
+        );
+        call(&mut session, json!({ "op": "play.stop" }));
+        assert_eq!(
+            call(&mut session, json!({ "op": "play.debug" }))["playing"],
+            false
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 }

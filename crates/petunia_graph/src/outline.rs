@@ -19,7 +19,7 @@ use crate::model::{GraphDocument, GraphNode, PinRef};
 /// How deep an expression is described before it is cut with "…".
 const MAX_DESCRIBE_DEPTH: usize = 5;
 
-fn type_name(kind: PinKind) -> &'static str {
+pub(crate) fn type_name(kind: PinKind) -> &'static str {
     match kind {
         PinKind::Exec => "Execução",
         PinKind::Data(data_type) => data_type.label(),
@@ -44,7 +44,7 @@ pub fn spec_json(spec: &NodeSpec) -> Json {
     })
 }
 
-fn class_name(class: NodeClass) -> &'static str {
+pub(crate) fn class_name(class: NodeClass) -> &'static str {
     match class {
         NodeClass::Event => "event",
         NodeClass::Action => "action",

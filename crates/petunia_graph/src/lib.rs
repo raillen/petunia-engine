@@ -7,18 +7,26 @@
 //!
 //! Domain crate: no scripting, rendering, windowing or file access.
 
+mod canvas;
 mod catalog;
 mod compile;
 mod edit;
+mod layout;
 mod model;
 mod outline;
 
+pub use canvas::canvas;
 pub use catalog::{
     ApiSpec, Catalog, DataType, Direction, EventSpec, Lowering, NodeClass, NodeSpec, PinDefault,
     PinKind, PinSpec, SettingChoices, SettingSpec,
 };
-pub use compile::{Compiled, Diagnostic, Report, Severity, check, compile, literal, validate};
+pub use compile::{
+    Compiled, Diagnostic, Report, Severity, check, compile, compile_with, literal, validate,
+};
 pub use edit::{add_node, connect, continuation, disconnect, is_event, remove_node, set_param};
+pub use layout::{
+    GraphLayout, LAYOUT_SCHEMA_VERSION, LayoutNode, MAX_COORDINATE, MAX_LAYOUT_BYTES,
+};
 pub use model::{
     GraphDocument, GraphEdge, GraphError, GraphNode, MAX_EDGES, MAX_FILE_BYTES, MAX_NAME_BYTES,
     MAX_NODES, MAX_TEXT_BYTES, PinRef, SCHEMA_VERSION,

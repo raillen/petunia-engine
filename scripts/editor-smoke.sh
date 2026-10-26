@@ -11,6 +11,9 @@
 #   open the Código workspace (F4), create a script, type it (auto-indent) and save it,
 #   open the Lógica workspace (F7), create a node graph, add an event and an action from the palettes,
 #   wire an input to the event's dt and look at the generated code,
+#   look at the same graph as boxes and wires (Caixas e fios), drag a box and check that only
+#   scripts/gira.layout.json changed, play with the canvas open (F6) and keep a picture of the
+#   highlighted node (the picture is evidence, not an assertion: reading it needs eyes),
 #   then play (F6), walk with W, stop (Esc) and save: the scene must not keep the stand-in hero.
 # It then CHECKS the saved scene (the dragged crate must have moved to x = 4.5 on the 0.5 m grid
 # and must have gained the PlayerStart table)
@@ -111,6 +114,15 @@ xdotool key Return;                              sleep 0.6   # its menu
 xdotool key Down Down Return;                    sleep 0.6   # "Usar o valor de…"
 xdotool key Return;                              sleep 1.0   # the first source: dt of the event
 xdotool mousemove 1153 51 click 1;               sleep 0.8   # Ver como código
+xdotool mousemove 925 51 click 1;                sleep 0.8   # Caixas e fios: the same graph as boxes
+import -window root "$output.canvas.png"                     # one picture of the canvas
+xdotool mousemove 600 330 mousedown 1;                       # drag the event box
+for y in 320 310 300 292; do xdotool mousemove 640 "$y"; sleep 0.15; done
+xdotool mouseup 1;                               sleep 0.8
+xdotool mousemove 1350 51 click 1;               sleep 0.8   # Ligar ao objeto: the graph now belongs to the selected object
+xdotool key F6;                                  sleep 1.6   # Jogar with the canvas open: marked boxes
+import -window root "$output.playing.png"                    # evidence: what ran, in the canvas
+xdotool key F6;                                  sleep 1.0   # stop it again (F6 toggles, focus is on the grafo)
 xdotool key F3;                                  sleep 0.8   # back to the Cena workspace
 xdotool mousemove 700 300 click 1;               sleep 0.5   # focus the viewport
 xdotool key F6;                                  sleep 1.5   # Jogar: the scene runs on a COPY (a stand-in hero is made there)
@@ -122,6 +134,7 @@ wait "$editor_pid"
 cp "$workdir/sala/scenes/room.scene.json" "$output.scene.json"
 cp "$workdir/sala/scripts/smoke.aipo" "$output.script.aipo" 2>/dev/null || true
 cp "$workdir/sala/scripts/gira.graph.json" "$output.graph.json" 2>/dev/null || true
+cp "$workdir/sala/scripts/gira.layout.json" "$output.layout.json" 2>/dev/null || true
 
 # The gizmo drag must have moved crate #9 along X only, onto the 0.5 m grid.
 python3 -I - "$output.scene.json" <<'PY'
@@ -159,6 +172,22 @@ if os.path.exists(graph_path):
     wired = any(edge["from"]["pin"] == "dt" and edge["to"]["pin"] == "degrees" for edge in graph["edges"])
     graph_ok = kinds == ["api.transform.rotate_y", "event.on_update"] and wired
 print("verificação: grafo de nós criado, com evento, ação e o dt ligado em Graus (arquivo .graph.json) ->", "ok" if graph_ok else "FALHOU")
+# The canvas drags boxes without touching the logic: positions live in their own file.
+layout_path = sys.argv[1].replace(".scene.json", ".layout.json")
+moved_box = False
+if os.path.exists(layout_path) and os.path.exists(graph_path):
+    layout = json.load(open(layout_path))
+    places = layout.get("nodes", {})
+    # Only the box that moved is saved, and its place is no longer the grid the editor computes.
+    moved_box = (
+        layout.get("schema_version") == 1
+        and len(places) >= 1
+        and all(isinstance(p.get("x"), (int, float)) and isinstance(p.get("y"), (int, float)) for p in places.values())
+        and any(p["x"] % 300 != 0 or p["y"] % 180 != 0 for p in places.values())
+    )
+    graph = json.load(open(graph_path))
+    moved_box = moved_box and all("x" not in n and "y" not in n for n in graph["nodes"])
+print("verificação: caixa arrastada no canvas mudou só scripts/gira.layout.json ->", "ok" if moved_box else "FALHOU")
 converted_to_mesh = any(
     e["rows"].get("Name", {}).get("text") == "Caixa" and "Mesh" in e["rows"] and "Brush" not in e["rows"]
     for e in scene["entities"]
@@ -166,6 +195,6 @@ converted_to_mesh = any(
 print("verificação: modo de edição (Tab) converteu caixa para malha editável ->", "ok" if converted_to_mesh else "FALHOU")
 hero_free = not any(e["rows"].get("Name", {}).get("text") == "Jogador" for e in scene["entities"]) and not any("Character" in e["rows"] for e in scene["entities"])
 print("verificação: Jogar (F6) e parar (Esc) não deixaram o herói de reserva na cena salva ->", "ok" if hero_free else "FALHOU")
-sys.exit(0 if (moved and added and on_cursor and built_up and carved and dug and scripted and graph_ok and converted_to_mesh and hero_free) else 1)
+sys.exit(0 if (moved and added and on_cursor and built_up and carved and dug and scripted and graph_ok and moved_box and converted_to_mesh and hero_free) else 1)
 PY
-echo "imagem: $output (e $output.viewport.png); cena salva: $output.scene.json"
+echo "imagem: $output (e $output.viewport.png, $output.canvas.png, $output.playing.png); cena salva: $output.scene.json"

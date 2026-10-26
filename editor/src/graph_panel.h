@@ -12,6 +12,8 @@ class QStackedWidget;
 class QToolButton;
 class QTreeWidget;
 class QTreeWidgetItem;
+class NodeCanvas;
+class PetuniaSegmented;
 
 // The logic workspace (DR-30): node graphs as an outline. Each row reads like a sentence
 // ("QUANDO A cada quadro", "SE Comparar é menor que ..."), the whole graph is editable from the
@@ -30,6 +32,10 @@ public:
 
     // Re-reads the list of graphs and the open one (when the workspace is shown).
     void reload();
+
+    // While the game runs: what ran and what this graph's conditions decided (N5).
+    void showDebug(const QJsonObject& debug);
+    void setPlaying(bool playing);
 
 signals:
     // A short sentence for the window's status bar.
@@ -55,6 +61,7 @@ private:
     void attach();
     void goToDiagnostic(const QJsonObject& diagnostic);
     void contextMenu(const QPoint& position);
+    void showMode(const QString& mode);
 
     // Calls an operation; on failure tells the person why and returns an empty object.
     bool run(const QString& operation, const QJsonObject& fields, QJsonObject* result = nullptr);
@@ -69,7 +76,10 @@ private:
     QTreeWidget* tree_;
     QStackedWidget* views_;
     QPlainTextEdit* code_;
+    NodeCanvas* canvas_ = nullptr;
+    PetuniaSegmented* switch_ = nullptr;
     QListWidget* diagnostics_;
+    QListWidget* debugRows_ = nullptr;
     QLabel* status_;
     QToolButton* newButton_;
     QToolButton* addEventButton_;

@@ -14,11 +14,11 @@ use aipo_sema::PreludeSurface;
 use aipo_vm::{AipoEngine, HostNativeCallback, Value, VmError, VmFault};
 use petunia_commands::{CommandRecord, Dispatcher};
 use petunia_world::{PersistentId, World};
-use serde_json::json;
+use serde_json::{Value as Json, json};
 
 use crate::api::{API, CONTEXT_GLOBAL, GAME_CAPABILITIES, install_standard, script_surface};
 use crate::compile::{MAX_SCRIPT_BYTES, ScriptDiagnostic, compile};
-use crate::natives::{self, GameCell, GameState, LogLevel, LogLine};
+use crate::natives::{self, DebugEvent, GameCell, GameState, LogLevel, LogLine};
 pub use crate::physics_api::PlayerInput;
 use crate::physics_api::{self, PhysicsRuntime};
 
@@ -118,6 +118,9 @@ fn callback_for(module: &str, name: &str) -> Option<HostNativeCallback> {
         ("physics", "velocity") => physics_api::physics_velocity,
         ("physics", "set_velocity") => physics_api::physics_set_velocity,
         ("physics", "impulse") => physics_api::physics_impulse,
+        ("graph_debug", "node") => natives::graph_debug_node,
+        ("graph_debug", "check") => natives::graph_debug_check,
+        ("graph_debug", "value") => natives::graph_debug_value,
         _ => return None,
     })
 }
@@ -126,12 +129,13 @@ fn callback_for(module: &str, name: &str) -> Option<HostNativeCallback> {
 #[cfg(test)]
 pub(crate) fn api_is_complete() -> bool {
     API.iter()
+        .chain(crate::api::DEBUG_API)
         .all(|function| callback_for(function.module, function.name).is_some())
 }
 
 fn install_api(engine: &mut AipoEngine) {
     let mut modules: BTreeMap<&str, Vec<(Value, Value)>> = BTreeMap::new();
-    for function in API {
+    for function in API.iter().chain(crate::api::DEBUG_API) {
         let Some(callback) = callback_for(function.module, function.name) else {
             continue;
         };
@@ -168,6 +172,8 @@ pub struct ScriptHost {
     disabled: BTreeSet<u64>,
     faults: Vec<ScriptFault>,
     limits: ScriptLimits,
+    /// Whether graphs are compiled with the marks play mode reads (N5).
+    debug_marks: bool,
 }
 
 impl ScriptHost {
@@ -182,6 +188,7 @@ impl ScriptHost {
                 commands_run: 0,
                 log: Vec::new(),
                 events: Vec::new(),
+                debug: crate::natives::DebugTrace::default(),
                 physics: None,
             }))),
             surface: script_surface(),
@@ -190,6 +197,7 @@ impl ScriptHost {
             disabled: BTreeSet::new(),
             faults: Vec::new(),
             limits: ScriptLimits::default(),
+            debug_marks: false,
         })
     }
 
@@ -199,6 +207,35 @@ impl ScriptHost {
 
     pub fn limits(&self) -> ScriptLimits {
         self.limits
+    }
+
+    /// Turns the marks generated graph code writes on or off (play mode, N5). Off compiles exactly
+    /// the text [`crate::graph::compile_graph`] gives.
+    pub fn set_debug_marks(&mut self, on: bool) {
+        self.debug_marks = on;
+    }
+
+    /// What the newest frame reported: the nodes that ran, what each `Se` decided and the values
+    /// the condition was made of. Empty when marks are off or nothing has run yet.
+    pub fn debug_snapshot(&self) -> Json {
+        let (tick, events) = self.state.0.borrow().debug_latest();
+        let marks: Vec<Json> = events
+            .iter()
+            .map(|event| match event {
+                DebugEvent::Ran { entity, node } => {
+                    json!({ "kind": "ran", "entity": entity, "node": node })
+                }
+                DebugEvent::Check {
+                    entity,
+                    node,
+                    value,
+                } => json!({ "kind": "check", "entity": entity, "node": node, "value": value }),
+                DebugEvent::Value { entity, node, text } => {
+                    json!({ "kind": "value", "entity": entity, "node": node, "text": text })
+                }
+            })
+            .collect();
+        json!({ "tick": tick, "marks": marks })
     }
 
     /// The world the scripts act on.
@@ -409,7 +446,7 @@ impl ScriptHost {
         name: &str,
         text: &str,
     ) -> Result<Vec<ScriptDiagnostic>, Vec<ScriptDiagnostic>> {
-        let compiled = crate::graph::compile_graph(text)?;
+        let compiled = crate::graph::compile_graph_with(text, self.debug_marks)?;
         let mut notes = crate::graph::warnings_of(&compiled);
         match self.load(name, &compiled.text) {
             Ok(more) => {
