@@ -9,6 +9,7 @@ description = "Editor session: open project, selection, camera, undo history and
 [dependencies]
 petunia_commands.workspace = true
 petunia_import.workspace = true
+petunia_graph.workspace = true
 petunia_math.workspace = true
 petunia_mesh.workspace = true
 petunia_project.workspace = true

@@ -76,7 +76,7 @@ impl EditorSession {
         let operation = text(request, "op")?;
         // While the game runs, only looking and reading are accepted: nothing edits the scene.
         if self.is_playing() {
-            const ALLOWED: [&str; 11] = [
+            const ALLOWED: [&str; 12] = [
                 "play.",
                 "camera.",
                 "viewport.",
@@ -86,6 +86,7 @@ impl EditorSession {
                 "diagnostics.",
                 "history.",
                 "script.",
+                "graph.",
                 "pointer.",
                 "selection.",
             ];
@@ -118,6 +119,40 @@ impl EditorSession {
             ),
             "script.api" => Ok(self.script_api()),
             "script.attach" => self.script_attach(text(request, "name")?),
+
+            "graph.list" => self.graph_list(),
+            "graph.new" => self.graph_new(text(request, "name")?),
+            "graph.open" => self.graph_open(text(request, "name")?),
+            "graph.close" => self.graph_close(),
+            "graph.view" => self.graph_view(),
+            "graph.add" => self.graph_add(
+                text(request, "kind")?,
+                Self::graph_request_optional_pin(request, "after")?,
+                Self::graph_request_optional_pin(request, "into")?,
+            ),
+            "graph.remove" => self.graph_remove(Self::graph_request_node(request, "node")?),
+            "graph.set" => self.graph_set(
+                Self::graph_request_node(request, "node")?,
+                text(request, "name")?,
+                request
+                    .get("value")
+                    .filter(|value| !value.is_null())
+                    .cloned(),
+            ),
+            "graph.connect" => self.graph_connect(
+                Self::graph_request_pin(request, "from")?,
+                Self::graph_request_pin(request, "to")?,
+            ),
+            "graph.disconnect" => self.graph_disconnect(Self::graph_request_pin(request, "pin")?),
+            "graph.undo" => self.graph_undo(),
+            "graph.redo" => self.graph_redo(),
+            "graph.search" => self.graph_search(
+                text(request, "query").unwrap_or(""),
+                text(request, "want").unwrap_or("any"),
+                Self::graph_request_optional_pin(request, "for")?,
+            ),
+            "graph.sources" => self.graph_sources(&Self::graph_request_pin(request, "for")?),
+            "graph.code" => self.graph_code(),
 
             "editor.snapshot" => Ok(self.snapshot()),
             "entity.describe" => self.describe(entity(request)?),

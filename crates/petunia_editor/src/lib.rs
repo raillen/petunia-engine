@@ -13,6 +13,7 @@ mod colliders;
 mod failure;
 mod floors;
 mod gizmo;
+mod graph_ops;
 mod lights;
 mod mesh_tool;
 mod play;

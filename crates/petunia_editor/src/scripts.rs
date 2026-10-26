@@ -37,7 +37,7 @@ fn on_update(entity, dt) {\n\
     # roda todo quadro; `dt` são os segundos desde o quadro anterior\n\
 }\n";
 
-fn valid_name(name: &str) -> bool {
+pub(crate) fn valid_name(name: &str) -> bool {
     let mut characters = name.chars();
     characters
         .next()
@@ -374,7 +374,7 @@ impl EditorSession {
                 "Clique num objeto primeiro.",
             )
         })?;
-        if !self.script_names().contains(&name) {
+        if !self.script_names().contains(&name) && !self.graph_names().contains(&name) {
             return Err(Failure::new(
                 "SCRIPT_NOT_FOUND",
                 &format!("o script `{name}` não existe"),

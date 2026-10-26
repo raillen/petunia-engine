@@ -1545,6 +1545,7 @@ name = "petunia_editor"
 version = "0.1.0"
 dependencies = [
  "petunia_commands",
+ "petunia_graph",
  "petunia_import",
  "petunia_math",
  "petunia_mesh",
