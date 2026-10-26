@@ -1569,6 +1569,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "petunia_graph"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "petunia_import"
 version = "0.1.0"
 dependencies = [
@@ -1687,6 +1695,7 @@ dependencies = [
  "aipo-syntax",
  "aipo-vm",
  "petunia_commands",
+ "petunia_graph",
  "petunia_math",
  "petunia_physics",
  "petunia_project",

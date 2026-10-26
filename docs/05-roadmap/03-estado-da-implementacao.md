@@ -10,6 +10,22 @@ O essencial foi verificado **em display virtual** (nada apareceu na sua tela), c
 
 Três análises novas pedem a sua decisão: [paridade da interface](../02-arquitetura/12-paridade-ui-petunia3d.md), [edição de malha](../02-arquitetura/13-primitivas-e-edicao-de-malha.md) e [pintura e animação](../01-pesquisa/07-pintura-e-animacao.md).
 
+## Etapa atual: sistema de nós, passo N1 (2026-10-26)
+
+Fase 3, no lugar do Event Sheet. Decisão: [DR-30](../06-decisoes/registro-de-decisoes.md). Esta etapa é **só o modelo e o compilador**; ainda **não há tela de nós nem vista em contorno**.
+
+| Entrega | Evidência |
+|---|---|
+| Crate `petunia_graph` (domínio puro): documento `.graph.json`, limites, catálogo gerado da API (um nó por função), validação em português com nó e pino, compilador para Aipo com mapa linha → nó | 6 testes do crate |
+| Integração no Script Host: `load_graph`, `load_directory` lê `*.graph.json`, o Project Doctor lista erros de grafos, o **Jogar** do editor carrega grafos | 12 testes de ponta a ponta + 1 no editor (um grafo gira um objeto no Jogar) |
+| Ponta a ponta: condição, conta, variável entre quadros, repetir, para cada, texto com aspas e quebra de linha | testes passam |
+| Arquivos hostis: JSON inválido, campo extra, versão nova, ids repetidos, ligação para nó inexistente, 600 nós, lista escondida em parâmetro | recusados |
+| Mesmo grafo, mesma saída, qualquer ordem dos nós | teste |
+
+**Não verificado:** a leitura por leitor de tela (não há interface ainda); grafos grandes (só grafos de teste); o desempenho do código gerado.
+
+**Próximo (N2):** comandos `graph.*` com desfazer e a **vista em contorno** `QUANDO … FAÇA`, a primeira interface acessível.
+
 ## Etapa atual: luz de cena e importação de modelos (2026-10-26)
 
 Fase 2 do pedido "pendências e fases 1 a 6". Decisão: [DR-29](../06-decisoes/registro-de-decisoes.md).

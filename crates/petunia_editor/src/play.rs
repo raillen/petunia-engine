@@ -82,6 +82,22 @@ impl EditorSession {
                 }
             }
         }
+        for name in self.graph_names() {
+            let Ok(text) = self.read_graph_file(&name) else {
+                continue;
+            };
+            match host.load_graph(&name, &text) {
+                Ok(_) => loaded.push(name),
+                Err(diagnostics) => {
+                    for diagnostic in diagnostics
+                        .iter()
+                        .filter(|diagnostic| diagnostic.is_error())
+                    {
+                        problems.push(format!("grafo `{name}`: {}", diagnostic.message));
+                    }
+                }
+            }
+        }
         // Everything drawn is solid unless it has colliders of its own.
         let physical = true;
         {
@@ -325,6 +341,80 @@ mod tests {
             "the built scene did not change"
         );
         call(&mut session, json!({ "op": "edit.undo" }));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_node_graph_in_the_scripts_folder_runs_when_playing() {
+        let root = std::env::temp_dir().join(format!(
+            "petunia_editor_test_play_graph_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let mut session = EditorSession::new().expect("session");
+        call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "grafo" }),
+        );
+        // on_update: turn the object by 90 degrees per second (dt * 90).
+        let graph = json!({
+            "schema_version": 1,
+            "nodes": [
+                { "id": 1, "kind": "event.on_update" },
+                { "id": 2, "kind": "op.math", "params": { "operator": "*", "b": 90.0 } },
+                { "id": 3, "kind": "api.transform.rotate_y" }
+            ],
+            "edges": [
+                { "from": { "node": 1, "pin": "then" }, "to": { "node": 3, "pin": "in" } },
+                { "from": { "node": 1, "pin": "dt" }, "to": { "node": 2, "pin": "a" } },
+                { "from": { "node": 2, "pin": "result" }, "to": { "node": 3, "pin": "degrees" } }
+            ]
+        });
+        std::fs::create_dir_all(root.join("scripts")).expect("scripts folder");
+        std::fs::write(root.join("scripts/gira.graph.json"), graph.to_string()).expect("graph");
+        let spinner = call(
+            &mut session,
+            json!({ "op": "command.execute", "command": "world.create", "payload": { "rows": {
+                "Name": { "text": "Giratório" },
+                "Transform": { "position": { "x": 0.0, "y": 3.0, "z": 0.0 } },
+                "Brush": { "shape": "box", "size": { "x": 1.0, "y": 1.0, "z": 1.0 } },
+                "Script": { "file": "gira", "enabled": true }
+            } } }),
+        )["entity"]
+            .as_u64()
+            .expect("id");
+
+        let started = call(&mut session, json!({ "op": "play.start" }));
+        assert!(
+            started["scripts"]
+                .as_array()
+                .expect("list")
+                .iter()
+                .any(|name| name == "gira"),
+            "{started}"
+        );
+        assert!(
+            started["problems"].as_array().expect("list").is_empty(),
+            "{started}"
+        );
+        for _ in 0..60 {
+            call(
+                &mut session,
+                json!({ "op": "play.tick", "seconds": 1.0 / 60.0 }),
+            );
+        }
+        let frame = session.frame().expect("a frame while playing");
+        let turned = frame
+            .items
+            .iter()
+            .find(|item| item.entity == spinner)
+            .map(|item| item.transform.rotation_degrees.y)
+            .expect("the object is drawn");
+        assert!(
+            (turned.abs() - 90.0).abs() < 1.0,
+            "turned {turned} degrees in a second"
+        );
+        call(&mut session, json!({ "op": "play.stop" }));
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -22,7 +22,7 @@ São **24 decisões**. Estados possíveis:
 | DR-04 | UI do editor | **HERDADA** (Qt 6 / CXX-Qt) | Manter; medir build em S4 |
 | **DR-05** | Modelo de dados | PROPOSTA (compatível com "ECS enxuto") | Tabelas próprias, atrás de interface pequena |
 | DR-06 | Linguagens | **HERDADA** (Luau ou Aipo, uma por projeto) | Padrão Aipo; confirmar com S1 e S2 |
-| DR-07 | Programação visual | **HERDADA** (Gameplay IR) + detalhes **PROPOSTOS** | IR + Event Sheet + grafos especializados |
+| DR-07 | Programação visual | **HERDADA** (Gameplay IR); Event Sheet **trocado por nós** (DR-30) | IR como grafo de nós + grafos especializados |
 | DR-08 | Física | **EM PARTE ACEITA** (DR-27) | Cinemática e consultas primeiro; Rapier; XPBD para cordas |
 | DR-09 | Online | PROPOSTA (**escopo novo**) | Sala + autoridade do servidor |
 | DR-10 | Formatos | **HERDADA** (texto difável; GLB) + detalhes **PROPOSTOS** | Pasta de texto no desenvolvimento; ZIP ao exportar |
@@ -44,6 +44,7 @@ São **24 decisões**. Estados possíveis:
 | **DR-27** | Colisão e corpos físicos | **ACEITA** (2026-10-25, suas escolhas) | Colisões com nome como entidades; `RigidBody`; Rapier em `petunia_physics`; API `collision.*` e `physics.*` ([física](../02-arquitetura/06-fisica-e-cordas.md)) |
 | **DR-28** | Personagem, modo Jogar e solidez automática | **ACEITA** (2026-10-26) | `Character` com tempo de coiote; `F6` roda a cena numa cópia; tudo que é desenhado é sólido; camadas de colisão ([física](../02-arquitetura/06-fisica-e-cordas.md)) |
 | **DR-29** | Luzes de cena e importação de modelos GLB | **ACEITA** (2026-10-26, "Fase 2: aprovado") | Tabela `Light` (sol e pontual); `gltf` só em `petunia_import`; modelo vira malhas editáveis ([editor](../02-arquitetura/11-editor.md)) |
+| **DR-30** | Sistema de nós (no lugar do Event Sheet) | **ACEITA** (2026-10-26, "tudo aprovado"; N1 implementado) | Grafo tipado 1:1 com a API; compila para Aipo; vista em contorno completa como primeira entrega; tela de nós própria sem biblioteca nova |
 | **DR-24** | Workspaces e prioridades antes da API | **EM PARTE ACEITA** (andares, cavernas B) | Mapa (com Jogar), Pintura sem UV, Animação, Efeitos por nós; antes da API: andares, cavernas, terreno, prefabs, Jogar ([análise](../02-arquitetura/14-workspaces-e-prioridades.md)) |
 
 ---
@@ -528,6 +529,77 @@ Números, opções e o que mudaria a recomendação: [pintura e animação](../0
 **Fica de fora (declarado):** material por face (exige cor por face em `PolygonMesh`), texturas e alças de redimensionar colisão no viewport.
 
 **Reabrir se:** modelos grandes passarem do limite de vértices no uso real, ou se texturas virarem requisito.
+
+## DR-30 — Sistema de nós · ACEITA (2026-10-26)
+
+**Pedido:** "decidimos por sistema de nós no lugar de event sheet"; "se necessário, libs externas… o mais completo, mais fácil e mais acessível".
+
+**Contexto (`LOCAL`):** o schema da API já existe como dados tipados (`ApiFunction` em `crates/petunia_script/src/api.rs`: módulo, nome, parâmetros com tipo, retorno, permissão, exemplo) e o Script Host já compila Aipo com validação antes de jogar. Os manipuladores (`on_start`, `on_update`, `on_event`, `on_collision`, `on_collision_end`) também são uma tabela. Isso torna "1 nó = 1 função da API" **gerável**, sem catálogo escrito à mão.
+
+### Decisão proposta
+
+1. **Documento.** Um grafo é um arquivo de texto `scripts/<nome>.graph.json` (a mesma pasta dos scripts, para a tabela `Script` achar os dois do mesmo jeito): `schema_version`, `nodes` (`id` estável, `kind`, `params`), `edges` (de `nó.pino` para `nó.pino`). **Posições ficam em arquivo ao lado** (`<nome>.layout.json`), para o diff da lógica não sumir sob mudanças de layout.
+2. **Tipos de nó.** Todos vêm do schema ou de um conjunto pequeno e fixo:
+   - **Evento** (começa uma cadeia): um por manipulador (Ao começar, A cada quadro, Ao receber evento, Ao tocar, Ao parar de tocar).
+   - **Ação** (função da API com efeito): tem pino de execução; ex. `world.set`, `character.move`.
+   - **Valor** (função da API sem efeito): só pinos de dados; ex. `world.get`, `physics.raycast`.
+   - **Fluxo**: Se/Senão, Sequência, Repetir N vezes, Para cada item.
+   - **Operadores**: comparar, lógica (e/ou/não), matemática, texto, constante.
+3. **Execução e fios.** Dois tipos de pino: **execução** (uma cadeia, de cima para baixo) e **dados** (valores). Ao adicionar um nó "depois" de outro, a execução liga **sozinha**; fios de execução quase nunca precisam ser desenhados. Isso evita o espaguete que o `04-programacao-em-nos.md` já apontava.
+4. **Tipos nos pinos.** `Int`, `Float`, `Bool`, `Text`, `Vec3`, `Entity`, `List`. Só liga o que combina; `Int` → `Float` é a única conversão automática. Recusa vem com **a razão em frase**.
+5. **Compilação.** O grafo vira **texto Aipo** (formato canônico, sempre o mesmo para o mesmo grafo), com **mapa de origem** (linha → id do nó). O Script Host passa a aceitar um `.graph.json` onde aceita um `.aipo`; compila **em memória** a cada carga (nunca fica arquivo gerado velho). **Ver como código** mostra esse texto. Editar o texto **separa** o bloco do visual (aviso claro); o inverso não existe.
+6. **Erros do compilador e falhas em jogo** voltam como **"nó X, pino Y: frase"** usando o mapa de origem; em Jogar, o nó que executou fica destacado.
+7. **Tudo é comando.** `graph.create/add_node/remove_node/connect/disconnect/set_param/insert_after/set_layout`, mais consultas `graph.catalog/validate/explain`. Cada edição é desfazível e um gesto composto é **um** passo (como `asset.import`).
+8. **Dados hostis.** Limites herdados do `op_graph` do Petunia3D: 512 nós, 2048 arestas, profundidade, tamanho de nomes e textos; só números finitos; ids únicos; ciclos de **dados** recusados; nó de tipo desconhecido vira **nó-fantasma** preservado, com aviso (uma ação removida da API não apaga o grafo).
+
+### Acessibilidade (o centro desta decisão)
+
+| Exigência | Como |
+|---|---|
+| **Tudo sem mouse** | A **vista em contorno** é uma segunda interface **completa** do mesmo grafo: árvore `QUANDO … FAÇA` navegável por teclado e leitor de tela. Ela **mantém o que o Event Sheet tinha de bom** (lista legível) sem ser outro sistema |
+| Adicionar nó | `Ctrl+K`-estilo: digite o nome em português (com sinônimos); só aparece o que combina com o pino selecionado |
+| Ligar | **Clique-clique ou teclado**: escolher o pino de saída, navegar só pelos destinos compatíveis, Enter. **Sem arrastar** como único caminho |
+| Cor nunca sozinha | Cada tipo tem **cor + forma + rótulo**; nó e pino têm nome falado completo ("Ao tocar. Saída *Então* ligada a *Tocar som*") |
+| Conforto | Zoom até 400 %, contraste alto, **sem animação** quando o sistema pede, texto do nó no tamanho da interface |
+| Erros | Frase simples, com atalho para ir ao nó |
+
+### Bibliotecas externas (avaliadas, nenhuma adotada)
+
+| Opção | O que é | Veredito |
+|---|---|---|
+| **Tela própria sobre `QGraphicsView`** (Qt, já no projeto) | Canvas de nós escrito por nós, com acessibilidade pensada desde o início | **Recomendada.** Sem dependência nova; ~1,5–2,5 mil linhas de C++ estimadas (**HIPÓTESE**) |
+| `QtNodes` (paceholder/nodeeditor) | Editor de nós pronto para Qt | **Não.** Modelo feito para fluxo de dados, não para execução + dados; itens gráficos sem acessibilidade nativa; atar o grafo ao modelo dele (`GERAL`, de memória, **não pesquisado agora**) |
+| `imnodes` / Dear ImGui | Nós em modo imediato | **Não.** Outro sistema de interface dentro do Qt; sem acessibilidade |
+| `petgraph` (Rust) | Algoritmos de grafo | **Não.** Para ≤512 nós a ordenação e a detecção de ciclo são ~60 linhas; o resultado precisa ser **determinístico** e idêntico (AGENTS §2) |
+
+Se uma biblioteca for necessária mais tarde, passa no checklist de admissão antes.
+
+### Ordem de entrega
+
+1. **N1 — modelo + compilador** (Rust, sem tela): documento, tipos, validação, grafo → Aipo com mapa de origem. Testes, incluindo arquivos hostis e saída idêntica para o mesmo grafo.
+2. **N2 — comandos + vista em contorno** (Qt): primeira interface **já acessível**, útil antes da tela de nós.
+3. **N3 — tela de nós** (QGraphicsView) com teclado e leitor de tela.
+4. **N4 — prefabs como grafos**: Porta, Pickup, Spawn, para provar o sistema.
+5. **N5 — depuração:** destaque do nó em execução e "por que esta condição falhou?".
+
+### Perguntas abertas: respondidas
+
+1. **Estado entre chamadas — resolvido.** A Aipo aceita `var` no nível do módulo, **mas o motor de scripts é um por arquivo, compartilhado por todos os objetos que usam o script**. Por isso a variável de um nó é guardada num dicionário do módulo **com o objeto na chave** (`graph_state`). Vale enquanto o jogo roda; não entra no desfazer nem no arquivo da cena. Variáveis que precisam **sobreviver ao salvar** (progresso de jogo) ficam para o sistema de saves. A tabela `GraphState` proposta antes **não** foi criada.
+2. **Esperar/tempo:** fica para o passo 4 (máquina de estados gerada), como aprovado.
+3. **Rótulos:** português primeiro; títulos e rótulos dos nós vêm de uma tabela no código (`catalog.rs`), prontos para trocar por uma tabela de idiomas.
+
+### Mudanças feitas ao implementar o N1 (e por quê)
+
+| Proposta | Feito | Motivo |
+|---|---|---|
+| Arquivo em `logic/` | `scripts/` | A tabela `Script` e o carregador já olham ali |
+| Tipo `Vec3` | `Dict` + nós **Montar vetor** e **Parte do vetor** | A API de hoje usa `Dict` para vetores; o 1:1 fica fiel |
+| Nó **Sequência** | Fica de fora | Ligar um nó depois do outro já é uma sequência; seria um nó redundante |
+| Valores de ações lidos por nós de outro caminho | Recusados com `VALUE_NOT_READY` | O valor só existe depois que o nó roda, no mesmo caminho |
+| Cada nó "puro" lido várias vezes | Escrito **na linha onde é usado** (como fórmula de planilha); limite de 2000 partes por conta | Mesma semântica que Blueprint; evita crescer sem limite |
+| Execução: cada nó roda depois de **um só** | `EXEC_MERGE` / `EXEC_FANOUT` recusam duas ligações | Mantém o código gerado em blocos (`if`/`repeat`/`each`) |
+
+**Reabrir se:** a vista em contorno não bastar para quem usa leitor de tela (teste com uma pessoa real antes do N3), ou se a tela própria passar de 3 mil linhas.
 
 ---
 

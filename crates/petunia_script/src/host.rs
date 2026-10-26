@@ -402,7 +402,28 @@ impl ScriptHost {
         Ok(compiled.diagnostics)
     }
 
-    /// Loads every `.aipo` file of `directory` (not recursive). A file that does not compile is
+    /// Compiles and loads a node graph as a script. The graph becomes Aipo text in memory; a
+    /// problem in that text is reported on the node that wrote the line.
+    pub fn load_graph(
+        &mut self,
+        name: &str,
+        text: &str,
+    ) -> Result<Vec<ScriptDiagnostic>, Vec<ScriptDiagnostic>> {
+        let compiled = crate::graph::compile_graph(text)?;
+        let mut notes = crate::graph::warnings_of(&compiled);
+        match self.load(name, &compiled.text) {
+            Ok(more) => {
+                notes.extend(more.iter().map(|d| crate::graph::blame_node(&compiled, d)));
+                Ok(notes)
+            }
+            Err(diagnostics) => Err(diagnostics
+                .iter()
+                .map(|d| crate::graph::blame_node(&compiled, d))
+                .collect()),
+        }
+    }
+
+    /// Loads every `.aipo` file and every `.graph.json` file of `directory` (not recursive). A file that does not compile is
     /// reported and skipped; the rest still load.
     pub fn load_directory(&mut self, directory: &Path) -> LoadReport {
         let mut report = LoadReport::default();
@@ -444,6 +465,49 @@ impl ScriptHost {
                 Err(error) => report.failed.push((
                     name,
                     vec![ScriptDiagnostic::general("SCRIPT_READ", error.to_string())],
+                )),
+            }
+        }
+        for name in crate::graph::graph_names(directory) {
+            let taken =
+                report.loaded.contains(&name) || report.failed.iter().any(|(n, _)| *n == name);
+            if taken {
+                report.failed.push((
+                    name.clone(),
+                    vec![ScriptDiagnostic::general(
+                        "GRAPH_NAME_CLASH",
+                        format!(
+                            "existem `{name}.{SCRIPT_EXTENSION}` e `{name}{}`; apague ou renomeie um dos dois",
+                            crate::graph::GRAPH_SUFFIX
+                        ),
+                    )],
+                ));
+                continue;
+            }
+            let path = directory.join(format!("{name}{}", crate::graph::GRAPH_SUFFIX));
+            let too_big = std::fs::metadata(&path)
+                .is_ok_and(|meta| meta.len() as usize > petunia_graph::MAX_FILE_BYTES);
+            if too_big {
+                report.failed.push((
+                    name,
+                    vec![ScriptDiagnostic::general(
+                        "GRAPH_TOO_BIG",
+                        format!(
+                            "o grafo tem mais de {} bytes",
+                            petunia_graph::MAX_FILE_BYTES
+                        ),
+                    )],
+                ));
+                continue;
+            }
+            match std::fs::read_to_string(&path) {
+                Ok(text) => match self.load_graph(&name, &text) {
+                    Ok(_) => report.loaded.push(name),
+                    Err(diagnostics) => report.failed.push((name, diagnostics)),
+                },
+                Err(error) => report.failed.push((
+                    name,
+                    vec![ScriptDiagnostic::general("GRAPH_READ", error.to_string())],
                 )),
             }
         }

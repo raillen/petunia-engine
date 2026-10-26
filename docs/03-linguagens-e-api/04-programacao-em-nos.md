@@ -2,6 +2,8 @@
 
 **Revisão:** 2026-10-24 (reescrita após ler a [especificação anterior](../01-pesquisa/05-especificacao-anterior.md)) · **Estado:** proposta; precisa do experimento S5
 
+> **Atualização (2026-10-26):** você decidiu por **sistema de nós no lugar do Event Sheet**. A seção "Nível 1 — Event Sheet" abaixo vira a **vista em contorno** do grafo, e a "Vista de nós" deixa de ser opcional e passa a ser o padrão. O desenho novo está em [DR-30](../06-decisoes/registro-de-decisoes.md). O restante (IR 1:1 com a API, "Ver como código", limites, nó-fantasma) continua valendo.
+
 ## Resumo (TL;DR)
 
 **1:1 com a API** significa: **cada função da API é exatamente um nó**, com os mesmos parâmetros, tipos, faixas e erros. Nada existe só no visual, nada existe só no texto.
