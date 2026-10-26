@@ -262,6 +262,14 @@ impl EditorSession {
                 self.add_collider(request.get("shape").and_then(Json::as_str).unwrap_or("box"))
             }
             "collider.fit" => self.fit_collider(),
+            "asset.list" => self.asset_list(),
+            "asset.import" => self.asset_import(text(request, "path")?),
+            "create.light" => self.create_light(
+                request
+                    .get("kind")
+                    .and_then(Json::as_str)
+                    .unwrap_or("point"),
+            ),
             "play.start" => self.play_start(),
             "play.stop" => self.play_stop(),
             "play.tick" => self.play_tick(

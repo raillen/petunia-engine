@@ -7,11 +7,13 @@
 //!
 //! This crate knows nothing about windows, Qt or the GPU.
 
+mod assets;
 mod brush_ops;
 mod colliders;
 mod failure;
 mod floors;
 mod gizmo;
+mod lights;
 mod mesh_tool;
 mod play;
 mod protocol;

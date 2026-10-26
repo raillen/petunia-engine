@@ -38,6 +38,13 @@ uniform vec4 u_color;
 uniform vec3 u_camera_position;
 uniform vec4 u_tint;
 uniform int u_faceted;
+uniform int u_custom_light;
+uniform vec3 u_ambient;
+uniform vec3 u_sun_direction;
+uniform vec3 u_sun_color;
+uniform int u_point_count;
+uniform vec4 u_point_position[8];
+uniform vec3 u_point_color[8];
 out vec4 out_color;
 void main() {
     vec3 normal = normalize(v_normal);
@@ -46,10 +53,27 @@ void main() {
         vec3 flat_normal = normalize(cross(dFdx(v_world_position), dFdy(v_world_position)));
         normal = dot(flat_normal, normal) < 0.0 ? -flat_normal : flat_normal;
     }
-    vec3 sun = normalize(vec3(0.4, 0.8, 0.5));
-    float diffuse = max(dot(normal, sun), 0.0);
-    float ambient = 0.35 + 0.15 * normal.y;
-    vec3 lit = u_color.rgb * (ambient + 0.65 * diffuse);
+    vec3 light;
+    if (u_custom_light == 0) {
+        // No Light in the scene: the built-in sun and ambient light.
+        vec3 sun = normalize(vec3(0.4, 0.8, 0.5));
+        float diffuse = max(dot(normal, sun), 0.0);
+        float ambient = 0.35 + 0.15 * normal.y;
+        light = vec3(ambient + 0.65 * diffuse);
+    } else {
+        // Scene lights: a soft ambient (a bit brighter facing up), the sun and up to 8 bulbs.
+        light = u_ambient * (0.8 + 0.2 * normal.y);
+        light += u_sun_color * max(dot(normal, u_sun_direction), 0.0);
+        for (int index = 0; index < u_point_count; ++index) {
+            vec3 to_light = u_point_position[index].xyz - v_world_position;
+            float distance_to_light = length(to_light);
+            float reach = u_point_position[index].w;
+            float falloff = clamp(1.0 - distance_to_light / reach, 0.0, 1.0);
+            float facing = max(dot(normal, to_light / max(distance_to_light, 0.0001)), 0.0);
+            light += u_point_color[index] * falloff * falloff * facing;
+        }
+    }
+    vec3 lit = u_color.rgb * light;
     float fog = clamp(length(v_world_position - u_camera_position) / 200.0, 0.0, 1.0);
     lit = mix(lit, vec3(0.53, 0.70, 0.88), fog * 0.6);
     lit = mix(lit, u_tint.rgb, u_tint.a);
@@ -111,6 +135,13 @@ struct Uniforms {
     camera_position: Option<glow::UniformLocation>,
     tint: Option<glow::UniformLocation>,
     faceted: Option<glow::UniformLocation>,
+    custom_light: Option<glow::UniformLocation>,
+    ambient: Option<glow::UniformLocation>,
+    sun_direction: Option<glow::UniformLocation>,
+    sun_color: Option<glow::UniformLocation>,
+    point_count: Option<glow::UniformLocation>,
+    point_position: Option<glow::UniformLocation>,
+    point_color: Option<glow::UniformLocation>,
 }
 
 /// Tint of the selected object and of the object under the mouse: color and amount.
@@ -222,6 +253,13 @@ impl GlRenderer {
                 camera_position: gl.get_uniform_location(program, "u_camera_position"),
                 tint: gl.get_uniform_location(program, "u_tint"),
                 faceted: gl.get_uniform_location(program, "u_faceted"),
+                custom_light: gl.get_uniform_location(program, "u_custom_light"),
+                ambient: gl.get_uniform_location(program, "u_ambient"),
+                sun_direction: gl.get_uniform_location(program, "u_sun_direction"),
+                sun_color: gl.get_uniform_location(program, "u_sun_color"),
+                point_count: gl.get_uniform_location(program, "u_point_count"),
+                point_position: gl.get_uniform_location(program, "u_point_position[0]"),
+                point_color: gl.get_uniform_location(program, "u_point_color[0]"),
             }
         };
         let grid_pass = create_grid_pass(&gl)?;
@@ -279,6 +317,7 @@ impl GlRenderer {
                 camera.y,
                 camera.z,
             );
+            self.upload_lighting(&frame.lighting);
         }
 
         // Opaque first; translucent objects (ghosted floors) after, far to near, without
@@ -479,6 +518,60 @@ impl GlRenderer {
             }
         }
         Ok(())
+    }
+
+    /// Sends the scene's lights to the main program (bound by the caller).
+    ///
+    /// # Safety
+    /// The context must be current and the main program in use.
+    unsafe fn upload_lighting(&self, lighting: &petunia_render::Lighting) {
+        let uniforms = &self.uniforms;
+        // SAFETY: forwarded contract; every slice has the size the shader declares.
+        unsafe {
+            self.gl
+                .uniform_1_i32(uniforms.custom_light.as_ref(), i32::from(lighting.custom));
+            self.gl.uniform_3_f32(
+                uniforms.ambient.as_ref(),
+                lighting.ambient.x,
+                lighting.ambient.y,
+                lighting.ambient.z,
+            );
+            let (direction, color) = lighting
+                .sun
+                .unwrap_or((petunia_math::Vec3::ZERO, petunia_math::Vec3::ZERO));
+            self.gl.uniform_3_f32(
+                uniforms.sun_direction.as_ref(),
+                direction.x,
+                direction.y,
+                direction.z,
+            );
+            self.gl
+                .uniform_3_f32(uniforms.sun_color.as_ref(), color.x, color.y, color.z);
+            let count = lighting.points.len().min(petunia_render::MAX_POINT_LIGHTS);
+            self.gl
+                .uniform_1_i32(uniforms.point_count.as_ref(), count as i32);
+            let mut positions = [0.0f32; 4 * petunia_render::MAX_POINT_LIGHTS];
+            let mut colors = [0.0f32; 3 * petunia_render::MAX_POINT_LIGHTS];
+            let slots = positions
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(colors.as_chunks_mut::<3>().0.iter_mut())
+                .zip(lighting.points.iter().take(count));
+            for ((position_slot, color_slot), light) in slots {
+                position_slot.copy_from_slice(&[
+                    light.position.x,
+                    light.position.y,
+                    light.position.z,
+                    light.range,
+                ]);
+                color_slot.copy_from_slice(&[light.color.x, light.color.y, light.color.z]);
+            }
+            self.gl
+                .uniform_4_f32_slice(uniforms.point_position.as_ref(), &positions);
+            self.gl
+                .uniform_3_f32_slice(uniforms.point_color.as_ref(), &colors);
+        }
     }
 
     /// Sets the per-object uniforms and draws a mesh with the main program (bound by the caller).

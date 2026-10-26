@@ -7,6 +7,9 @@ pub const BRUSH_SHAPES: [&str; 6] = ["box", "ramp", "cylinder", "cone", "sphere"
 /// Shapes a collider can have (`convex` wraps the owner's mesh).
 pub const COLLIDER_SHAPES: [&str; 4] = ["box", "sphere", "capsule", "convex"];
 
+/// Kinds of light.
+pub const LIGHT_KINDS: [&str; 2] = ["sun", "point"];
+
 /// How a rigid body moves.
 pub const BODY_KINDS: [&str; 3] = ["static", "dynamic", "kinematic"];
 
@@ -50,6 +53,11 @@ pub const BODY_KINDS: [&str; 3] = ["static", "dynamic", "kinematic"];
 ///   `step_height` the tallest step it climbs, `max_slope_degrees` the steepest slope it walks up,
 ///   `coyote_seconds` how long a jump still works after leaving a ledge (accessibility aid) and
 ///   `gravity_scale` its gravity. `player` makes the keyboard drive it in Play mode.
+/// - `Light` (DR-29): a light. `kind` is `sun` (parallel rays: only the **rotation** of the object
+///   matters, it shines along its forward direction) or `point` (a bulb: the **position** matters,
+///   it lights up to `range` meters). `color` and `intensity` (0 to 16) set how strong; `ambient`
+///   is the soft light everywhere (the first light's value is used). A scene with no `Light` row
+///   uses the built-in sun and ambient light; with at least one, only its lights are used.
 /// - `RigidBody`: makes an object move with physics. `kind` is `static`, `dynamic` (gravity and
 ///   contacts) or `kinematic` (moved by the game, pushes others). `mass` in kilograms,
 ///   `gravity_scale` (1 normal, 0 floats), damping, and `lock_rotation` to keep it upright.
@@ -147,6 +155,14 @@ pub fn register_standard_tables(world: &mut World) -> Result<(), WorldError> {
             .column("restitution", ValueKind::Float, Value::Float(0.0))
             .column("layer", ValueKind::Int, Value::Int(1))
             .column("mask", ValueKind::Int, Value::Int(4_294_967_295)),
+    )?;
+    world.define_table(
+        TableSpec::new("Light")
+            .column("kind", ValueKind::Text, Value::Text("point".to_string()))
+            .column("color", ValueKind::Color, Value::Color(Color::WHITE))
+            .column("intensity", ValueKind::Float, Value::Float(1.0))
+            .column("range", ValueKind::Float, Value::Float(10.0))
+            .column("ambient", ValueKind::Float, Value::Float(0.25)),
     )?;
     world.define_table(
         TableSpec::new("Character")

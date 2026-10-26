@@ -1,0 +1,15 @@
+[package]
+name = "petunia_import"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Adapter around the gltf crate: reads a GLB/glTF file into editable polygon meshes in Petunia's own types."
+
+[dependencies]
+petunia_math.workspace = true
+gltf.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

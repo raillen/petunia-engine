@@ -23,6 +23,7 @@ Versões: as resolvidas pelo `Cargo.lock` em 2026-10-25. O `Cargo.lock` completo
 | `glam` | 0.27.0 | Vetores e matrizes do código de malha copiado do Petunia3D. Aprovada em 2026-10-25 (DR-22) com a condição de ficar só dentro do crate | **`petunia_mesh`** (único; nunca na API, no schema, nos arquivos nem na rede) | MIT/Apache-2.0 | `petunia_math` (reescrever ~10,9 mil linhas de legado) | Médio: o legado inteiro usa |
 | `rapier3d` | 0.36.1 (com `enhanced-determinism`) | Corpos rígidos, colisões, raios, gatilhos. **Escolhida por você em 2026-10-25** (DR-27: "Já com corpos físicos", "Também malha convexa já"); já era a recomendação do DR-08. Traz `parry3d` (geometria), `glamx`/`glam` 0.33 e `nalgebra` | **`petunia_physics`** (único; tipos do Rapier nunca saem do crate) | Apache-2.0 | Jolt (C++), solver próprio | Médio: o adaptador tem ~900 linhas; a API pública e os arquivos não mudam |
 | `manifold-rust` | 0.13.1 | Booleanos de malha (fundir, cortar, interseção). **Aprovada por você em 2026-10-25** (DR-22) | **`petunia_mesh`** (único, `legacy/boolean.rs`) | Apache-2.0 | Escrever CSG robusto (meses) | Médio: só `boolean.rs` a troca |
+| `gltf` | 1.4.1 (`default-features = false`, `utils`, `names`) | Ler modelos `.glb`/`.gltf`. **Aprovada por você em 2026-10-26** (DR-29: "Fase 2: aprovado"). Sem as funções de imagem: texturas não são lidas | **`petunia_import`** (único; tipos da `gltf` nunca saem) | MIT/Apache-2.0 | Ler glTF à mão (JSON + buffers) | Baixo: o crate tem uma função de entrada e uma de saída; trocar só mexe nele |
 
 ## Observações
 
@@ -80,6 +81,6 @@ Pacotes do crates.io que entraram com ela (LOCAL, `cargo tree -p petunia_script`
 
 ## Candidatas ainda **não** adotadas
 
-Detalhes e evidências em [bibliotecas auxiliares](02-arquitetura/10-bibliotecas-auxiliares.md): `rapier3d` (física), `kira` (áudio), `renet` (rede), `cosmic-text` (texto), `accesskit` (acessibilidade), `mlua` (Luau), `gltf` (modelos).
+Detalhes e evidências em [bibliotecas auxiliares](02-arquitetura/10-bibliotecas-auxiliares.md): `rapier3d` (física), `kira` (áudio), `renet` (rede), `cosmic-text` (texto), `accesskit` (acessibilidade), `mlua` (Luau).
 
 Cada uma só entra com sua fase e depois de passar no checklist de admissão.

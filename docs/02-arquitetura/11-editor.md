@@ -88,6 +88,9 @@ Se algo falha, a resposta explica o que fazer:
 | `script.run` | `name`, `text`?, `ticks`? | Executa numa **cópia** do mundo; devolve console, falhas e quantos objetos mudariam |
 | `script.api` · `script.attach` | — / `name` | API para sugestões e ajuda; liga o script ao objeto selecionado (um desfazer) |
 | `create.cave` | `seed` (opcional) | Bloco de rocha com um túnel; com `seed`, com salas e túneis **gerados** (um desfazer) |
+| `create.light` | `kind` (`point` ou `sun`) | Luz na frente da câmera (um desfazer); com uma luz, só as luzes da cena valem (DR-29) |
+| `asset.list` | — | Modelos `.glb`/`.gltf` em `assets/` (caminhos do projeto; não segue links simbólicos) |
+| `asset.import` | `path` | Importa um modelo como **malhas editáveis**, um objeto por nó; copia o arquivo para `assets/` (um desfazer). Devolve `imported`, `names`, `asset`, `warnings` |
 | `sculpt.begin` · `sculpt.drag` · `sculpt.end` · `sculpt.cancel` | pixels, `invert` | Esculpe a caverna sob o mouse; o arrasto vira **um** `world.batch` |
 | `sculpt.mode` | `mode` (`carve`, `add`, `inflate`, `flatten`, `smooth`), `force` (0 a 1) | Modo e força do pincel |
 | `sculpt.radius` | `meters` (0,25 a 16) | Raio do pincel |

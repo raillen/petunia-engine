@@ -43,6 +43,7 @@ São **24 decisões**. Estados possíveis:
 | **DR-26** | Layout e design da janela do editor | **ACEITA** (2026-10-25, a seu pedido; revista) | Medidas do Unity com piso da WCAG; menus no `≡`; paleta `Ctrl+K`; workspaces Cena e Código ([design](../02-arquitetura/15-design-da-interface.md)) |
 | **DR-27** | Colisão e corpos físicos | **ACEITA** (2026-10-25, suas escolhas) | Colisões com nome como entidades; `RigidBody`; Rapier em `petunia_physics`; API `collision.*` e `physics.*` ([física](../02-arquitetura/06-fisica-e-cordas.md)) |
 | **DR-28** | Personagem, modo Jogar e solidez automática | **ACEITA** (2026-10-26) | `Character` com tempo de coiote; `F6` roda a cena numa cópia; tudo que é desenhado é sólido; camadas de colisão ([física](../02-arquitetura/06-fisica-e-cordas.md)) |
+| **DR-29** | Luzes de cena e importação de modelos GLB | **ACEITA** (2026-10-26, "Fase 2: aprovado") | Tabela `Light` (sol e pontual); `gltf` só em `petunia_import`; modelo vira malhas editáveis ([editor](../02-arquitetura/11-editor.md)) |
 | **DR-24** | Workspaces e prioridades antes da API | **EM PARTE ACEITA** (andares, cavernas B) | Mapa (com Jogar), Pintura sem UV, Animação, Efeitos por nós; antes da API: andares, cavernas, terreno, prefabs, Jogar ([análise](../02-arquitetura/14-workspaces-e-prioridades.md)) |
 
 ---
@@ -510,6 +511,23 @@ Números, opções e o que mudaria a recomendação: [pintura e animação](../0
 **Por quê:** sem isso o motor montava cenas mas não deixava andar nelas. A solidez automática evita o "atravessei o chão" na primeira tentativa.
 
 **Reabrir se:** o custo das superfícies exatas de cavernas grandes passar do orçamento (experimento S6).
+
+## DR-29 — Luzes de cena e importação de modelos GLB · ACEITA (2026-10-26)
+
+**Pedido:** "Fase 2: aprovado" (painel de assets, luz básica, importação GLB com a biblioteca `gltf`).
+
+**Decisão:**
+
+1. **Luz** é a tabela `Light` (`kind`: `point` ou `sun`, cor, intensidade, alcance, ambiente). Sem nenhuma luz na cena vale o sol e o ambiente padrão; **com uma luz, só as luzes da cena valem**. Até 8 luzes pontuais por quadro; o renderizador calcula no fragmento. Sem sombras nesta etapa.
+2. **Importar modelo** (`asset.import`, `asset.list`): um `.glb`/`.gltf` vira **malhas editáveis** (tabela `Mesh`, DR-22), um objeto por nó com geometria, com posição, rotação, escala e cor base. Tudo entra em **um passo de desfazer**. Uma **cópia** do arquivo fica em `assets/`, para o projeto guardar de onde veio.
+3. **Biblioteca `gltf` 1.4.1**, só dentro do novo crate `petunia_import`; os tipos dela nunca saem. Texturas, animações, esqueletos e câmeras ficam de fora e voltam como **aviso**, não como falha silenciosa.
+4. **Dados hostis:** limite de bytes do arquivo, de nós, de profundidade e de vértices; só números finitos; arquivos externos de um `.gltf` são lidos apenas da pasta do próprio modelo; links simbólicos não são seguidos ao listar `assets/`.
+
+**Por quê:** sem luz de cena o jogo só tinha o sol padrão; sem importação, todo cenário precisava ser feito dentro do editor.
+
+**Fica de fora (declarado):** material por face (exige cor por face em `PolygonMesh`), texturas e alças de redimensionar colisão no viewport.
+
+**Reabrir se:** modelos grandes passarem do limite de vértices no uso real, ou se texturas virarem requisito.
 
 ---
 
