@@ -194,11 +194,18 @@ MainWindow::MainWindow() : bridge_(std::make_unique<EngineBridge>()) {
 
 MainWindow::~MainWindow() {
     closing_ = true;
-    // The renderer owns GPU objects: free them while the GL context still exists.
-    if (viewport_ != nullptr && viewport_->isValid()) {
-        viewport_->makeCurrent();
-        bridge_->releaseViewport();
-        viewport_->doneCurrent();
+    if (inspector_ != nullptr) {
+        inspector_->setEngineAvailable(false);
+    }
+    if (viewport_ != nullptr) {
+        viewport_->cancelActiveEdit();
+        viewport_->setEngineAlive(false);
+        // The renderer owns GPU objects: free them while the GL context still exists.
+        if (viewport_->isValid()) {
+            viewport_->makeCurrent();
+            bridge_->releaseViewport();
+            viewport_->doneCurrent();
+        }
     }
 }
 
@@ -1241,6 +1248,12 @@ bool MainWindow::confirmDiscardChanges() {
 }
 
 bool MainWindow::openProjectAt(const QString& path, bool interactive) {
+    if (viewport_ != nullptr) {
+        viewport_->cancelActiveEdit();
+    }
+    if (interactive && code_ != nullptr && !code_->maybeSave()) {
+        return false;
+    }
     if (interactive && !confirmDiscardChanges()) {
         return false;
     }
@@ -1252,6 +1265,12 @@ bool MainWindow::openProjectAt(const QString& path, bool interactive) {
 }
 
 bool MainWindow::createSampleAt(const QString& path, const QString& name, bool interactive) {
+    if (viewport_ != nullptr) {
+        viewport_->cancelActiveEdit();
+    }
+    if (interactive && code_ != nullptr && !code_->maybeSave()) {
+        return false;
+    }
     if (interactive && !confirmDiscardChanges()) {
         return false;
     }
@@ -1785,6 +1804,9 @@ void MainWindow::showAbout() {
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
+    if (viewport_ != nullptr) {
+        viewport_->cancelActiveEdit();
+    }
     if (!quitting_ && (!code_->maybeSave() || !confirmDiscardChanges())) {
         event->ignore();
         return;

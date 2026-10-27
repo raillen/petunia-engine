@@ -1,7 +1,7 @@
 # Petunia Engine engineering guide
 
 > Rules for AI agents and contributors. Modeled on `digimon-stranger-story-animated-models/AGENTS.md` (Digi-Tactics) and on `petunia3D/AGENTS.md`, adapted to Rust. Analysis and rationale (pt-BR): `docs/00-visao/05-filosofia-de-engenharia.md`.
-> **Current phase: phase 1 (walking skeleton) is being implemented.** Commands marked *(planned)* do not exist yet. Status per item: `docs/05-roadmap/03-estado-da-implementacao.md`. Do not implement anything without a recorded decision.
+> **Current phase: phase 1 (walking skeleton) is complete in code; phase 2 (editor and map building) has started.** Commands marked *(planned)* do not exist yet. Status per item: `docs/05-roadmap/03-estado-da-implementacao.md`. Do not implement anything without a recorded decision.
 > Language: this file is canonical English. User-facing documentation is currently pt-BR drafts (see `DR-19`).
 
 ## 1. Decisions and truthful delivery

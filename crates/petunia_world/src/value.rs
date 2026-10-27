@@ -67,7 +67,7 @@ impl Value {
         match self {
             Self::Bool(_) => Ok(()),
             Self::Int(value) => {
-                if value.abs() <= MAX_SAFE_INT {
+                if (-MAX_SAFE_INT..=MAX_SAFE_INT).contains(value) {
                     Ok(())
                 } else {
                     Err("inteiro fora do intervalo seguro (de -2^53+1 a 2^53-1)".to_string())
@@ -179,6 +179,24 @@ mod tests {
         assert!(text.contains("0.1") && text.contains("0.001"), "{text}");
         let back = Value::from_json(ValueKind::Vec3, &Value::Vec3(vector).to_json(), 16);
         assert_eq!(back, Ok(Value::Vec3(vector)));
+    }
+
+    #[test]
+    fn extreme_integers_are_refused_without_panicking() {
+        for extreme in [i64::MIN, i64::MAX, MAX_SAFE_INT + 1, -MAX_SAFE_INT - 1] {
+            let json = serde_json::json!(extreme);
+            assert!(
+                Value::from_json(ValueKind::Int, &json, 64).is_err(),
+                "{extreme} must be outside the safe range"
+            );
+        }
+        for safe in [MAX_SAFE_INT, -MAX_SAFE_INT, 0] {
+            let json = serde_json::json!(safe);
+            assert_eq!(
+                Value::from_json(ValueKind::Int, &json, 64),
+                Ok(Value::Int(safe))
+            );
+        }
     }
 
     #[test]

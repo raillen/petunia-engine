@@ -22,9 +22,12 @@ class InspectorPanel : public QWidget {
 
 public:
     explicit InspectorPanel(EngineBridge* bridge, QWidget* parent = nullptr);
+    ~InspectorPanel() override;
 
     // Follows the selection and the world: updates values in place when the layout is the same.
     void reload();
+    // The window calls this before the engine is destroyed: no callback may reach it after that.
+    void setEngineAvailable(bool available);
 
 signals:
     // An edit was applied; the owner should refresh the snapshot.
@@ -64,4 +67,6 @@ private:
     std::vector<std::unique_ptr<Field>> fields_;
     // Tables the user folded; kept while the panel is rebuilt for other objects.
     QSet<QString> collapsed_;
+    bool engineAvailable_ = true;
+    bool tearingDown_ = false;
 };

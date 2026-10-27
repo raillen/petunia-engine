@@ -62,6 +62,10 @@ QString columnTitle(const QString& table, const QString& column) {
     return QStringLiteral("%1 · %2").arg(table, column);
 }
 
+bool isReadOnlyColumn(const QString& table, const QString& column) {
+    return table == QLatin1String("Collider") && column == QLatin1String("owner");
+}
+
 // The text in the label column for a column of a table. The engine names columns in English
 // snake_case ("rotation_degrees"); the inspector shows something a person reads at a glance.
 // The raw name stays in the tooltip, because scripts use it.
@@ -155,10 +159,19 @@ InspectorPanel::InspectorPanel(EngineBridge* bridge, QWidget* parent)
     showMessage(QStringLiteral("Nenhum objeto selecionado.\nClique em um objeto no viewport ou na Hierarquia."));
 }
 
+InspectorPanel::~InspectorPanel() {
+    tearingDown_ = true;
+}
+
+void InspectorPanel::setEngineAvailable(bool available) {
+    engineAvailable_ = available;
+}
+
 // Removes every widget from the panel. They are hidden and deleted LATER: this runs while a
 // widget's own signal is still being handled (choosing "Adicionar tabela…" rebuilds the panel
 // from inside that combo box), and deleting it right there crashes Qt.
 void InspectorPanel::clearContent() {
+    tearingDown_ = true;
     while (QLayoutItem* item = content_->takeAt(0)) {
         if (QWidget* widget = item->widget()) {
             widget->hide();
@@ -166,13 +179,14 @@ void InspectorPanel::clearContent() {
         }
         delete item;
     }
+    tearingDown_ = false;
 }
 
 void InspectorPanel::showMessage(const QString& text) {
+    clearContent();
     fields_.clear();
     signature_.clear();
     entity_ = 0;
-    clearContent();
     auto* label = new QLabel(text);
     label->setWordWrap(true);
     label->setProperty("role", QStringLiteral("muted"));
@@ -183,6 +197,9 @@ void InspectorPanel::showMessage(const QString& text) {
 }
 
 void InspectorPanel::reload() {
+    if (!engineAvailable_ || tearingDown_) {
+        return;
+    }
     if (!bridge_->hasSelection()) {
         showMessage(QStringLiteral("Nenhum objeto selecionado.\nClique em um objeto no viewport ou na Hierarquia."));
         return;
@@ -220,12 +237,18 @@ void InspectorPanel::reload() {
 void InspectorPanel::refill(const QJsonObject& description) {
     size_t index = 0;
     for (const QJsonValue& tableValue : description.value("tables").toArray()) {
-        for (const QJsonValue& columnValue : tableValue.toObject().value("columns").toArray()) {
+        const QJsonObject table = tableValue.toObject();
+        const QString tableName = table.value("name").toString();
+        for (const QJsonValue& columnValue : table.value("columns").toArray()) {
+            const QJsonObject column = columnValue.toObject();
+            if (isReadOnlyColumn(tableName, column.value("name").toString())) {
+                continue;
+            }
             if (index >= fields_.size()) {
                 return;
             }
             Field* field = fields_[index++].get();
-            const QJsonValue value = columnValue.toObject().value("value");
+            const QJsonValue value = column.value("value");
             field->current = value;
             field->show(value);
         }
@@ -233,8 +256,8 @@ void InspectorPanel::refill(const QJsonObject& description) {
 }
 
 void InspectorPanel::rebuild(const QJsonObject& description) {
-    fields_.clear();
     clearContent();
+    fields_.clear();
 
     // Header: what kind of object, its name, its id and its tags.
     QStringList tableNames;
@@ -392,7 +415,7 @@ QWidget* InspectorPanel::makeSection(const QString& tableName, const QJsonArray&
         field->table = tableName;
         field->column = column.value("name").toString();
         // Which object a collider belongs to is set when it is created; not an editable number.
-        if (tableName == QLatin1String("Collider") && field->column == QLatin1String("owner")) {
+        if (isReadOnlyColumn(tableName, field->column)) {
             continue;
         }
         field->current = column.value("value");
@@ -548,6 +571,9 @@ QWidget* InspectorPanel::makeEditor(const QString& table, const QJsonObject& col
 }
 
 void InspectorPanel::apply(Field* field, const QJsonValue& value) {
+    if (!engineAvailable_ || tearingDown_) {
+        return;
+    }
     if (value == field->current) {
         return;  // spin boxes also report "no change" when they lose focus
     }
@@ -559,6 +585,9 @@ void InspectorPanel::apply(Field* field, const QJsonValue& value) {
 }
 
 void InspectorPanel::previewValue(Field* field, const QJsonValue& value) {
+    if (!engineAvailable_ || tearingDown_) {
+        return;
+    }
     const Reply reply = bridge_->call(QStringLiteral("gesture.preview"),
                                       QJsonObject{{"entity", static_cast<double>(entity_)},
                                                   {"table", field->table},
@@ -572,6 +601,9 @@ void InspectorPanel::previewValue(Field* field, const QJsonValue& value) {
 }
 
 void InspectorPanel::commitValue(Field* field, const QJsonValue& value) {
+    if (!engineAvailable_ || tearingDown_) {
+        return;
+    }
     // Same path for a typed value and for the end of a drag: preview the final value, then commit.
     previewValue(field, value);
     const Reply reply = bridge_->call(QStringLiteral("gesture.commit"));
@@ -582,11 +614,17 @@ void InspectorPanel::commitValue(Field* field, const QJsonValue& value) {
 }
 
 void InspectorPanel::cancelValue() {
+    if (!engineAvailable_ || tearingDown_) {
+        return;
+    }
     bridge_->call(QStringLiteral("gesture.cancel"));
     emit edited();
 }
 
 void InspectorPanel::runOperation(const QString& operation, const QJsonObject& fields) {
+    if (!engineAvailable_ || tearingDown_) {
+        return;
+    }
     const Reply reply = bridge_->call(operation, fields);
     if (!reply.ok) {
         emit editFailed(reply.explanation());
@@ -595,6 +633,9 @@ void InspectorPanel::runOperation(const QString& operation, const QJsonObject& f
 }
 
 void InspectorPanel::runCommand(const QString& command, const QJsonObject& payload) {
+    if (!engineAvailable_ || tearingDown_) {
+        return;
+    }
     const Reply reply = bridge_->call(QStringLiteral("command.execute"),
                                       QJsonObject{{"command", command}, {"payload", payload}});
     if (!reply.ok) {

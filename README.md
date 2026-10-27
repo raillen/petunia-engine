@@ -1,8 +1,8 @@
 # Petunia Engine
 
 > **Nome provisório.** Engine 3D para quem constrói mundos, não só para quem programa.
-> **Estado:** fase 1 (esqueleto) em implementação. Veja [o que existe e o que foi verificado](docs/05-roadmap/03-estado-da-implementacao.md).
-> **Última revisão:** 2026-10-24
+> **Estado:** fase 1 (esqueleto) concluída no código; fase 2 (editor e construção de mapas) em andamento. Veja [o que existe e o que foi verificado](docs/05-roadmap/03-estado-da-implementacao.md).
+> **Última revisão:** 2026-10-27
 
 ## Resumo (TL;DR)
 
@@ -14,7 +14,7 @@ Petunia Engine é uma engine 3D em Rust, pensada para:
 - **Uma API só**, descrita como dado. Dela saem: Aipo, Luau, Event Sheet e nós (1:1 com a API), autocomplete e documentação.
 - **Online fácil:** "criar sala, passar código, jogar".
 
-## Experimente (fase 1)
+## Experimente (fase 1–2)
 
 Para abrir o **editor** (precisa de Qt 6, CMake e Ninja; veja [dependências](docs/dependencies.md)):
 

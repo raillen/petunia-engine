@@ -1,6 +1,6 @@
 # Estado da implementação
 
-**Revisão:** 2026-10-25 (edição de malha) · **Fase atual:** 1 (esqueleto) concluída no código; **fase 2 (editor e construção de mapas) começou**
+**Revisão:** 2026-10-27 (integridade de dados) · **Fase atual:** 1 (esqueleto) concluída no código; **fase 2 (editor e construção de mapas) começou**
 
 ## Resumo (TL;DR)
 
@@ -9,6 +9,22 @@ O editor agora tem a **cara e as ferramentas de base do Petunia3D**: tema (escur
 O essencial foi verificado **em display virtual** (nada apareceu na sua tela), com imagens conferidas; a tabela abaixo diz o que **não** foi exercitado. **Ainda não vi a janela na sua sessão real.** A sonda de OpenGL (`--gl-info`) passou na sua máquina; falta você abrir o editor.
 
 Três análises novas pedem a sua decisão: [paridade da interface](../02-arquitetura/12-paridade-ui-petunia3d.md), [edição de malha](../02-arquitetura/13-primitivas-e-edicao-de-malha.md) e [pintura e animação](../01-pesquisa/07-pintura-e-animacao.md).
+
+**Consolidação de 2026-10-27:** os PRs #2 a #7 foram mesclados na `main` (personagem e Jogar, luzes e GLB, grafo de nós N1–N5, prefabs). A `main` tinha **397 testes** antes destas correções; com elas, tem **402 testes, 0 falhas**, e o editor compila no Qt 6.4.2.
+
+## Etapa atual: integridade de dados (2026-10-27)
+
+| O quê | Verificação |
+|---|---|
+| `i64::MIN` não estoura mais a validação; inteiros fora de ±(2^53−1) são recusados sem panic | 2 testes (`petunia_world`, `petunia_script`) |
+| Salvar, desfazer e refazer são recusados enquanto um arrasto altera o mundo sem comando (`EDITOR_BUSY`); o arquivo não muda | 3 testes (`petunia_editor`) |
+| Abrir um projeto descarta o gesto preso ao mundo antigo; ele não atinge entidades do projeto novo | 1 teste (`petunia_editor`) |
+| Editor cancela arrasto, escultura e caminho ao perder o foco e antes de salvar/abrir/fechar; pede para salvar script pendente ao trocar de projeto | **compilado** com Qt 6.4.2; o caminho novo não é exercitado pelo teste de fumaça |
+| Inspetor de colisores não desloca mais os valores após o primeiro reload; os campos são esvaziados depois de esconder os widgets | **compilado**; não há passo de colisão no teste de fumaça |
+| Editor Qt compila e o teste de fumaça passa | **passou (Qt 6.4.2, display virtual, 11/11)** |
+| Workspace inteiro | **402 testes, 0 falhas**; `cargo fmt` e `clippy -D warnings` ok |
+
+**Não verificado:** a sua sessão real; o caminho de salvar durante um arrasto e o inspetor de colisores não têm passo no teste de fumaça; leitor de tela e navegação só por teclado.
 
 ## Etapa atual: sistema de nós, passo N4 — prefabs e o nó Esperar (2026-10-26)
 
@@ -235,7 +251,7 @@ Primeira versão do redesenho (uma barra no topo, hierarquia em árvore, inspeto
 
 ## O que existe
 
-**37,5 mil linhas de Rust** em 15 crates (14,1 mil delas copiadas do Petunia3D em `petunia_mesh/src/legacy/`), **6,1 mil linhas de C++** próprias e **3,6 mil linhas de C++ copiadas** do Petunia3D (`editor/src/ui_kit/`; o tema foi reescrito, o resto está igual).
+**41,8 mil linhas de Rust** em 16 crates (14,1 mil delas copiadas do Petunia3D em `petunia_mesh/src/legacy/`), **7,0 mil linhas de C++** próprias e **3,6 mil linhas de C++ copiadas** do Petunia3D (`editor/src/ui_kit/`; o tema foi reescrito, o resto está igual), medidas em 2026-10-27.
 
 | Parte | Linhas | O que faz |
 |---|---:|---|
@@ -264,11 +280,11 @@ Detalhes: [editor](../02-arquitetura/11-editor.md), [paridade](../02-arquitetura
 | Item | Estado | Evidência |
 |---|---|---|
 | `cargo fmt`, `cargo clippy --workspace --all-targets -D warnings` | **passou** | limpo |
-| Suíte completa, **301 testes** (2026-10-25, depois da edição de malha) | **passou** | mesh 179 (164 do Petunia3D), script 30 (14 + 16 do host), editor 25, sculpt 17, render 15, world 13, math 9, commands 6, input 3, project 2, schema 2 |
+| Suíte completa, **402 testes** (2026-10-27) | **passou** | mesh 181 (164 do Petunia3D), script 55 (15 + 16 do host + 7 de física + 17 de grafo), editor 49, graph 21 (12 + 9 de edição), physics 18, sculpt 17, render 16, world 14, math 11, commands 6, import 6, input 3, project 3, schema 2 |
 | Formas orientadas para fora (caixa, rampa, cilindro, cone, esfera, escada) | **passou** | teste por geometria, em vários níveis de detalhe |
-| Gizmo: acertar a alça, mover só no eixo e no snap, girar em passos, escalar sem zerar | **passou** | 4 testes em `petunia_editor` |
+| Gizmo: acertar a alça, mover só no eixo e no snap, girar em passos, escalar sem zerar | **passou** | 6 testes em `petunia_editor` |
 | Um arrasto vira **um** passo de desfazer; sem mudança, nenhum | **passou** | teste de gesto |
-| Editor Qt compila e liga | **passou** | `scripts/editor.sh build` |
+| Editor Qt compila e liga | **passou (Qt 6.4.2, 2026-10-27)** | `scripts/editor.sh build`; teste de fumaça **8/8** |
 | Janela: selecionar, **arrastar a seta X**, **adicionar tabela pelo combo**, duplicar, criar, andar, girar, salvar | **passou (display virtual)** | `scripts/editor-smoke.sh` **confere o arquivo salvo** (`x=4.5`, só no eixo X, na grade; tabela `PlayerStart` adicionada) |
 | Aparência: tema escuro, ícones, campos XYZ, trilho, barra do viewport | **visto (display virtual)** | imagens |
 | Gizmos de girar e de escalar, cone, esfera e escada renderizados | **visto (display virtual)** | imagens |
@@ -279,7 +295,8 @@ Detalhes: [editor](../02-arquitetura/11-editor.md), [paridade](../02-arquitetura
 | Digitar expressões nos campos (`2+3*4`) | **não rodou** | campo copiado e compilado; o caminho de confirmação tem teste |
 | Editor na **sua sessão real** (RTX 3060) | **não rodou a janela** | `--gl-info` passou |
 | Acessibilidade (leitor de tela, só teclado) | **não rodou** | |
-| `cargo deny check` | **passou** (com avisos normais de duplicações transitivas) | `deny.toml` com `allow-wildcard-paths` e `RUSTSEC-2026-0192` justificado |
+| `cargo deny check` | **passou até 2026-10-25** (com avisos normais de duplicações transitivas) | `deny.toml` com `allow-wildcard-paths` e `RUSTSEC-2026-0192` justificado; `cargo-deny` não está instalado nesta revisão |
+| `cargo nextest` | **não rodou** | `cargo-nextest` não está instalado; a suíte rodou com `cargo test` |
 | `cargo xtask …`, regressão visual pixel a pixel | **não rodou / planejado** | |
 
 ## Como abrir (você roda)
@@ -348,10 +365,15 @@ No editor:
 | A barra do viewport deixou a janela com 1.951 px | Imagem | Barra em **duas linhas** (de volta a 1.360 px) |
 | Teste abortou (SIGABRT) | Dois testes seguidos no mesmo display virtual | **Não era o editor**: o Qt não achou o display. Testes rodam um de cada vez |
 | Dois números errados na minha análise (11 comandos de operação; UV 3,9 mil) | Releitura | Linha removida; 3.665 + 345 = ~4 mil |
+| **`i64::MIN` estourava** a validação de inteiro (panic em debug; aceito em release) | Revisão do código | Intervalo com `contains` em `petunia_world` e `petunia_script`; teste com os extremos |
+| **Salvar durante um arrasto** gravava a prévia e deixava o arquivo "limpo" | Revisão do código | `save`, `undo` e `redo` recusam com `EDITOR_BUSY` enquanto há edição ao vivo; teste confere o arquivo |
+| **Abrir outro projeto** mantinha gesto/drag presos ao mundo antigo | Revisão do código | `open_project` zera gesto, drag, escultura, componentes e andar; teste |
+| **Inspetor de colisores** mostrava os valores da coluna anterior após o primeiro reload | Revisão do código | `refill` pula a coluna `owner` como o `rebuild` já fazia |
+| Campos do inspetor podiam ser liberados antes de os widgets escondidos emitirem sinal | Revisão do código | Esconde primeiro, libera depois; `tearingDown_` bloqueia callbacks durante a troca |
 
 ## Limites conhecidos
 
-Veja [editor](../02-arquitetura/11-editor.md). Os maiores: sem câmera ortográfica, lista de objetos sem paginação, sem salvamento automático, cavar só em caixas sem rotação (use `mesh.boolean` para o resto), edição de malha ainda sem interface.
+Veja [editor](../02-arquitetura/11-editor.md). Os maiores: lista de objetos sem paginação, sem salvamento automático, cavar só em caixas sem rotação (use `mesh.boolean` para o resto), edição de malha com interface parcial (`Tab` e seleção de componentes; as operações ainda não têm botões).
 
 ## Pendências que não são código
 

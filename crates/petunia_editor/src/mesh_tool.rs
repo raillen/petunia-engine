@@ -56,6 +56,12 @@ pub(crate) struct ComponentSelection {
     preview: Option<Box<MeshPreview>>,
 }
 
+impl ComponentSelection {
+    pub(crate) fn is_previewing(&self) -> bool {
+        self.preview.is_some()
+    }
+}
+
 /// An operation shown live while the mouse drags its value. Every step is computed again from
 /// `base`, the mesh before the drag, so moving back and forth never accumulates; the session's
 /// gesture keeps the change out of the history until the drag ends.

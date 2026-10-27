@@ -18,7 +18,7 @@ pub(crate) fn json_to_value(json: &Json) -> Value {
         Json::Null => Value::None,
         Json::Bool(flag) => Value::Bool(*flag),
         Json::Number(number) => match number.as_i64() {
-            Some(whole) if whole.abs() <= MAX_SAFE_INT => Value::Int(whole),
+            Some(whole) if (-MAX_SAFE_INT..=MAX_SAFE_INT).contains(&whole) => Value::Int(whole),
             _ => Value::Float(number.as_f64().unwrap_or(0.0)),
         },
         Json::String(text) => Value::string(text.clone()),
@@ -107,6 +107,12 @@ mod tests {
         assert!(matches!(json_to_value(&json!(7)), Value::Int(7)));
         assert!(matches!(json_to_value(&json!(7.5)), Value::Float(_)));
         assert!(matches!(json_to_value(&json!(1u64 << 60)), Value::Float(_)));
+    }
+
+    #[test]
+    fn the_extreme_integer_becomes_a_float_instead_of_panicking() {
+        assert!(matches!(json_to_value(&json!(i64::MIN)), Value::Float(_)));
+        assert!(matches!(json_to_value(&json!(i64::MAX)), Value::Float(_)));
     }
 
     #[test]
