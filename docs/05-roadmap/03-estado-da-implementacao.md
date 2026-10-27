@@ -10,6 +10,24 @@ O essencial foi verificado **em display virtual** (nada apareceu na sua tela), c
 
 Três análises novas pedem a sua decisão: [paridade da interface](../02-arquitetura/12-paridade-ui-petunia3d.md), [edição de malha](../02-arquitetura/13-primitivas-e-edicao-de-malha.md) e [pintura e animação](../01-pesquisa/07-pintura-e-animacao.md).
 
+## Etapa atual: luz de cena e importação de modelos (2026-10-26)
+
+Fase 2 do pedido "pendências e fases 1 a 6". Decisão: [DR-29](../06-decisoes/registro-de-decisoes.md).
+
+| Entrega | Evidência |
+|---|---|
+| Tabela `Light` (sol e pontual); renderizador com até 8 luzes pontuais | 1 teste no editor + **visto (display virtual)** |
+| Menus **Criar > Luz pontual / Sol** com marca no viewport | visto |
+| Crate `petunia_import` (`gltf` 1.4.1): GLB vira malhas soldadas, com cor e transformação | 6 testes, incluindo arquivos hostis |
+| `asset.list` e `asset.import`: cópia em `assets/`, um passo de desfazer, erros claros | 2 testes no editor |
+| **Arquivo > Importar modelo 3D…** | compila; **não abri o seletor de arquivos** |
+| Correção: título do inspetor ficava vazio sem a tabela `Collider` | teste que falha sem a correção |
+| Teste de fumaça: menus ganharam itens, posições ajustadas | **9/9** |
+
+**Não verificado:** importar um modelo real de um programa de modelagem (só GLBs montados nos testes); a sua sessão real; leitor de tela.
+
+**Ainda falta da fase 2:** painel de assets (hoje só a lista por `asset.list`); alças de colisão no viewport; material por face.
+
 ## Última etapa: personagem, modo Jogar e solidez automática (2026-10-26)
 
 Bloco 1 do pedido "pendências e fases 1 a 6": fecha o essencial da fase 3. Decisão: [DR-28](../06-decisoes/registro-de-decisoes.md).

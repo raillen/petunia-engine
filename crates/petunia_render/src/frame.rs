@@ -73,6 +73,39 @@ pub enum OverlayItem {
     },
 }
 
+/// Most point lights one frame carries (the rest are dropped, nearest to the camera kept).
+pub const MAX_POINT_LIGHTS: usize = 8;
+
+/// A bulb: where it is, how far it reaches and the color already scaled by its intensity.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PointLight {
+    pub position: Vec3,
+    pub range: f32,
+    pub color: Vec3,
+}
+
+/// The lights of the scene. With `custom` false the renderer uses its built-in sun and ambient.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Lighting {
+    pub custom: bool,
+    /// Direction **toward** the sun, and its color times its intensity.
+    pub sun: Option<(Vec3, Vec3)>,
+    pub points: Vec<PointLight>,
+    /// Soft light on everything, as a color.
+    pub ambient: Vec3,
+}
+
+impl Default for Lighting {
+    fn default() -> Self {
+        Self {
+            custom: false,
+            sun: None,
+            points: Vec::new(),
+            ambient: Vec3::splat(0.35),
+        }
+    }
+}
+
 /// Everything the renderer needs for one frame. Read-only copy of the relevant world data.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RenderFrame {
@@ -88,6 +121,7 @@ pub struct RenderFrame {
     /// Height of the grid: the floor being built (editor "andares").
     pub grid_height: f32,
     pub clear_color: Color,
+    pub lighting: Lighting,
 }
 
 impl RenderFrame {
@@ -196,6 +230,7 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
             mesh_fingerprint: fingerprint,
         });
     }
+    let lighting = extract_lighting(world, camera.position);
     RenderFrame {
         camera,
         items,
@@ -204,7 +239,69 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
         show_grid: false,
         grid_height: 0.0,
         clear_color: Color::rgb(0.53, 0.70, 0.88),
+        lighting,
     }
+}
+
+/// Reads the `Light` rows. Bad rows are skipped; the Project Doctor reports them.
+fn extract_lighting(world: &World, camera: Vec3) -> Lighting {
+    let mut lighting = Lighting::default();
+    let mut first = true;
+    let mut points: Vec<PointLight> = Vec::new();
+    for handle in world.entities_with_table("Light").unwrap_or_default() {
+        let Ok(Value::Text(kind)) = world.get(handle, "Light", "kind") else {
+            continue;
+        };
+        let intensity = match world.get(handle, "Light", "intensity") {
+            Ok(Value::Float(value)) if value.is_finite() => (*value as f32).clamp(0.0, 16.0),
+            _ => 1.0,
+        };
+        let color = match world.get(handle, "Light", "color") {
+            Ok(Value::Color(color)) if color.is_finite() => Vec3::new(color.r, color.g, color.b),
+            _ => Vec3::ONE,
+        } * intensity;
+        lighting.custom = true;
+        if first {
+            if let Ok(Value::Float(ambient)) = world.get(handle, "Light", "ambient")
+                && ambient.is_finite()
+            {
+                lighting.ambient = Vec3::splat((*ambient as f32).clamp(0.0, 1.0));
+            }
+            first = false;
+        }
+        let transform = transform_of(world, handle);
+        match kind.as_str() {
+            "sun" => {
+                if lighting.sun.is_none() {
+                    // It shines along its forward direction: the light comes from the opposite way.
+                    lighting.sun = Some((transform.forward() * -1.0, color));
+                }
+            }
+            "point" => {
+                let range = match world.get(handle, "Light", "range") {
+                    Ok(Value::Float(value)) if value.is_finite() => {
+                        (*value as f32).clamp(0.1, 1000.0)
+                    }
+                    _ => 10.0,
+                };
+                points.push(PointLight {
+                    position: transform.position,
+                    range,
+                    color,
+                });
+            }
+            _ => {}
+        }
+    }
+    // Too many bulbs: keep the ones nearest to the camera, in a stable order.
+    points.sort_by(|a, b| {
+        (a.position - camera)
+            .length_squared()
+            .total_cmp(&(b.position - camera).length_squared())
+    });
+    points.truncate(MAX_POINT_LIGHTS);
+    lighting.points = points;
+    lighting
 }
 
 /// Camera placed at the first `PlayerStart`, or at the origin when there is none.

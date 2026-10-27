@@ -43,6 +43,10 @@ fn float_of(value: Option<&Value>) -> f32 {
 
 fn read_row(world: &World, id: u64) -> Option<ColliderRow> {
     let handle = world.handle_of(PersistentId(id)).ok()?;
+    // Only a collider has a collider row: any other object is not one (its name is its `Name`).
+    if !world.has_row(handle, "Collider") {
+        return None;
+    }
     let get = |column: &str| world.get(handle, "Collider", column).ok();
     let vector = |column: &str| match get(column) {
         Some(Value::Vec3(value)) => *value,
@@ -455,6 +459,12 @@ mod tests {
         let (mut session, root) = opened("colliders");
         // Crate #9 of the sample is a 1 m box.
         call(&mut session, json!({ "op": "selection.set", "entity": 9 }));
+        // An ordinary object keeps its own name in the inspector, not an empty collider name.
+        let crate_name = call(
+            &mut session,
+            json!({ "op": "entity.describe", "entity": 9 }),
+        );
+        assert_eq!(crate_name["name"], "Caixa grande");
         let first = call(
             &mut session,
             json!({ "op": "collider.add", "shape": "box" }),

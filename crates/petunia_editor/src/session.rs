@@ -675,6 +675,7 @@ impl EditorSession {
         self.sculpt_overlay(&mut frame.overlay);
         self.mesh_overlay(&mut frame.overlay);
         self.collider_overlay(&frame.items, &mut frame.overlay);
+        self.light_overlay(&mut frame.overlay);
         frame.show_grid = true;
         frame.grid_height = self.floor_elevation();
         Some(frame)
@@ -810,6 +811,7 @@ impl EditorSession {
                         ("Brush", "shape") => Some(&petunia_project::BRUSH_SHAPES),
                         ("Collider", "shape") => Some(&petunia_project::COLLIDER_SHAPES),
                         ("RigidBody", "kind") => Some(&petunia_project::BODY_KINDS),
+                        ("Light", "kind") => Some(&petunia_project::LIGHT_KINDS),
                         _ => None,
                     };
                     if let Some(choices) = choices {
