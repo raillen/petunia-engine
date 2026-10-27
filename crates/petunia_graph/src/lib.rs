@@ -9,14 +9,18 @@
 
 mod catalog;
 mod compile;
+mod edit;
 mod model;
+mod outline;
 
 pub use catalog::{
     ApiSpec, Catalog, DataType, Direction, EventSpec, Lowering, NodeClass, NodeSpec, PinDefault,
     PinKind, PinSpec, SettingChoices, SettingSpec,
 };
 pub use compile::{Compiled, Diagnostic, Report, Severity, check, compile, literal, validate};
+pub use edit::{add_node, connect, continuation, disconnect, is_event, remove_node, set_param};
 pub use model::{
     GraphDocument, GraphEdge, GraphError, GraphNode, MAX_EDGES, MAX_FILE_BYTES, MAX_NAME_BYTES,
     MAX_NODES, MAX_TEXT_BYTES, PinRef, SCHEMA_VERSION,
 };
+pub use outline::{Want, fold, outline, search, sources, spec_json};

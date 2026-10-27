@@ -105,6 +105,8 @@ pub struct EditorSession {
     pub(crate) mesh_cache: RefCell<MeshCache>,
     /// The running game (`play.start`), on a copy of the world.
     pub(crate) play: Option<Box<crate::play::PlayState>>,
+    /// The node graph being edited (`graph.open`).
+    pub(crate) graph: Option<crate::graph_ops::OpenGraph>,
 }
 
 pub(crate) fn vector_json(vector: Vec3) -> Json {
@@ -170,6 +172,7 @@ impl EditorSession {
             components: None,
             mesh_cache: RefCell::new(MeshCache::new()),
             play: None,
+            graph: None,
         })
     }
 
@@ -239,6 +242,7 @@ impl EditorSession {
         });
         self.dispatcher = Dispatcher::with_builtin()?;
         self.selection = None;
+        self.graph = None;
         self.dirty = false;
         self.refresh_script_diagnostics();
         self.record("project", &format!("abrir {name}"), true, "");

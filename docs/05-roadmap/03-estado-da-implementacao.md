@@ -10,6 +10,20 @@ O essencial foi verificado **em display virtual** (nada apareceu na sua tela), c
 
 Três análises novas pedem a sua decisão: [paridade da interface](../02-arquitetura/12-paridade-ui-petunia3d.md), [edição de malha](../02-arquitetura/13-primitivas-e-edicao-de-malha.md) e [pintura e animação](../01-pesquisa/07-pintura-e-animacao.md).
 
+## Etapa atual: sistema de nós, passo N2 (2026-10-26)
+
+Comandos `graph.*` e a **vista em contorno** no editor (workspace **Lógica**, `F7`). Decisão: [DR-30](../06-decisoes/registro-de-decisoes.md).
+
+| Entrega | Evidência |
+|---|---|
+| `petunia_graph`: editar (adicionar na cadeia, remover fechando o buraco, ligar, desligar, constante), contorno, busca sem acento, fontes de valor | 9 testes novos de ponta a ponta do crate |
+| 12 operações `graph.*` no editor, com desfazer próprio, gravação na hora, cópia em `scripts/.backup/` e recusas com a razão | 2 testes do editor, incluindo montar um grafo, desfazer, refazer e **jogá-lo** |
+| Workspace **Lógica**: lista de grafos, paleta de nós por busca, contorno `QUANDO … FAÇA`, menu de cada entrada (valor fixo, usar o valor de…, novo nó, esvaziar), Ver como código, Ligar ao objeto, Insert / Enter / Delete / Ctrl+Z | **visto no display virtual**, vários quadros; teste de fumaça **10/10** (cria um grafo pelo mouse e teclado e confere o arquivo) |
+
+**Não verificado:** leitor de tela (as linhas têm texto e descrição falados prontos, mas **não ouvi**); o `F7` com teclado real (no teste de fumaça o `xdotool` desmapeia a tecla depois de digitar, então ele clica na aba); grafos grandes.
+
+**Ainda falta:** a tela de caixas e fios (N3), os prefabs como grafos (N4) e a depuração (N5).
+
 ## Etapa atual: sistema de nós, passo N1 (2026-10-26)
 
 Fase 3, no lugar do Event Sheet. Decisão: [DR-30](../06-decisoes/registro-de-decisoes.md). Esta etapa é **só o modelo e o compilador**; ainda **não há tela de nós nem vista em contorno**.

@@ -91,6 +91,16 @@ Se algo falha, a resposta explica o que fazer:
 | `create.light` | `kind` (`point` ou `sun`) | Luz na frente da câmera (um desfazer); com uma luz, só as luzes da cena valem (DR-29) |
 | `asset.list` | — | Modelos `.glb`/`.gltf` em `assets/` (caminhos do projeto; não segue links simbólicos) |
 | `asset.import` | `path` | Importa um modelo como **malhas editáveis**, um objeto por nó; copia o arquivo para `assets/` (um desfazer). Devolve `imported`, `names`, `asset`, `warnings` |
+| `graph.list` / `graph.new` `name` / `graph.open` `name` / `graph.close` | — | Grafos de nós (`scripts/<nome>.graph.json`, DR-30). Um grafo aberto por vez; cada edição **grava na hora** (atômico) e a primeira de uma abertura guarda o arquivo em `scripts/.backup/` |
+| `graph.view` | — | O grafo aberto como **contorno**: eventos com suas cadeias, entradas com a origem de cada valor, ramos, soltos e diagnósticos; `can_undo` / `can_redo` |
+| `graph.add` | `kind`, `after`? `{node,pin}`, `into`? `{node,pin}` | Põe um nó (na cadeia, depois de `after`; ou ligando o resultado a uma entrada `into`) |
+| `graph.remove` | `node` | Tira o nó e fecha a cadeia sobre o buraco |
+| `graph.set` | `node`, `name`, `value` | Constante de uma entrada ou opção do nó (`null` limpa); uma constante substitui o fio |
+| `graph.connect` / `graph.disconnect` | `from`, `to` / `pin` | Liga ou desliga; recusa com a razão (tipos, ordem, volta de execução) |
+| `graph.undo` / `graph.redo` | — | Histórico **do grafo** (até 100 passos); a cena tem o dela |
+| `graph.search` | `query`, `want` (`chain`, `event`, `value`, `any`), `for`? | A paleta: nós que combinam (sem acento, qualquer ordem) |
+| `graph.sources` | `for` `{node,pin}` | O que uma entrada pode receber: valores que já existem quando o nó roda |
+| `graph.code` | — | **Ver como código**: o texto Aipo e o nó de cada linha, ou os problemas |
 | `sculpt.begin` · `sculpt.drag` · `sculpt.end` · `sculpt.cancel` | pixels, `invert` | Esculpe a caverna sob o mouse; o arrasto vira **um** `world.batch` |
 | `sculpt.mode` | `mode` (`carve`, `add`, `inflate`, `flatten`, `smooth`), `force` (0 a 1) | Modo e força do pincel |
 | `sculpt.radius` | `meters` (0,25 a 16) | Raio do pincel |

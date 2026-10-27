@@ -16,6 +16,7 @@ class InspectorPanel;
 class DiagnosticsPanel;
 class HistoryPanel;
 class CodePanel;
+class GraphPanel;
 class ApiPanel;
 class QAction;
 class QLabel;
@@ -138,6 +139,8 @@ private:
     QAction* carveAction_ = nullptr;
     QAction* codeAction_ = nullptr;
     CodePanel* code_ = nullptr;
+    QAction* logicAction_ = nullptr;
+    GraphPanel* graph_ = nullptr;
     QAction* caveAction_ = nullptr;
     // Criar > Luz: a bulb and a sun (DR-29).
     QAction* importModelAction_ = nullptr;

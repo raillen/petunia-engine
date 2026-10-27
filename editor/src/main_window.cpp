@@ -43,6 +43,7 @@
 #include "appearance.h"
 #include "command_palette.h"
 #include "code_panel.h"
+#include "graph_panel.h"
 #include "engine_bridge.h"
 #include "hierarchy_panel.h"
 #include "info_panels.h"
@@ -75,6 +76,8 @@ MainWindow::MainWindow() : bridge_(std::make_unique<EngineBridge>()) {
     pages_ = new QStackedWidget(this);
     pages_->addWidget(scenePage);
     pages_->addWidget(code_);
+    graph_ = new GraphPanel(bridge_.get(), this);
+    pages_->addWidget(graph_);
     setCentralWidget(pages_);
     // A thin margin of the window color around the panels: they read as separate cards.
     setContentsMargins(PetuniaTheme::instance().scaled(5), 0, PetuniaTheme::instance().scaled(5), 0);
@@ -166,6 +169,7 @@ MainWindow::MainWindow() : bridge_(std::make_unique<EngineBridge>()) {
     restoreGeometry(settings.value("window/geometry").toByteArray());
     workspaceStates_.insert(QStringLiteral("scene"), settings.value("window/workspace/scene").toByteArray());
     workspaceStates_.insert(QStringLiteral("code"), settings.value("window/workspace/code").toByteArray());
+    workspaceStates_.insert(QStringLiteral("logic"), settings.value("window/workspace/logic").toByteArray());
     if (workspaceStates_.value(QStringLiteral("scene")).isEmpty() || !restoreState(workspaceStates_.value(QStringLiteral("scene")))) {
         applyDefaultDocks(QStringLiteral("scene"));
     }
@@ -318,6 +322,9 @@ void MainWindow::buildActions() {
     codeAction_ = make(QStringLiteral("Workspace Código"), QStringLiteral("Os scripts do projeto, com o cursor no editor (F4)"));
     codeAction_->setShortcut(QKeySequence(Qt::Key_F4));
     codeAction_->setProperty("iconName", QStringLiteral("script"));
+    logicAction_ = make(QStringLiteral("Workspace Lógica"), QStringLiteral("Os grafos de nós do projeto, em linhas que o teclado e o leitor de tela percorrem (F7)"));
+    logicAction_->setShortcut(QKeySequence(Qt::Key_F7));
+    logicAction_->setProperty("iconName", QStringLiteral("connect"));
     sceneAction_ = make(QStringLiteral("Workspace Cena"), QStringLiteral("A cena 3D com a hierarquia e o inspetor (F3)"));
     sceneAction_->setShortcut(QKeySequence(Qt::Key_F3));
     sceneAction_->setProperty("iconName", QStringLiteral("cube"));
@@ -466,6 +473,11 @@ void MainWindow::buildActions() {
         switchWorkspace(QStringLiteral("code"));
         code_->focusEditor();
     });
+    connect(logicAction_, &QAction::triggered, this, [this] {
+        switchWorkspace(QStringLiteral("logic"));
+        graph_->reload();
+    });
+    connect(graph_, &GraphPanel::message, this, [this](const QString& text) { statusBar()->showMessage(text, 8000); });
     connect(sceneAction_, &QAction::triggered, this, [this] {
         switchWorkspace(QStringLiteral("scene"));
         viewport_->setFocus();
@@ -598,6 +610,7 @@ void MainWindow::buildMenus() {
     view->addAction(playAction_);
     view->addAction(sceneAction_);
     view->addAction(codeAction_);
+    view->addAction(logicAction_);
     view->addSeparator();
     view->addAction(focusAction_);
     view->addAction(resetCameraAction_);
@@ -762,14 +775,15 @@ void MainWindow::buildAppBar() {
 
     workspaces_ = new PetuniaSegmented(bar);
     workspaces_->setItems({{QStringLiteral("scene"), QStringLiteral("Cena"), QStringLiteral("Workspace Cena: a cena 3D, a hierarquia e o inspetor (F3)"), QStringLiteral("cube")},
-                           {QStringLiteral("code"), QStringLiteral("Código"), QStringLiteral("Workspace Código: os scripts do projeto (F4)"), QStringLiteral("script")}});
+                           {QStringLiteral("code"), QStringLiteral("Código"), QStringLiteral("Workspace Código: os scripts do projeto (F4)"), QStringLiteral("script")},
+                           {QStringLiteral("logic"), QStringLiteral("Lógica"), QStringLiteral("Workspace Lógica: os grafos de nós do projeto (F7)"), QStringLiteral("connect")}});
     workspaces_->setGroupLabel(QStringLiteral("Workspaces"));
     workspaces_->setCurrent(QStringLiteral("scene"));
     for (QPushButton* segment : workspaces_->buttons()) {
         segment->setProperty("role", QStringLiteral("workspace"));
     }
     connect(workspaces_, &PetuniaSegmented::activated, this, [this](const QString& id) {
-        (id == QLatin1String("code") ? codeAction_ : sceneAction_)->trigger();
+        (id == QLatin1String("code") ? codeAction_ : (id == QLatin1String("logic") ? logicAction_ : sceneAction_))->trigger();
     });
     layout->addWidget(workspaces_);
     layout->addSpacing(8);
@@ -820,6 +834,7 @@ void MainWindow::buildAppBar() {
     setActionIcon(deleteAction_, QStringLiteral("trash"));
     setActionIcon(focusAction_, QStringLiteral("frame_selection"));
     setActionIcon(codeAction_, QStringLiteral("script"));
+    setActionIcon(logicAction_, QStringLiteral("connect"));
     setActionIcon(sceneAction_, QStringLiteral("cube"));
     setActionIcon(paletteAction_, QStringLiteral("search"));
     setActionIcon(preferencesAction_, QStringLiteral("settings"));
@@ -918,7 +933,7 @@ void MainWindow::switchWorkspace(const QString& id) {
     }
     workspaceStates_.insert(workspace_, saveState());
     workspace_ = id;
-    pages_->setCurrentIndex(id == QLatin1String("code") ? 1 : 0);
+    pages_->setCurrentIndex(id == QLatin1String("code") ? 1 : (id == QLatin1String("logic") ? 2 : 0));
     const QByteArray state = workspaceStates_.value(id);
     if (state.isEmpty() || !restoreState(state)) {
         applyDefaultDocks(id);
@@ -930,8 +945,10 @@ void MainWindow::switchWorkspace(const QString& id) {
 // code shows only the API reference next to the editor.
 void MainWindow::applyDefaultDocks(const QString& id) {
     const bool code = id == QLatin1String("code");
+    const bool logic = id == QLatin1String("logic");
     for (QDockWidget* dock : std::as_const(docks_)) {
-        dock->setVisible(code ? dock == apiDock_ : dock != apiDock_);
+        // The logic workspace has everything it needs on its own page.
+        dock->setVisible(logic ? false : (code ? dock == apiDock_ : dock != apiDock_));
     }
 }
 
@@ -1452,7 +1469,7 @@ void MainWindow::setEditingLocked(bool locked) {
         palette->setEnabled(!locked);
     }
     if (locked) {
-        const QSet<QAction*> keep = {playAction_, paletteAction_, sceneAction_, codeAction_, preferencesAction_,
+        const QSet<QAction*> keep = {playAction_, paletteAction_, sceneAction_, codeAction_, logicAction_, preferencesAction_,
                                      shortcutsAction_, aboutAction_, largerTextAction_, smallerTextAction_,
                                      normalTextAction_, reducedMotionAction_, fullMenusAction_};
         lockedActions_.clear();
@@ -1726,6 +1743,7 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     workspaceStates_.insert(workspace_, saveState());
     settings.setValue("window/workspace/scene", workspaceStates_.value(QStringLiteral("scene")));
     settings.setValue("window/workspace/code", workspaceStates_.value(QStringLiteral("code")));
+    settings.setValue("window/workspace/logic", workspaceStates_.value(QStringLiteral("logic")));
     event->accept();
 }
 

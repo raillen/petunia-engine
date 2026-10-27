@@ -29,6 +29,7 @@ add_executable(petunia-editor
     src/info_panels.cpp
     src/code_editor.cpp
     src/code_panel.cpp
+    src/graph_panel.cpp
     src/main_window.cpp
     src/panel_title_bar.cpp
     src/command_palette.cpp

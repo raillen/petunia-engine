@@ -9,6 +9,8 @@
 #   go up a floor (creates the floors) and build a box there, come back down, create a cave and
 #   carve it with the sculpting tool, dig a tunnel with the path tool, save, open the history tab,
 #   open the Código workspace (F4), create a script, type it (auto-indent) and save it,
+#   open the Lógica workspace (F7), create a node graph, add an event and an action from the palettes,
+#   wire an input to the event's dt and look at the generated code,
 #   then play (F6), walk with W, stop (Esc) and save: the scene must not keep the stand-in hero.
 # It then CHECKS the saved scene (the dragged crate must have moved to x = 4.5 on the 0.5 m grid
 # and must have gained the PlayerStart table)
@@ -39,7 +41,7 @@ sleep 1
 
 env -u WAYLAND_DISPLAY DISPLAY="$display" XDG_CONFIG_HOME="$workdir/config" XDG_CACHE_HOME="$workdir/cache" \
     QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 QT_LOGGING_RULES='qt.qpa.*=false' \
-    "$editor" --sample "$workdir/sala" --screenshot "$output" --screenshot-delay 38000 2>/dev/null &
+    "$editor" --sample "$workdir/sala" --screenshot "$output" --screenshot-delay 62000 2>/dev/null &
 editor_pid=$!
 sleep 3
 
@@ -94,6 +96,21 @@ xdotool type --delay 25 "fn on_update(entity, dt) {"; xdotool key Return
 xdotool type --delay 25 "log.info(\"oi\", entity)"; xdotool key Return
 xdotool type --delay 25 "}";                     sleep 0.6
 xdotool key ctrl+s;                              sleep 1.0   # saves the script to scripts/smoke.aipo
+xdotool mousemove 632 17 click 1;                sleep 1.2   # the Lógica workspace tab (node graphs as an outline; F7 on the keyboard,
+                                                              # but xdotool's typing remaps keys, so the test clicks)
+xdotool mousemove 186 53 click 1;                sleep 1.0   # + (new graph)
+xdotool type --delay 40 gira; xdotool key Return; sleep 1.0
+xdotool mousemove 252 51 click 1;                sleep 1.0   # Evento: the palette
+xdotool type --delay 40 quadro;                  sleep 0.6
+xdotool key Return;                              sleep 1.0   # A cada quadro
+xdotool mousemove 360 51 click 1;                sleep 1.0   # Adicionar depois: the palette
+xdotool type --delay 40 "girar y";               sleep 0.6
+xdotool key Return;                              sleep 1.0   # Girar no Y, after the event
+xdotool mousemove 360 146 click 1;               sleep 0.5   # the "Graus" input row
+xdotool key Return;                              sleep 0.6   # its menu
+xdotool key Down Down Return;                    sleep 0.6   # "Usar o valor de…"
+xdotool key Return;                              sleep 1.0   # the first source: dt of the event
+xdotool mousemove 1153 51 click 1;               sleep 0.8   # Ver como código
 xdotool key F3;                                  sleep 0.8   # back to the Cena workspace
 xdotool mousemove 700 300 click 1;               sleep 0.5   # focus the viewport
 xdotool key F6;                                  sleep 1.5   # Jogar: the scene runs on a COPY (a stand-in hero is made there)
@@ -104,6 +121,7 @@ xdotool key ctrl+s;                              sleep 0.8   # save the scene ag
 wait "$editor_pid"
 cp "$workdir/sala/scenes/room.scene.json" "$output.scene.json"
 cp "$workdir/sala/scripts/smoke.aipo" "$output.script.aipo" 2>/dev/null || true
+cp "$workdir/sala/scripts/gira.graph.json" "$output.graph.json" 2>/dev/null || true
 
 # The gizmo drag must have moved crate #9 along X only, onto the 0.5 m grid.
 python3 -I - "$output.scene.json" <<'PY'
@@ -133,6 +151,14 @@ import os
 script_path = sys.argv[1].replace(".scene.json", ".script.aipo")
 scripted = os.path.exists(script_path) and "fn on_update(entity, dt) {\n    log.info(" in open(script_path).read()
 print("verificação: script escrito no editor de código e salvo em scripts/ ->", "ok" if scripted else "FALHOU")
+graph_path = sys.argv[1].replace(".scene.json", ".graph.json")
+graph_ok = False
+if os.path.exists(graph_path):
+    graph = json.load(open(graph_path))
+    kinds = sorted(node["kind"] for node in graph["nodes"])
+    wired = any(edge["from"]["pin"] == "dt" and edge["to"]["pin"] == "degrees" for edge in graph["edges"])
+    graph_ok = kinds == ["api.transform.rotate_y", "event.on_update"] and wired
+print("verificação: grafo de nós criado, com evento, ação e o dt ligado em Graus (arquivo .graph.json) ->", "ok" if graph_ok else "FALHOU")
 converted_to_mesh = any(
     e["rows"].get("Name", {}).get("text") == "Caixa" and "Mesh" in e["rows"] and "Brush" not in e["rows"]
     for e in scene["entities"]
@@ -140,6 +166,6 @@ converted_to_mesh = any(
 print("verificação: modo de edição (Tab) converteu caixa para malha editável ->", "ok" if converted_to_mesh else "FALHOU")
 hero_free = not any(e["rows"].get("Name", {}).get("text") == "Jogador" for e in scene["entities"]) and not any("Character" in e["rows"] for e in scene["entities"])
 print("verificação: Jogar (F6) e parar (Esc) não deixaram o herói de reserva na cena salva ->", "ok" if hero_free else "FALHOU")
-sys.exit(0 if (moved and added and on_cursor and built_up and carved and dug and scripted and converted_to_mesh and hero_free) else 1)
+sys.exit(0 if (moved and added and on_cursor and built_up and carved and dug and scripted and graph_ok and converted_to_mesh and hero_free) else 1)
 PY
 echo "imagem: $output (e $output.viewport.png); cena salva: $output.scene.json"
