@@ -417,6 +417,50 @@ void ViewportWidget::cancelGizmoDrag() {
     update();
 }
 
+void ViewportWidget::setEngineAlive(bool alive) {
+    engineAlive_ = alive;
+}
+
+void ViewportWidget::cancelActiveEdit() {
+    auto clearLocalState = [this] {
+        freeMode_ = false;
+        gizmoDragging_ = false;
+        faceDragging_ = false;
+        sculptDragging_ = false;
+        freeTyped_.clear();
+        heldKeys_.clear();
+        looking_ = false;
+        hoveredHandle_.clear();
+        hoveredEntity_ = QJsonValue();
+        hoveredFace_ = QJsonValue();
+        clickCandidate_ = false;
+        unsetCursor();
+    };
+    if (!engineAlive_ || !hasProject()) {
+        clearLocalState();
+        return;
+    }
+    if (freeMode_) {
+        finishFreeMode(false);
+    } else if (gizmoDragging_) {
+        cancelGizmoDrag();
+    }
+    if (faceDragging_) {
+        faceDragging_ = false;
+        bridge_->call(QStringLiteral("face.cancel"));
+        emit selectionChanged();
+    }
+    if (sculptDragging_) {
+        sculptDragging_ = false;
+        bridge_->call(QStringLiteral("sculpt.cancel"));
+    }
+    if (pathPending()) {
+        bridge_->call(QStringLiteral("path.cancel"));
+    }
+    clearLocalState();
+    update();
+}
+
 void ViewportWidget::mousePressEvent(QMouseEvent* event) {
     setFocus(Qt::MouseFocusReason);
     if (playing_ && event->button() != Qt::RightButton) {
@@ -589,6 +633,7 @@ void ViewportWidget::leaveEvent(QEvent* event) {
 }
 
 void ViewportWidget::focusOutEvent(QFocusEvent* event) {
+    cancelActiveEdit();
     heldKeys_.clear();
     looking_ = false;
     unsetCursor();

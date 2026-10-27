@@ -228,6 +228,112 @@ mod tests {
     }
 
     #[test]
+    fn saving_is_refused_while_a_drag_is_live_and_the_file_stays_untouched() {
+        let root = scratch_dir("save_while_dragging");
+        let mut session = EditorSession::new().expect("session");
+        call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "Teste" }),
+        );
+        let scene = root.join("scenes").join("room.scene.json");
+        let before = std::fs::read(&scene).expect("scene file");
+
+        let preview = call(
+            &mut session,
+            json!({ "op": "gesture.preview", "entity": 9, "table": "Transform",
+                    "column": "position", "value": { "x": 6.5, "y": 0.5, "z": 1.0 } }),
+        );
+        assert_eq!(preview["ok"], true, "{preview}");
+        let refused = call(&mut session, json!({ "op": "project.save" }));
+        assert_eq!(refused["ok"], false);
+        assert_eq!(refused["error"]["code"], "EDITOR_BUSY");
+        assert_eq!(
+            std::fs::read(&scene).expect("scene file"),
+            before,
+            "a refused save must not write the transient preview"
+        );
+
+        assert_eq!(
+            call(&mut session, json!({ "op": "gesture.cancel" }))["ok"],
+            true
+        );
+        assert_eq!(
+            call(&mut session, json!({ "op": "project.save" }))["ok"],
+            true
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn opening_a_project_drops_the_drag_that_was_in_progress() {
+        let root = scratch_dir("open_while_dragging");
+        let mut session = EditorSession::new().expect("session");
+        call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "Teste" }),
+        );
+        let read = |session: &mut EditorSession| {
+            let answer = call(
+                session,
+                json!({ "op": "query.run", "query": "world.get",
+                        "payload": { "entity": 9, "table": "Transform", "column": "position" } }),
+            );
+            answer["result"]["x"].as_f64().expect("x")
+        };
+        let before = read(&mut session);
+        let preview = call(
+            &mut session,
+            json!({ "op": "gesture.preview", "entity": 9, "table": "Transform",
+                    "column": "position", "value": { "x": before + 1.5, "y": 0.5, "z": 1.0 } }),
+        );
+        assert_eq!(preview["ok"], true, "{preview}");
+
+        let opened = call(
+            &mut session,
+            json!({ "op": "project.open", "path": root.display().to_string() }),
+        );
+        assert_eq!(opened["ok"], true, "{opened}");
+        assert_eq!(
+            read(&mut session),
+            before,
+            "the reopened scene is the saved one"
+        );
+
+        let stale = call(&mut session, json!({ "op": "gesture.commit" }));
+        assert_eq!(stale["ok"], true, "{stale}");
+        assert_eq!(
+            read(&mut session),
+            before,
+            "the stale drag must not change the new project"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn undo_is_refused_while_a_drag_is_live() {
+        let root = scratch_dir("undo_while_dragging");
+        let mut session = EditorSession::new().expect("session");
+        call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "Teste" }),
+        );
+        let preview = call(
+            &mut session,
+            json!({ "op": "gesture.preview", "entity": 9, "table": "Transform",
+                    "column": "position", "value": { "x": 4.0, "y": 0.5, "z": 1.0 } }),
+        );
+        assert_eq!(preview["ok"], true, "{preview}");
+        let refused = call(&mut session, json!({ "op": "edit.undo" }));
+        assert_eq!(refused["ok"], false);
+        assert_eq!(refused["error"]["code"], "EDITOR_BUSY");
+        assert_eq!(
+            call(&mut session, json!({ "op": "gesture.cancel" }))["ok"],
+            true
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn errors_are_reported_with_a_code_and_never_change_the_world() {
         let mut session = EditorSession::new().expect("session");
         let none = call(&mut session, json!({ "op": "edit.undo" }));

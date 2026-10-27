@@ -30,6 +30,14 @@ const CREATE_DISTANCE: f32 = 6.0;
 /// New brushes snap to this grid (meters).
 const CREATE_SNAP: f32 = 0.5;
 
+fn live_edit_busy(verb: &str) -> Failure {
+    Failure::new(
+        "EDITOR_BUSY",
+        "há um arrasto em andamento",
+        &format!("Termine ou cancele o arrasto antes de {verb}."),
+    )
+}
+
 pub(crate) struct OpenProject {
     pub(crate) root: PathBuf,
     pub(crate) manifest: ProjectManifest,
@@ -234,6 +242,7 @@ impl EditorSession {
         };
         self.camera = start_camera(&loaded.world);
         let name = loaded.manifest.name.clone();
+        self.reset_live_edit();
         self.project = Some(OpenProject {
             root: loaded.root,
             manifest: loaded.manifest,
@@ -243,6 +252,7 @@ impl EditorSession {
         self.dispatcher = Dispatcher::with_builtin()?;
         self.selection = None;
         self.graph = None;
+        self.floor = None;
         self.dirty = false;
         self.refresh_script_diagnostics();
         self.record("project", &format!("abrir {name}"), true, "");
@@ -255,14 +265,46 @@ impl EditorSession {
         self.open_project(root)
     }
 
-    /// Saves the scene. Atomic: a crash never leaves a half-written file.
+    /// Saves the scene. Atomic: a crash never leaves a half-written file. Refused while a live
+    /// edit is changing the world without a command: the file would keep a transient preview.
     pub fn save(&mut self) -> Result<Json, Failure> {
+        if self.has_live_edit() {
+            return Err(live_edit_busy("salvar"));
+        }
         let project = self.project.as_ref().ok_or_else(Failure::no_project)?;
         save_scene(&project.scene_path, &project.world)?;
         let path = project.scene_path.display().to_string();
         self.dirty = false;
         self.record("project", "salvar", true, &path);
         Ok(json!({ "path": path }))
+    }
+
+    /// True while a drag is changing the world outside the command history.
+    fn has_live_edit(&self) -> bool {
+        self.gesture.is_some()
+            || self.drag.is_some()
+            || self.face_drag.is_some()
+            || self.free.is_some()
+            || self.sculpt.drag.is_some()
+            || self
+                .components
+                .as_ref()
+                .is_some_and(ComponentSelection::is_previewing)
+    }
+
+    /// Forgets every drag bound to the old world. The world is being replaced, so there is
+    /// nothing to restore; keeping the state would let the next commit hit a new entity.
+    fn reset_live_edit(&mut self) {
+        self.gesture = None;
+        self.drag = None;
+        self.face_drag = None;
+        self.free = None;
+        self.hud = None;
+        self.hover = None;
+        self.hovered = None;
+        self.hovered_face = None;
+        self.sculpt.reset_transient();
+        self.components = None;
     }
 
     // ---- commands ------------------------------------------------------------------------
@@ -291,6 +333,9 @@ impl EditorSession {
 
     pub fn undo(&mut self) -> Result<Json, Failure> {
         self.ensure_not_playing()?;
+        if self.has_live_edit() {
+            return Err(live_edit_busy("desfazer"));
+        }
         let outcome = {
             let project = self.project.as_mut().ok_or_else(Failure::no_project)?;
             self.dispatcher.undo(&mut project.world)
@@ -300,6 +345,9 @@ impl EditorSession {
 
     pub fn redo(&mut self) -> Result<Json, Failure> {
         self.ensure_not_playing()?;
+        if self.has_live_edit() {
+            return Err(live_edit_busy("refazer"));
+        }
         let outcome = {
             let project = self.project.as_mut().ok_or_else(Failure::no_project)?;
             self.dispatcher.redo(&mut project.world)

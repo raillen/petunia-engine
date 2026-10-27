@@ -47,7 +47,7 @@ Não são pacotes do Cargo. Ficam fora do `Cargo.lock`, e o editor só compila s
 
 | Dependência | Versão medida aqui | Para que serve | Licença | Alternativa | Custo de remover |
 |---|---|---|---|---|---|
-| Qt 6 (`Widgets`, `OpenGLWidgets`) | 6.12.0 | Janela do editor, docas, diálogos e o viewport GL | LGPL-3.0 nos módulos usados, com **link dinâmico** (GERAL; conferir antes de distribuir) | Slint, egui, Qt/QML (CXX-Qt) | Alto: toda a pasta `editor/` |
+| Qt 6 (`Widgets`, `OpenGLWidgets`, `Svg`) | 6.4.2 no Pop!_OS 24.04 (mínimo exigido: 6.4; 6.12.0 foi medido em 2026-10-25) | Janela do editor, docas, diálogos e o viewport GL | LGPL-3.0 nos módulos usados, com **link dinâmico** (GERAL; conferir antes de distribuir) | Slint, egui, Qt/QML (CXX-Qt) | Alto: toda a pasta `editor/` |
 | CMake | 4.4.4 | Compilar `editor/` | BSD-3-Clause | Meson | Baixo |
 | Ninja | 1.13.2 | Gerador de build usado pelo script | Apache-2.0 | Make | Baixo |
 | Compilador C++20 | GCC 16.2.1 | Compilar `editor/` | GPL (ferramenta, não entra no produto) | Clang 23 (instalado) | Baixo |
@@ -58,6 +58,7 @@ Só para o teste de fumaça (`scripts/editor-smoke.sh`), nunca no produto:
 |---|---|
 | `Xvfb` | Display virtual: o teste não aparece na sua tela |
 | `xdotool` | Simula clique e teclado na janela |
+| ImageMagick (`import`) | Captura os quadros do canvas e do jogo no teste de fumaça |
 | Mesa (`LIBGL_ALWAYS_SOFTWARE=1`) | OpenGL por software dentro do display virtual |
 
 Os crates `petunia_editor` e `petunia_editor_ffi` usam só as dependências registradas acima.

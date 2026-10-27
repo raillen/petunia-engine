@@ -110,6 +110,13 @@ impl SculptState {
             cache: RefCell::new(SculptCache::new()),
         }
     }
+
+    pub(crate) fn reset_transient(&mut self) {
+        self.drag = None;
+        self.path = None;
+        self.cursor = None;
+        self.cache = RefCell::new(SculptCache::new());
+    }
 }
 
 fn to_local(transform: &Transform, point: Vec3) -> Vec3 {

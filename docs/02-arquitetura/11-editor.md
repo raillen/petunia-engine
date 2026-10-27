@@ -59,7 +59,7 @@ Se algo falha, a resposta explica o que fazer:
 |---|---|---|
 | `project.new_sample` | `path`, `name` | Cria a sala de exemplo na pasta e abre |
 | `project.open` | `path` | Abre um projeto (ou explica o que está errado) |
-| `project.save` | — | Grava a cena (atômico) |
+| `project.save` | — | Grava a cena (atômico). Recusado com `EDITOR_BUSY` enquanto um arrasto altera o mundo; solte o mouse ou `Esc` antes |
 | `editor.snapshot` | — | Resumo: objetos, seleção, desfazer/refazer, diagnósticos |
 | `entity.describe` | `entity` | Tabelas, tipos e valores de um objeto |
 | `diagnostics.get` · `history.get` · `schema.get` | — | Project Doctor, histórico, API |

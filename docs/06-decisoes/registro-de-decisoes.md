@@ -102,6 +102,8 @@ São **24 decisões**. Estados possíveis:
 
 **Riscos já conhecidos:** build pesado na sua máquina; licença Qt (`DR-01`).
 
+**Revisão (2026-10-27):** o mínimo prático é **Qt 6.4** (Pop!_OS 24.04); não há 6.5+ nos repositórios oficiais. O editor compila e passa o teste de fumaça com 6.4.2, e o código não usa API de 6.5. A ponte é Qt Widgets + JSON (`DR-21`), não CXX-Qt.
+
 ---
 
 ## DR-05 — Modelo de dados · PROPOSTA

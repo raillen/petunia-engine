@@ -28,6 +28,11 @@ public:
     // Double tap on G, R or S: the free mode of that tool ("move", "rotate", "scale").
     void startFreeMode(const QString& tool);
 
+    // Ends any drag, stroke or pending path, restoring the values it was previewing.
+    void cancelActiveEdit();
+    // The window calls this before the engine is destroyed: no callback may reach it after that.
+    void setEngineAlive(bool alive);
+
     bool isEditMode() const { return editMode_; }
     void setEditMode(bool on);
     ComponentMode componentMode() const { return componentMode_; }
@@ -103,6 +108,7 @@ private:
     NavCubeWidget* navCube_ = nullptr;
     bool clickCandidate_ = false;
     bool renderErrorReported_ = false;
+    bool engineAlive_ = true;
     bool editMode_ = false;
     bool playing_ = false;
     QTimer playTimer_;
