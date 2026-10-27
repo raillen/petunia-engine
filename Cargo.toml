@@ -22,6 +22,8 @@ raw-window-handle = "0.6"
 glam = { version = "=0.27.0", default-features = false, features = ["std"] }
 # Mesh booleans (union, difference, intersection). Only inside petunia_mesh.
 manifold-rust = { version = "=0.13.1", default-features = false }
+# glTF/GLB reader (DR-29): meshes and colors only (no image decoding). Only inside petunia_import.
+gltf = { version = "=1.4.1", default-features = false, features = ["utils", "names"] }
 # Rigid bodies and collision (DR-08, DR-27). Only inside petunia_physics; never in a public API,
 # file or protocol. Enhanced determinism: the same input gives the same steps on every machine.
 rapier3d = { version = "=0.36.1", default-features = false, features = ["dim3", "f32", "std", "enhanced-determinism"] }
@@ -41,6 +43,7 @@ petunia_sculpt = { path = "crates/petunia_sculpt" }
 petunia_script = { path = "crates/petunia_script" }
 petunia_mesh = { path = "crates/petunia_mesh" }
 petunia_physics = { path = "crates/petunia_physics" }
+petunia_import = { path = "crates/petunia_import" }
 
 [workspace.lints.rust]
 # Adapters that talk to C APIs (OpenGL, windowing) opt in with `#![allow(unsafe_code)]`.

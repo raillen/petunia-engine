@@ -32,4 +32,6 @@ pub use play::{EYE_HEIGHT, ensure_player, has_player};
 pub use sample::create_sample_project;
 pub use save::save_scene;
 pub use scene::{SceneEntity, SceneFile, scene_from_world};
-pub use standard::{BODY_KINDS, BRUSH_SHAPES, COLLIDER_SHAPES, register_standard_tables};
+pub use standard::{
+    BODY_KINDS, BRUSH_SHAPES, COLLIDER_SHAPES, LIGHT_KINDS, register_standard_tables,
+};

@@ -96,6 +96,9 @@ QString propertyLabel(const QString& table, const QString& column) {
         {QStringLiteral("linear_damping"), QStringLiteral("Freio")},
         {QStringLiteral("angular_damping"), QStringLiteral("Freio do giro")},
         {QStringLiteral("lock_rotation"), QStringLiteral("Sem girar")},
+        {QStringLiteral("intensity"), QStringLiteral("Intensidade")},
+        {QStringLiteral("range"), QStringLiteral("Alcance")},
+        {QStringLiteral("ambient"), QStringLiteral("Ambiente")},
         {QStringLiteral("speed"), QStringLiteral("Velocidade")},
         {QStringLiteral("jump_speed"), QStringLiteral("Pulo")},
         {QStringLiteral("step_height"), QStringLiteral("Degrau")},
@@ -398,6 +401,9 @@ QWidget* InspectorPanel::makeSection(const QString& tableName, const QJsonArray&
         auto* label = new QLabel(propertyLabel(tableName, field->column), body);
         label->setProperty("role", QStringLiteral("propertyLabel"));
         static const QHash<QString, QString> help = {
+            {QStringLiteral("range"), QStringLiteral("Até onde a luz pontual chega, em metros (o sol ignora)")},
+            {QStringLiteral("ambient"), QStringLiteral("Luz suave em tudo, de 0 a 1 (vale o valor da primeira luz da cena)")},
+            {QStringLiteral("intensity"), QStringLiteral("Força da luz, de 0 a 16")},
             {QStringLiteral("player"), QStringLiteral("O teclado controla este personagem no modo Jogar (W A S D, Espaço pula)")},
             {QStringLiteral("coyote_seconds"), QStringLiteral("Tempo de coiote: o pulo ainda funciona por este tempo depois de sair de uma borda (ajuda de acessibilidade)")},
             {QStringLiteral("step_height"), QStringLiteral("Altura do degrau que o personagem sobe sem pular, em metros")},

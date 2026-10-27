@@ -76,6 +76,7 @@ private:
     bool confirmDiscardChanges();
     void chooseNewSample();
     void chooseOpen();
+    void chooseImportModel();
     void applyAppearance();
     void refreshIcons();
     void setActionIcon(QAction* action, const QString& iconName);
@@ -138,6 +139,10 @@ private:
     QAction* codeAction_ = nullptr;
     CodePanel* code_ = nullptr;
     QAction* caveAction_ = nullptr;
+    // Criar > Luz: a bulb and a sun (DR-29).
+    QAction* importModelAction_ = nullptr;
+    QAction* pointLightAction_ = nullptr;
+    QAction* sunLightAction_ = nullptr;
     QAction* randomCaveAction_ = nullptr;
     QAction* sculptLargerAction_ = nullptr;
     QAction* sculptSmallerAction_ = nullptr;

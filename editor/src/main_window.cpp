@@ -331,6 +331,21 @@ void MainWindow::buildActions() {
     connect(playAction_, &QAction::triggered, this, &MainWindow::togglePlay);
     caveAction_ = make(QStringLiteral("Caverna"), QStringLiteral("Um bloco de rocha com um primeiro túnel; esculpa com a ferramenta Esculpir (B)"));
     caveAction_->setProperty("iconName", QStringLiteral("generate_volume"));
+    importModelAction_ = make(QStringLiteral("Importar modelo 3D…"), QStringLiteral("Traz um modelo .glb ou .gltf como objetos editáveis (uma cópia fica em assets/)"));
+    importModelAction_->setProperty("iconName", QStringLiteral("cube"));
+    connect(importModelAction_, &QAction::triggered, this, &MainWindow::chooseImportModel);
+    pointLightAction_ = make(QStringLiteral("Luz pontual"), QStringLiteral("Uma lâmpada na frente da câmera: ilumina até o alcance, em todas as direções"));
+    pointLightAction_->setProperty("iconName", QStringLiteral("view_lit"));
+    sunLightAction_ = make(QStringLiteral("Sol (luz direcional)"), QStringLiteral("Raios paralelos, como o sol: só a rotação do objeto importa"));
+    sunLightAction_->setProperty("iconName", QStringLiteral("view_lit"));
+    connect(pointLightAction_, &QAction::triggered, this, [this] {
+        perform(QStringLiteral("create.light"), QJsonObject{{"kind", QStringLiteral("point")}});
+        statusBar()->showMessage(QStringLiteral("Luz criada. Com uma luz na cena, só as luzes da cena valem (o sol e o ambiente padrão saem)."), 8000);
+    });
+    connect(sunLightAction_, &QAction::triggered, this, [this] {
+        perform(QStringLiteral("create.light"), QJsonObject{{"kind", QStringLiteral("sun")}});
+        statusBar()->showMessage(QStringLiteral("Sol criado: gire o objeto para mudar de onde vem a luz."), 8000);
+    });
     randomCaveAction_ = make(QStringLiteral("Caverna aleatória"), QStringLiteral("Um bloco de rocha com salas e túneis sinuosos gerados por uma semente; tudo vira traços editáveis"));
     sculptLargerAction_ = make(QStringLiteral("Aumentar o raio de esculpir"), QStringLiteral("Raio do pincel de esculpir maior (])"));
     sculptLargerAction_->setShortcut(QKeySequence(Qt::Key_BracketRight));
@@ -501,6 +516,8 @@ void MainWindow::buildMenus() {
     file->addAction(openAction_);
     file->addAction(saveAction_);
     file->addSeparator();
+    file->addAction(importModelAction_);
+    file->addSeparator();
     file->addAction(quitAction_);
 
     QMenu* edit = menus_->addMenu(QStringLiteral("&Editar"));
@@ -527,6 +544,10 @@ void MainWindow::buildMenus() {
     create->addSeparator();
     create->addAction(caveAction_);
     create->addAction(randomCaveAction_);
+    create->addSeparator();
+    create->addAction(importModelAction_);
+    create->addAction(pointLightAction_);
+    create->addAction(sunLightAction_);
 
     QMenu* operations = menus_->addMenu(QStringLiteral("&Operações"));
     QMenu* collision = operations->addMenu(QStringLiteral("Colisão"));
@@ -810,6 +831,9 @@ void MainWindow::buildAppBar() {
     setActionIcon(newAction_, QStringLiteral("new_file"));
     setActionIcon(openAction_, QStringLiteral("open_project"));
     setActionIcon(caveAction_, QStringLiteral("generate_volume"));
+    setActionIcon(importModelAction_, QStringLiteral("cube"));
+    setActionIcon(pointLightAction_, QStringLiteral("view_lit"));
+    setActionIcon(sunLightAction_, QStringLiteral("view_lit"));
     for (QAction* action : viewActions_) {
         setActionIcon(action, action->property("iconName").toString());
     }
@@ -1102,6 +1126,10 @@ void MainWindow::buildDocks() {
     createMenu->addSeparator();
     createMenu->addAction(caveAction_);
     createMenu->addAction(randomCaveAction_);
+    createMenu->addSeparator();
+    createMenu->addAction(importModelAction_);
+    createMenu->addAction(pointLightAction_);
+    createMenu->addAction(sunLightAction_);
     hierarchy_->setCreateMenu(createMenu);
 
     hierarchyDock->setMinimumWidth(200);
@@ -1196,6 +1224,27 @@ void MainWindow::chooseNewSample() {
     createSampleAt(parent + QLatin1Char('/') + name, name, true);
 }
 
+void MainWindow::chooseImportModel() {
+    const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Importar modelo 3D"), QString(),
+                                                      QStringLiteral("Modelos glTF (*.glb *.gltf)"));
+    if (path.isEmpty()) {
+        return;
+    }
+    const Reply reply = perform(QStringLiteral("asset.import"), QJsonObject{{"path", path}}, true);
+    if (!reply.ok) {
+        return;
+    }
+    const QJsonObject result = reply.result.toObject();
+    QString message = QStringLiteral("Modelo importado: %1 objeto(s). Cópia em %2.")
+                          .arg(result.value(QStringLiteral("imported")).toInt())
+                          .arg(result.value(QStringLiteral("asset")).toString());
+    const QJsonArray warnings = result.value(QStringLiteral("warnings")).toArray();
+    if (!warnings.isEmpty()) {
+        message += QStringLiteral(" Avisos: %1").arg(warnings.first().toString());
+    }
+    statusBar()->showMessage(message, 10000);
+}
+
 void MainWindow::chooseOpen() {
     const QString path = QFileDialog::getExistingDirectory(this, QStringLiteral("Abrir pasta de projeto Petunia"));
     if (!path.isEmpty()) {
@@ -1224,7 +1273,7 @@ void MainWindow::onSnapshot() {
     for (QAction* action : shapeActions_) {
         action->setEnabled(project);
     }
-    for (QAction* action : {caveAction_, randomCaveAction_, sculptLargerAction_, sculptSmallerAction_}) {
+    for (QAction* action : {caveAction_, randomCaveAction_, importModelAction_, pointLightAction_, sunLightAction_, sculptLargerAction_, sculptSmallerAction_}) {
         action->setEnabled(project);
     }
     sculptRadius_ = snapshot.value("sculpt").toObject().value(QStringLiteral("radius")).toDouble(sculptRadius_);
