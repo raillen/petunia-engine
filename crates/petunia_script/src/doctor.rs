@@ -9,6 +9,7 @@ use petunia_world::{Value, World};
 
 use crate::api::script_surface;
 use crate::compile::{MAX_SCRIPT_BYTES, ScriptSeverity, compile};
+use crate::graph::{GRAPH_SUFFIX, compile_graph, graph_names};
 use crate::host::{SCRIPT_EXTENSION, SCRIPTS_DIRECTORY};
 
 /// Names of the valid script files in `directory`, sorted.
@@ -83,11 +84,74 @@ pub fn project_diagnostics(root: &Path, world: &World) -> Vec<Diagnostic> {
             });
         }
     }
+    let graphs = graph_names(&directory);
+    for name in &graphs {
+        let file = format!("{name}{GRAPH_SUFFIX}");
+        let target = format!("{SCRIPTS_DIRECTORY}/{file}");
+        let path = directory.join(&file);
+        if names.contains(name) {
+            found.push(Diagnostic::error(
+                "GRAPH_NAME_CLASH",
+                &target,
+                &format!("existem `{name}.{SCRIPT_EXTENSION}` e `{file}` com o mesmo nome"),
+                "Apague ou renomeie um dos dois.",
+            ));
+            continue;
+        }
+        let text = match std::fs::metadata(&path) {
+            Ok(meta) if meta.len() as usize > petunia_graph::MAX_FILE_BYTES => {
+                found.push(Diagnostic::error(
+                    "GRAPH_TOO_BIG",
+                    &target,
+                    &format!(
+                        "o grafo tem mais de {} bytes",
+                        petunia_graph::MAX_FILE_BYTES
+                    ),
+                    "Divida a lógica em dois grafos.",
+                ));
+                continue;
+            }
+            _ => std::fs::read_to_string(&path),
+        };
+        let text = match text {
+            Ok(text) => text,
+            Err(error) => {
+                found.push(Diagnostic::error(
+                    "GRAPH_UNREADABLE",
+                    &target,
+                    &format!("não consegui ler o grafo: {error}"),
+                    "Confira se o arquivo é texto UTF-8 e se pode ser lido.",
+                ));
+                continue;
+            }
+        };
+        let (diagnostics, is_error) = match compile_graph(&text) {
+            Ok(compiled) => (crate::graph::warnings_of(&compiled), false),
+            Err(diagnostics) => (diagnostics, true),
+        };
+        for diagnostic in diagnostics {
+            found.push(Diagnostic {
+                severity: match diagnostic.severity {
+                    ScriptSeverity::Error => Severity::Error,
+                    ScriptSeverity::Warning => Severity::Warning,
+                    ScriptSeverity::Info => Severity::Info,
+                },
+                code: diagnostic.code,
+                target: target.clone(),
+                message: diagnostic.message,
+                action: if is_error {
+                    "Abra o grafo e corrija o nó indicado na mensagem.".to_string()
+                } else {
+                    "Ligue o nó a um evento ou apague-o.".to_string()
+                },
+            });
+        }
+    }
     for handle in world.entities_with_table("Script").unwrap_or_default() {
         let Ok(Value::Text(file)) = world.get(handle, "Script", "file") else {
             continue;
         };
-        if file.is_empty() || names.contains(file) {
+        if file.is_empty() || names.contains(file) || graphs.contains(file) {
             continue;
         }
         let id = world.persistent_id(handle).map_or(0, |id| id.0);

@@ -15,6 +15,7 @@ mod api;
 mod compile;
 mod convert;
 mod doctor;
+mod graph;
 mod host;
 mod natives;
 mod physics_api;
@@ -22,6 +23,10 @@ mod physics_api;
 pub use api::{API, ApiFunction, GAME_CAPABILITIES, HANDLERS, KEYWORDS, api_json, script_surface};
 pub use compile::{Compiled, MAX_SCRIPT_BYTES, ScriptDiagnostic, ScriptSeverity, compile};
 pub use doctor::{project_diagnostics, script_names};
+pub use graph::{
+    GRAPH_EVENTS, GRAPH_SUFFIX, GraphEvent, blame_node, compile_graph, graph_catalog,
+    graph_max_bytes, graph_names,
+};
 pub use host::{
     LoadReport, RunReport, SCRIPT_EXTENSION, SCRIPTS_DIRECTORY, ScriptFault, ScriptHost,
     ScriptLimits, simulate,

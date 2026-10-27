@@ -120,6 +120,41 @@ impl EditorSession {
         })
     }
 
+    /// Names of the node graphs (`<name>.graph.json`) on disk, sorted; a name that also has a
+    /// `.aipo` file is left out (the doctor reports the clash).
+    pub(crate) fn graph_names(&self) -> Vec<String> {
+        let Ok(directory) = self.scripts_directory() else {
+            return Vec::new();
+        };
+        let scripts = self.script_names();
+        petunia_script::graph_names(&directory)
+            .into_iter()
+            .filter(|name| valid_name(name) && !scripts.contains(name))
+            .collect()
+    }
+
+    pub(crate) fn read_graph_file(&self, name: &str) -> Result<String, Failure> {
+        let name = Self::script_name(name)?;
+        let path = self
+            .scripts_directory()?
+            .join(format!("{name}{}", petunia_script::GRAPH_SUFFIX));
+        let bytes =
+            read_limited(&path, petunia_script::graph_max_bytes() as u64 + 1).map_err(|error| {
+                Failure::new(
+                    "GRAPH_NOT_FOUND",
+                    &format!("não consegui ler o grafo `{name}`: {error}"),
+                    "Veja a lista de scripts, ou crie um novo.",
+                )
+            })?;
+        String::from_utf8(bytes).map_err(|_| {
+            Failure::new(
+                "GRAPH_NOT_TEXT",
+                &format!("o grafo `{name}` não é texto UTF-8"),
+                "Abra o arquivo num editor externo e salve como UTF-8.",
+            )
+        })
+    }
+
     /// Names of the scripts on disk, sorted.
     pub(crate) fn script_names(&self) -> Vec<String> {
         let Ok(directory) = self.scripts_directory() else {

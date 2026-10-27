@@ -1,0 +1,14 @@
+[package]
+name = "petunia_graph"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Node graphs for game logic (DR-30): a typed document, a catalog generated from the script API, validation and a deterministic compiler to Aipo text."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

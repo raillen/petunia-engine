@@ -44,6 +44,7 @@ petunia_script = { path = "crates/petunia_script" }
 petunia_mesh = { path = "crates/petunia_mesh" }
 petunia_physics = { path = "crates/petunia_physics" }
 petunia_import = { path = "crates/petunia_import" }
+petunia_graph = { path = "crates/petunia_graph" }
 
 [workspace.lints.rust]
 # Adapters that talk to C APIs (OpenGL, windowing) opt in with `#![allow(unsafe_code)]`.
