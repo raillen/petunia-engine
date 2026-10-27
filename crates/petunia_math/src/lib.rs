@@ -5,11 +5,13 @@
 //! convert them at the boundary.
 
 mod polygon;
+mod solid;
 
 pub use polygon::{
     MAX_FACE_CORNERS, MAX_MESH_CORNERS, MAX_MESH_FACES, MAX_MESH_VERTICES, PolygonError,
     PolygonMesh,
 };
+pub use solid::{MAX_SOLID_TRIANGLES, SolidShape};
 
 use std::ops::{Add, Mul, Neg, Sub};
 

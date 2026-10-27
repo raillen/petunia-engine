@@ -8,7 +8,6 @@
 // Creating a GL context and surface is `unsafe` in glutin; this adapter is where that is allowed.
 #![allow(unsafe_code)]
 
-use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Instant;
@@ -23,10 +22,10 @@ use glutin::surface::{Surface, SwapInterval, WindowSurface};
 use glutin_winit::{DisplayBuilder, GlWindow};
 use petunia_input::{ActionMap, ActionState, actions};
 use petunia_render::{
-    Camera, FlyCamera, SculptCache, extract_frame, extract_sculpt_volumes, item_mesh, start_camera,
+    FlyCamera, SculptCache, extract_frame, extract_sculpt_volumes, solid_shapes, start_camera,
 };
 use petunia_render_gl::GlRenderer;
-use petunia_script::{LoadReport, PhysicsSettings, ScriptHost};
+use petunia_script::{LoadReport, PhysicsSettings, PlayerInput, ScriptHost};
 use petunia_world::World;
 use raw_window_handle::HasWindowHandle;
 use winit::application::ApplicationHandler;
@@ -111,6 +110,8 @@ struct App {
     last_frame: Instant,
     cursor_grabbed: bool,
     failure: Option<PlayerError>,
+    /// A character walks (W A S D, Space jumps) and the camera follows it, instead of flying.
+    walking: bool,
 }
 
 impl App {
@@ -118,13 +119,14 @@ impl App {
     #[allow(clippy::print_stderr)]
     fn new(world: World, config: PlayerConfig) -> Self {
         let fly = start_camera(&world);
-        // Colliders or bodies turn physics on, with or without scripts.
-        let physical = ["Collider", "RigidBody"].iter().any(|table| {
+        // Colliders, bodies or characters turn physics on, with or without scripts.
+        let physical = ["Collider", "RigidBody", "Character"].iter().any(|table| {
             !world
                 .entities_with_table(table)
                 .unwrap_or_default()
                 .is_empty()
         });
+        let mut walking = false;
         let scene = if config.scripts.is_none() && !physical {
             Scene::Plain(world)
         } else {
@@ -134,7 +136,12 @@ impl App {
                         report_scripts(&host.load_directory(folder));
                     }
                     if physical {
-                        match host.attach_physics(PhysicsSettings::default(), hull_points(&world)) {
+                        // Someone to walk with, and everything drawn is solid.
+                        if let Err(error) = petunia_project::ensure_player(&mut host.world_mut()) {
+                            eprintln!("jogador não criado: {error}");
+                        }
+                        let solids = solid_shapes(&host.world());
+                        match host.attach_physics(PhysicsSettings::default(), solids) {
                             Ok(problems) => {
                                 for problem in problems {
                                     eprintln!("física: {problem}");
@@ -142,6 +149,7 @@ impl App {
                             }
                             Err(message) => eprintln!("física desligada: {message}"),
                         }
+                        walking = host.has_physics() && host.player_position().is_some();
                     }
                     Scene::Scripted(Box::new(host))
                 }
@@ -162,6 +170,7 @@ impl App {
             last_frame: Instant::now(),
             cursor_grabbed: false,
             failure: None,
+            walking,
         }
     }
 
@@ -195,7 +204,10 @@ impl App {
             .input
             .axis(&self.map, actions::MOVE_BACKWARD, actions::MOVE_FORWARD);
         let boost = self.input.held(&self.map, actions::BOOST);
-        self.fly.advance(right, up, forward, boost, elapsed_seconds);
+        let jump = self.input.pressed(&self.map, actions::MOVE_UP);
+        if !self.walking {
+            self.fly.advance(right, up, forward, boost, elapsed_seconds);
+        }
         self.input.begin_frame();
 
         let frame = match &mut self.scene {
@@ -205,7 +217,22 @@ impl App {
                 frame
             }
             Scene::Scripted(host) => {
+                if self.walking {
+                    // The camera turns the opposite way around the vertical axis from a Transform.
+                    host.set_player_input(PlayerInput {
+                        forward,
+                        right,
+                        jump,
+                        yaw_degrees: -self.fly.camera.yaw_degrees,
+                    });
+                }
                 host.update(f64::from(elapsed_seconds));
+                if self.walking
+                    && let Some(position) =
+                        host.third_person_camera(self.fly.camera.forward(), 4.5, 1.5)
+                {
+                    self.fly.camera.position = position;
+                }
                 report_run(host);
                 let world = host.world();
                 let mut frame = extract_frame(&world, self.fly.camera);
@@ -385,24 +412,6 @@ fn create_graphics(
 
 /// Scripts that did not load are said once, at the start.
 // The player is the program the person sees: its console is the terminal it was started from.
-/// Points of every drawn object's mesh in its own coordinates, for `convex` colliders on brushes
-/// (the physics crate does not know how a brush shape becomes a mesh; the renderer does).
-fn hull_points(world: &World) -> BTreeMap<u64, Vec<petunia_math::Vec3>> {
-    extract_frame(world, Camera::default())
-        .items
-        .iter()
-        .filter_map(|item| {
-            let mesh = item_mesh(item).ok()?;
-            let points = mesh
-                .positions
-                .iter()
-                .map(|[x, y, z]| petunia_math::Vec3::new(*x, *y, *z))
-                .collect();
-            Some((item.entity, points))
-        })
-        .collect()
-}
-
 #[allow(clippy::print_stderr)]
 fn report_scripts(report: &LoadReport) {
     for (name, diagnostics) in &report.failed {

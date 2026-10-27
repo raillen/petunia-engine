@@ -8,7 +8,8 @@
 #   radial menu, duplicate, create a box, walk with the arrow keys, look around with the right button,
 #   go up a floor (creates the floors) and build a box there, come back down, create a cave and
 #   carve it with the sculpting tool, dig a tunnel with the path tool, save, open the history tab,
-#   open the Código workspace (F4), create a script, type it (auto-indent) and save it.
+#   open the Código workspace (F4), create a script, type it (auto-indent) and save it,
+#   then play (F6), walk with W, stop (Esc) and save: the scene must not keep the stand-in hero.
 # It then CHECKS the saved scene (the dragged crate must have moved to x = 4.5 on the 0.5 m grid
 # and must have gained the PlayerStart table)
 # and writes one picture. This is a smoke test (does it run, draw and edit?), not a pixel-exact
@@ -53,7 +54,7 @@ xdotool mouseup 1;                               sleep 0.6
 # button's menu. Deleting a widget inside its own signal used to crash Qt (SIGSEGV).
 xdotool mousemove 1185 600; for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do xdotool click 5; sleep 0.05; done; sleep 0.4
 xdotool mousemove 1185 457 click 1;              sleep 0.6   # open the "Adicionar tabela" menu
-xdotool key Down Down Down Return;               sleep 0.8   # choose PlayerStart (list: Floor, Mesh, PlayerStart)
+xdotool key Down Down Down Down Return;          sleep 0.8   # choose PlayerStart (list: Character, Floor, Mesh, PlayerStart)
 xdotool mousemove 600 450; xdotool key shift+a;  sleep 0.8   # radial menu of primitives
 xdotool key 2;                                   sleep 0.8   # item 2: a ramp, on the current floor
 xdotool key ctrl+d;                              sleep 0.6   # duplicate it (the copy is selected)
@@ -93,6 +94,12 @@ xdotool type --delay 25 "fn on_update(entity, dt) {"; xdotool key Return
 xdotool type --delay 25 "log.info(\"oi\", entity)"; xdotool key Return
 xdotool type --delay 25 "}";                     sleep 0.6
 xdotool key ctrl+s;                              sleep 1.0   # saves the script to scripts/smoke.aipo
+xdotool key F3;                                  sleep 0.8   # back to the Cena workspace
+xdotool mousemove 700 300 click 1;               sleep 0.5   # focus the viewport
+xdotool key F6;                                  sleep 1.5   # Jogar: the scene runs on a COPY (a stand-in hero is made there)
+xdotool keydown w; sleep 1.0; xdotool keyup w;   sleep 0.3   # walk
+xdotool key Escape;                              sleep 1.0   # Parar: the copy is thrown away
+xdotool key ctrl+s;                              sleep 0.8   # save the scene again: it must not contain the hero
 
 wait "$editor_pid"
 cp "$workdir/sala/scenes/room.scene.json" "$output.scene.json"
@@ -131,6 +138,8 @@ converted_to_mesh = any(
     for e in scene["entities"]
 )
 print("verificação: modo de edição (Tab) converteu caixa para malha editável ->", "ok" if converted_to_mesh else "FALHOU")
-sys.exit(0 if (moved and added and on_cursor and built_up and carved and dug and scripted and converted_to_mesh) else 1)
+hero_free = not any(e["rows"].get("Name", {}).get("text") == "Jogador" for e in scene["entities"]) and not any("Character" in e["rows"] for e in scene["entities"])
+print("verificação: Jogar (F6) e parar (Esc) não deixaram o herói de reserva na cena salva ->", "ok" if hero_free else "FALHOU")
+sys.exit(0 if (moved and added and on_cursor and built_up and carved and dug and scripted and converted_to_mesh and hero_free) else 1)
 PY
 echo "imagem: $output (e $output.viewport.png); cena salva: $output.scene.json"

@@ -9,10 +9,13 @@
 | Crate **`petunia_physics`**: adaptador do Rapier 0.36.1 (determinístico); só tipos do Petunia na API | 10 testes (queda, gatilho, raio, sobreposição, convexa e cápsula com escala, entrada hostil, determinismo bit a bit, cinemático) |
 | Tabelas **`Collider`** (várias com nome por objeto, cada uma é uma entidade com `owner`) e **`RigidBody`** (`static`, `dynamic`, `kinematic`) | leitor de cena testado (colisões quebradas viram aviso com o número do objeto) |
 | Script Host: passo fixo de 1/60 s, até 8 passos por quadro, poses de volta no `Transform`, `on_collision` / `on_collision_end`, API `collision.*` e `physics.*` | 4 testes pelo script |
-| `petunia run` liga a física quando há colisões ou corpos | compila; **não rodou com janela** |
+| `petunia run` liga a física quando há colisões, corpos ou personagens; o jogador anda e a câmera o segue | compila; **não rodou com janela** |
+| **Solidez automática**: tudo que é desenhado é sólido sem configurar (caixa, superfície exata, casco convexo, cápsula) | testes do leitor de cena + a sala de exemplo andável, **vista em imagem** |
+| **Personagem** (`Character`): desliza em paredes, sobe degraus e rampas, pulo com **tempo de coiote**, camadas e máscaras | **6 testes**: degrau, parede, degrau alto demais, pulo, coiote ligado e desligado, entradas ruins, camadas, determinismo bit a bit |
+| **Modo Jogar** (`F6`) no editor, sobre uma cópia | 2 testes pelo JSON + **visto (display virtual)** |
 | Editor: adicionar, ajustar, listar sob o objeto, desenhar, duplicar e excluir colisões | 1 teste de fluxo + **visto (display virtual)** |
 
-**Ainda não:** alças no viewport para redimensionar a colisão (hoje pelo inspetor), camadas e máscaras de colisão, personagem cinemático com degraus, juntas, cordas (XPBD) e simular a física dentro do editor.
+**Ainda não:** alças no viewport para redimensionar a colisão (hoje pelo inspetor), plataformas móveis que carregam o personagem, empurrar caixas, juntas, cordas (XPBD) e simular a física dentro do editor sem o modo Jogar.
 
 ## Resumo (TL;DR)
 

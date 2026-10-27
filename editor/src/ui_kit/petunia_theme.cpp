@@ -345,6 +345,10 @@ QPushButton[role="ghost"], QToolButton[role="ghost"] { text-align: left; padding
 QPushButton[role="search"] { background-color: @bgSurfaceHover@; color: @textMuted@; border: 1px solid transparent; border-radius: @radius@px; text-align: left; padding: 0px @s2@px; }
 QPushButton[role="search"]:hover { border-color: @borderSubtle@; }
 QPushButton[role="search"]:focus { border: @ring@px solid @borderFocus@; }
+QToolButton[role="play"] { background-color: @accent@; color: @textActive@; border: 1px solid @accent@; border-radius: @radius@px; padding: 0px @s3@px; font-weight: 600; min-height: @controlH@px; }
+QToolButton[role="play"]:hover { background-color: @accentHover@; border-color: @accentHover@; }
+QToolButton[role="play"]:focus { border: @ring@px solid @borderFocus@; }
+QToolButton[role="play"][running="true"] { background-color: @statusError@; border-color: @statusError@; }
 QToolButton[role="panelButton"] { background: transparent; border: 1px solid transparent; padding: 0px; min-height: 20px; min-width: 20px; }
 QToolButton[role="panelButton"]:hover { background-color: @bgSurfaceHover@; }
 QToolButton[role="panelButton"]:focus { border: @ring@px solid @borderFocus@; }

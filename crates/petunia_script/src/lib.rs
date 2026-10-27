@@ -28,6 +28,7 @@ pub use host::{
 };
 pub use natives::{LogLevel, LogLine};
 pub use petunia_physics::PhysicsSettings;
+pub use physics_api::PlayerInput;
 
 /// Formats a script's text the way `aipo fmt` does. The text must parse first (the formatter is
 /// forgiving about broken text, and silently "formatting" a mistake would hide it): `Err` carries

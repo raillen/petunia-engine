@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QElapsedTimer>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QOpenGLWidget>
 #include <QPoint>
@@ -30,6 +31,11 @@ public:
     bool isEditMode() const { return editMode_; }
     void setEditMode(bool on);
     ComponentMode componentMode() const { return componentMode_; }
+
+    // Play mode: the keyboard walks the player's character (W A S D or arrows, Space jumps),
+    // the right mouse button turns the camera, Esc stops. A 60 Hz timer sends `play.tick`.
+    bool isPlaying() const { return playing_; }
+    void setPlaying(bool on);
     void setComponentMode(ComponentMode mode);
 
 signals:
@@ -42,6 +48,10 @@ signals:
     void editModeChanged(bool on);
     void editModeToggleRequested();
     void componentModeChanged(ComponentMode mode);
+    // Esc while playing.
+    void playStopRequested();
+    // What the scripts wrote and which handlers failed in the last frame.
+    void playOutput(const QJsonArray& log, const QJsonArray& faults);
 
 protected:
     void initializeGL() override;
@@ -59,6 +69,7 @@ protected:
 
 private:
     void tick();
+    void playTick();
     void pickAt(const QPoint& position);
     void pickComponentAt(const QPoint& position, Qt::KeyboardModifiers modifiers);
     QJsonObject pointerFields(const QPoint& position) const;
@@ -93,5 +104,10 @@ private:
     bool clickCandidate_ = false;
     bool renderErrorReported_ = false;
     bool editMode_ = false;
+    bool playing_ = false;
+    QTimer playTimer_;
+    QElapsedTimer playClock_;
+    QSet<int> playKeys_;
+    bool playJump_ = false;
     ComponentMode componentMode_ = ComponentMode::Face;
 };

@@ -103,6 +103,8 @@ pub struct EditorSession {
     /// Triangles of editable meshes, reused while they do not change (the tools extract the
     /// scene many times per mouse move).
     pub(crate) mesh_cache: RefCell<MeshCache>,
+    /// The running game (`play.start`), on a copy of the world.
+    pub(crate) play: Option<Box<crate::play::PlayState>>,
 }
 
 pub(crate) fn vector_json(vector: Vec3) -> Json {
@@ -167,6 +169,7 @@ impl EditorSession {
             sculpt: SculptState::new(),
             components: None,
             mesh_cache: RefCell::new(MeshCache::new()),
+            play: None,
         })
     }
 
@@ -262,6 +265,7 @@ impl EditorSession {
 
     /// Validates and runs one command; it joins the undo history when reversible.
     pub fn execute(&mut self, record: &CommandRecord) -> Result<Json, Failure> {
+        self.ensure_not_playing()?;
         let outcome = {
             let project = self.project.as_mut().ok_or_else(Failure::no_project)?;
             self.dispatcher.execute(&mut project.world, record)
@@ -282,6 +286,7 @@ impl EditorSession {
     }
 
     pub fn undo(&mut self) -> Result<Json, Failure> {
+        self.ensure_not_playing()?;
         let outcome = {
             let project = self.project.as_mut().ok_or_else(Failure::no_project)?;
             self.dispatcher.undo(&mut project.world)
@@ -290,6 +295,7 @@ impl EditorSession {
     }
 
     pub fn redo(&mut self) -> Result<Json, Failure> {
+        self.ensure_not_playing()?;
         let outcome = {
             let project = self.project.as_mut().ok_or_else(Failure::no_project)?;
             self.dispatcher.redo(&mut project.world)
@@ -650,6 +656,9 @@ impl EditorSession {
 
     /// What to draw this frame, with the selection marked. `None` when no project is open.
     pub fn frame(&self) -> Option<RenderFrame> {
+        if let Some(frame) = self.play_frame() {
+            return Some(frame);
+        }
         let world = &self.project.as_ref()?.world;
         let mut frame = {
             let mut cache = self.mesh_cache.borrow_mut();
@@ -759,6 +768,7 @@ impl EditorSession {
             "diagnostics": diagnostics,
             "camera": camera_json,
             "tool": self.tool.name(),
+            "playing": self.is_playing(),
             "snap": self.snap_json(),
             "transform": self.transform_json(),
             "floor": self.floor_json(),

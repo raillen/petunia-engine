@@ -223,3 +223,39 @@ pub fn start_camera(world: &World) -> FlyCamera {
     }
     FlyCamera::new(camera)
 }
+
+/// The solid form of everything that is drawn: brushes, editable meshes and sculpted caves, in
+/// each object's own coordinates. The physics makes colliders from it for objects that have none.
+pub fn solid_shapes(world: &World) -> std::collections::BTreeMap<u64, petunia_math::SolidShape> {
+    use petunia_math::SolidShape;
+
+    let mut found = std::collections::BTreeMap::new();
+    let frame = extract_frame(world, Camera::default());
+    for item in &frame.items {
+        let Ok(mesh) = crate::mesh::item_mesh(item) else {
+            continue;
+        };
+        if let Some(solid) =
+            SolidShape::from_triangles(&mesh.positions, &mesh.indices, item.shape == Shape::Box)
+        {
+            found.insert(item.entity, solid);
+        }
+    }
+    let mut cache = crate::sculpt::SculptCache::new();
+    for item in cache.items(&crate::sculpt::extract_sculpt_volumes(world)) {
+        let parts: Vec<(&[[f32; 3]], &[u32])> = item
+            .chunks
+            .iter()
+            .map(|chunk| {
+                (
+                    chunk.mesh.positions.as_slice(),
+                    chunk.mesh.indices.as_slice(),
+                )
+            })
+            .collect();
+        if let Some(solid) = SolidShape::merged(&parts) {
+            found.insert(item.entity, solid);
+        }
+    }
+    found
+}

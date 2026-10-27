@@ -102,7 +102,7 @@ impl EditorSession {
             .join(format!("{name}.{SCRIPT_EXTENSION}")))
     }
 
-    fn read_script_file(&self, name: &str) -> Result<String, Failure> {
+    pub(crate) fn read_script_file(&self, name: &str) -> Result<String, Failure> {
         let path = self.script_path(name)?;
         let bytes = read_limited(&path, MAX_SCRIPT_BYTES as u64 + 1).map_err(|error| {
             Failure::new(
@@ -121,7 +121,7 @@ impl EditorSession {
     }
 
     /// Names of the scripts on disk, sorted.
-    fn script_names(&self) -> Vec<String> {
+    pub(crate) fn script_names(&self) -> Vec<String> {
         let Ok(directory) = self.scripts_directory() else {
             return Vec::new();
         };

@@ -60,6 +60,8 @@ ViewportWidget::ViewportWidget(EngineBridge* bridge, QWidget* parent)
     connect(navCube_, &NavCubeWidget::operationFailed, this, &ViewportWidget::renderFailed);
     moveTimer_.setInterval(kFrameMilliseconds);
     connect(&moveTimer_, &QTimer::timeout, this, &ViewportWidget::tick);
+    playTimer_.setInterval(kFrameMilliseconds);
+    connect(&playTimer_, &QTimer::timeout, this, &ViewportWidget::playTick);
 }
 
 void ViewportWidget::initializeGL() {
@@ -88,6 +90,61 @@ void ViewportWidget::resizeEvent(QResizeEvent* event) {
     overlay_->setGeometry(rect());
     navCube_->move(width() - navCube_->width() - 6, 6);
     navCube_->raise();
+}
+
+void ViewportWidget::setPlaying(bool on) {
+    if (playing_ == on) {
+        return;
+    }
+    playing_ = on;
+    playKeys_.clear();
+    playJump_ = false;
+    heldKeys_.clear();
+    moveTimer_.stop();
+    if (on) {
+        playClock_.start();
+        playTimer_.start();
+        setFocus(Qt::OtherFocusReason);
+    } else {
+        playTimer_.stop();
+    }
+    update();
+}
+
+void ViewportWidget::playTick() {
+    if (!playing_) {
+        return;
+    }
+    const double seconds = playClock_.restart() / 1000.0;
+    double forward = 0;
+    double right = 0;
+    for (const int key : std::as_const(playKeys_)) {
+        switch (key) {
+            case Qt::Key_W: case Qt::Key_Up: forward += 1; break;
+            case Qt::Key_S: case Qt::Key_Down: forward -= 1; break;
+            case Qt::Key_D: case Qt::Key_Right: right += 1; break;
+            case Qt::Key_A: case Qt::Key_Left: right -= 1; break;
+            default: break;
+        }
+    }
+    const bool jump = playJump_;
+    playJump_ = false;
+    const Reply reply = bridge_->call(QStringLiteral("play.tick"),
+                                      QJsonObject{{"seconds", seconds}, {"forward", forward}, {"right", right}, {"jump", jump}});
+    if (!reply.ok) {
+        playTimer_.stop();
+        emit renderFailed(reply.message);
+        emit playStopRequested();
+        return;
+    }
+    const QJsonObject result = reply.result.toObject();
+    const QJsonArray log = result.value(QStringLiteral("log")).toArray();
+    const QJsonArray faults = result.value(QStringLiteral("faults")).toArray();
+    if (!log.isEmpty() || !faults.isEmpty()) {
+        emit playOutput(log, faults);
+    }
+    update();
+    emit cameraChanged();
 }
 
 void ViewportWidget::tick() {
@@ -259,6 +316,37 @@ void ViewportWidget::handleFreeKey(QKeyEvent* event) {
 // While flying, W A S D Q E must reach us, not the tool shortcuts. While dragging, Esc cancels
 // the drag instead of clearing the selection. In free mode, axis letters and digits are ours.
 bool ViewportWidget::event(QEvent* event) {
+    if (playing_ && (event->type() == QEvent::ShortcutOverride || event->type() == QEvent::KeyPress)) {
+        // While playing, the game owns the keyboard: S is "backward", not the Scale tool.
+        auto* key = static_cast<QKeyEvent*>(event);
+        const bool plain = !(key->modifiers() & (Qt::ControlModifier | Qt::AltModifier));
+        const int code = key->key();
+        const bool gameKey = plain && (code == Qt::Key_W || code == Qt::Key_A || code == Qt::Key_S || code == Qt::Key_D ||
+                                       code == Qt::Key_Up || code == Qt::Key_Down || code == Qt::Key_Left ||
+                                       code == Qt::Key_Right || code == Qt::Key_Space || code == Qt::Key_Escape);
+        if (gameKey) {
+            if (event->type() == QEvent::ShortcutOverride) {
+                event->accept();
+                return true;
+            }
+            if (!key->isAutoRepeat()) {
+                if (code == Qt::Key_Escape) {
+                    emit playStopRequested();
+                } else if (code == Qt::Key_Space) {
+                    playJump_ = true;
+                } else {
+                    playKeys_.insert(code);
+                }
+            }
+            return true;
+        }
+    }
+    if (playing_ && event->type() == QEvent::KeyRelease) {
+        auto* key = static_cast<QKeyEvent*>(event);
+        if (!key->isAutoRepeat()) {
+            playKeys_.remove(key->key());
+        }
+    }
     if (event->type() == QEvent::ShortcutOverride) {
         auto* key = static_cast<QKeyEvent*>(event);
         const bool plain = !(key->modifiers() & (Qt::ControlModifier | Qt::AltModifier));
@@ -331,6 +419,10 @@ void ViewportWidget::cancelGizmoDrag() {
 
 void ViewportWidget::mousePressEvent(QMouseEvent* event) {
     setFocus(Qt::MouseFocusReason);
+    if (playing_ && event->button() != Qt::RightButton) {
+        event->accept();  // no selecting or dragging while the game runs
+        return;
+    }
     if (freeMode_) {
         finishFreeMode(event->button() == Qt::LeftButton);  // left confirms, right cancels
         event->accept();
@@ -514,7 +606,7 @@ bool ViewportWidget::hasProject() const {
 // Pre-selection: the gizmo handle under the mouse, the face under it (face tools), or else the
 // object under it.
 void ViewportWidget::updateHover(const QPoint& position) {
-    if (!hasProject()) {
+    if (!hasProject() || playing_) {
         return;
     }
     if (editMode_) {
@@ -536,6 +628,10 @@ void ViewportWidget::updateHover(const QPoint& position) {
 }
 
 void ViewportWidget::wheelEvent(QWheelEvent* event) {
+    if (playing_) {
+        event->accept();
+        return;
+    }
     const double notches = event->angleDelta().y() / 120.0;
     const bool boost = event->modifiers().testFlag(Qt::ShiftModifier);
     bridge_->call(QStringLiteral("camera.advance"),

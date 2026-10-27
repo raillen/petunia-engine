@@ -19,6 +19,7 @@ use serde_json::json;
 use crate::api::{API, CONTEXT_GLOBAL, GAME_CAPABILITIES, install_standard, script_surface};
 use crate::compile::{MAX_SCRIPT_BYTES, ScriptDiagnostic, compile};
 use crate::natives::{self, GameCell, GameState, LogLevel, LogLine};
+pub use crate::physics_api::PlayerInput;
 use crate::physics_api::{self, PhysicsRuntime};
 
 /// Scripts of a project live here, one `.aipo` file each; a `Script` row names one by its file
@@ -105,6 +106,9 @@ fn callback_for(module: &str, name: &str) -> Option<HostNativeCallback> {
         ("log", "info") => natives::log_info,
         ("log", "warning") => natives::log_warning,
         ("log", "error") => natives::log_error,
+        ("character", "move") => physics_api::character_move,
+        ("character", "jump") => physics_api::character_jump,
+        ("character", "grounded") => physics_api::character_grounded,
         ("collision", "list") => physics_api::collision_list,
         ("collision", "get") => physics_api::collision_get,
         ("collision", "set") => physics_api::collision_set,
@@ -223,21 +227,93 @@ impl ScriptHost {
     }
 
     /// Turns physics on for this game: builds the simulation from the world's `Collider` and
-    /// `RigidBody` tables. `hulls` gives the points of `convex` colliders on objects without a
-    /// `Mesh` (the caller builds them from the brush shape). Returns the problems: colliders and
-    /// bodies left out, each naming the object; they are also written to the console.
+    /// `RigidBody` tables. `solids` is the drawn surface of each object (`petunia_render::solid_shapes`):
+    /// objects with a shape and no collider become solid by themselves. Returns the problems:
+    /// colliders and bodies left out, each naming the object; they are also written to the console.
     pub fn attach_physics(
         &mut self,
         settings: petunia_physics::PhysicsSettings,
-        hulls: BTreeMap<u64, Vec<petunia_math::Vec3>>,
+        solids: BTreeMap<u64, petunia_math::SolidShape>,
     ) -> Result<Vec<String>, String> {
         let mut state = self.state.0.borrow_mut();
-        let (runtime, problems) = PhysicsRuntime::new(&state.world, settings, hulls)?;
+        let (runtime, problems) = PhysicsRuntime::new(&state.world, settings, solids)?;
         state.physics = Some(runtime);
         for problem in &problems {
             state.push_log(LogLevel::Warning, format!("física: {problem}"));
         }
         Ok(problems)
+    }
+
+    /// Tells the player's character what the person is doing (see [`PlayerInput`]). Call it before
+    /// [`ScriptHost::update`] each frame.
+    pub fn set_player_input(&mut self, input: PlayerInput) {
+        let mut state = self.state.0.borrow_mut();
+        let GameState { world, physics, .. } = &mut *state;
+        if let Some(runtime) = physics {
+            runtime.drive_players(world, input);
+        }
+    }
+
+    /// Where the first keyboard-driven character is (for a camera that follows it).
+    pub fn player_position(&self) -> Option<petunia_math::Vec3> {
+        let state = self.state.0.borrow();
+        let world = &state.world;
+        world
+            .entities_with_table("Character")
+            .unwrap_or_default()
+            .into_iter()
+            .find(|handle| {
+                matches!(
+                    world.get(*handle, "Character", "player"),
+                    Ok(petunia_world::Value::Bool(true))
+                )
+            })
+            .and_then(|handle| match world.get(handle, "Transform", "position") {
+                Ok(petunia_world::Value::Vec3(position)) => Some(*position),
+                _ => None,
+            })
+    }
+
+    /// Where a third-person camera goes: `distance` meters behind the player's head (`height`
+    /// above its position) along `-forward`, pulled in front of anything solid in the way so the
+    /// camera never ends up inside a wall.
+    pub fn third_person_camera(
+        &self,
+        forward: petunia_math::Vec3,
+        distance: f32,
+        height: f32,
+    ) -> Option<petunia_math::Vec3> {
+        let state = self.state.0.borrow();
+        let world = &state.world;
+        let (id, position) = world
+            .entities_with_table("Character")
+            .unwrap_or_default()
+            .into_iter()
+            .find(|handle| {
+                matches!(
+                    world.get(*handle, "Character", "player"),
+                    Ok(petunia_world::Value::Bool(true))
+                )
+            })
+            .and_then(|handle| {
+                let id = world.persistent_id(handle).ok()?.0;
+                match world.get(handle, "Transform", "position") {
+                    Ok(petunia_world::Value::Vec3(position)) => Some((id, *position)),
+                    _ => None,
+                }
+            })?;
+        let head = position + petunia_math::Vec3::new(0.0, height, 0.0);
+        let back = forward * -1.0;
+        let mut length = distance;
+        if let Some(runtime) = state.physics.as_ref()
+            && let Ok(Some(hit)) =
+                runtime
+                    .simulation
+                    .raycast_ignoring(head, back, distance, Some(id))
+        {
+            length = (hit.distance - 0.3).clamp(0.3, distance);
+        }
+        Some(head + back * length)
     }
 
     pub fn has_physics(&self) -> bool {

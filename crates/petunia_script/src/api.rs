@@ -62,6 +62,36 @@ pub const HANDLERS: &[(&str, &str)] = &[
 
 pub const API: &[ApiFunction] = &[
     ApiFunction {
+        module: "character",
+        name: "move",
+        params: &[("entity", "Int"), ("x", "Float"), ("z", "Float")],
+        returns: "None",
+        summary: "Manda o personagem andar: velocidade em metros por segundo no plano do chão (vale até a próxima chamada). Ele desvia de paredes, sobe degraus e rampas.",
+        permission: "world.write",
+        example: "character.move(entity, 3.0, 0.0)",
+        variadic: false,
+    },
+    ApiFunction {
+        module: "character",
+        name: "jump",
+        params: &[("entity", "Int")],
+        returns: "None",
+        summary: "Pede um pulo; acontece se o personagem está no chão ou saiu dele há pouco (tempo de coiote).",
+        permission: "world.write",
+        example: "if world.get(entity, \"Name\", \"text\") == \"Rã\" { character.jump(entity) }",
+        variadic: false,
+    },
+    ApiFunction {
+        module: "character",
+        name: "grounded",
+        params: &[("entity", "Int")],
+        returns: "Bool",
+        summary: "Diz se o personagem está apoiado no chão.",
+        permission: "world.read",
+        example: "if character.grounded(entity) { log.info(\"no chão\") }",
+        variadic: false,
+    },
+    ApiFunction {
         module: "collision",
         name: "list",
         params: &[("entity", "Int")],

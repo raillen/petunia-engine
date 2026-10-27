@@ -118,6 +118,9 @@ Se algo falha, a resposta explica o que fazer:
 | `viewport.outline_style` | `color` `{r,g,b}` (0 a 1), `width` (1 a 8 px) | Cor e espessura do contorno da seleção (preferência do editor, não é comando) |
 | `collider.add` | `shape` (`box`, `sphere`, `capsule`, `convex`) | Colisão com nome no objeto selecionado, ajustada a ele; nome livre ("colisão", "colisão 2"…); um passo de desfazer |
 | `collider.fit` | — | A colisão selecionada volta a envolver o objeto |
+| `play.start` | — | **Jogar**: roda a cena numa **cópia** com scripts, física e o personagem do jogador (cria um herói de reserva no `PlayerStart` se não houver). Devolve `problems`, `has_player` |
+| `play.tick` | `seconds`, `forward`, `right`, `jump`, `look_x`, `look_y` | Um quadro do jogo; devolve o `log` dos scripts e as `faults` |
+| `play.stop` | — | Descarta a cópia e devolve a câmera do editor |
 | `camera.view_direction` · `camera.yaw` · `camera.orbit` · `camera.projection` | `x`, `y`, `z` / `degrees` / `dx`, `dy` / `mode`, `height` | Usados pelo cubo de navegação e menus de projeção |
 
 ## Layout da janela
@@ -148,6 +151,8 @@ As regras de tamanho, cor e texto estão em [design da interface](15-design-da-i
 **Paleta de comandos** (`Ctrl+K` ou `Ctrl+Shift+P`): digite parte do nome, em qualquer ordem de letras ("cvr" acha "Caverna"); `↑ ↓` escolhem, `Enter` executa, `Esc` fecha. Os comandos usados por último aparecem primeiro.
 
 **Exibir > Menus por extenso na barra** troca o `≡` pelos nomes dos menus. Cada workspace lembra quais painéis estavam abertos e o tamanho deles.
+
+**Jogar** (`F6`; botão roxo na barra, vira **Parar** em vermelho): `W A S D` ou setas andam, `Espaço` pula, botão direito do mouse gira a câmera, `Esc` para. A cena **não muda**: o jogo roda numa cópia. Enquanto joga, hierarquia, inspetor, ferramentas e a maioria dos comandos ficam desligados, e o motor recusa edições. A saída dos scripts vai para o Console do workspace Código.
 
 **Preferências** (`Ctrl+,`, menu Editar): tema, densidade e o **contorno da seleção** (cor e espessura). O contorno gira com o objeto.
 
