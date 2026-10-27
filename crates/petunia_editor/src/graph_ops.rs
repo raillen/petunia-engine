@@ -9,8 +9,9 @@
 use std::path::PathBuf;
 
 use petunia_graph::{
-    Catalog, GraphDocument, GraphError, PinRef, Want, add_node, compile, connect, disconnect,
-    outline, remove_node, search, set_param, sources, spec_json,
+    Catalog, GraphDocument, GraphError, GraphLayout, MAX_LAYOUT_BYTES, PinRef, Want, add_node,
+    canvas, compile, connect, disconnect, outline, remove_node, search, set_param, sources,
+    spec_json,
 };
 use petunia_project::{atomic_write, read_limited, resolve_inside};
 use petunia_script::{GRAPH_SUFFIX, SCRIPTS_DIRECTORY, graph_catalog, graph_max_bytes};
@@ -20,6 +21,8 @@ use crate::failure::Failure;
 use crate::session::EditorSession;
 
 const BACKUP_DIRECTORY: &str = ".backup";
+/// Where the boxes of a graph sit: beside the graph file, never inside it (DR-30).
+const LAYOUT_SUFFIX: &str = ".layout.json";
 /// Snapshots kept for undo.
 const MAX_HISTORY: usize = 100;
 /// The most nodes a search returns.
@@ -29,6 +32,9 @@ const MAX_FOUND: usize = 60;
 pub struct OpenGraph {
     name: String,
     document: GraphDocument,
+    layout: GraphLayout,
+    /// A layout file that could not be read, kept so the view can say why the boxes were computed.
+    layout_problem: Option<String>,
     past: Vec<GraphDocument>,
     future: Vec<GraphDocument>,
     backed_up: bool,
@@ -85,6 +91,11 @@ fn optional_pin(request: &Json, key: &str) -> Result<Option<PinRef>, Failure> {
     }
 }
 
+fn write_layout(path: &std::path::Path, layout: &GraphLayout) -> Result<(), Failure> {
+    atomic_write(path, layout.to_text().as_bytes())
+        .map_err(|error| io_failure("gravar o layout", &error))
+}
+
 fn node_of(request: &Json, key: &str) -> Result<u32, Failure> {
     request
         .get(key)
@@ -110,6 +121,34 @@ impl EditorSession {
 
     fn open_graph_mut(&mut self) -> Result<&mut OpenGraph, Failure> {
         self.graph.as_mut().ok_or_else(no_graph)
+    }
+
+    /// `scripts/<name>.layout.json`, beside the graph.
+    fn layout_path(&self, name: &str) -> Result<PathBuf, Failure> {
+        let graph = self.graph_path(name)?;
+        Ok(graph.with_file_name(format!("{name}{LAYOUT_SUFFIX}")))
+    }
+
+    /// Reads the layout, or reports why it was ignored. A broken layout never blocks the graph.
+    fn read_layout(path: &std::path::Path) -> (GraphLayout, Option<String>) {
+        if !path.exists() {
+            return (GraphLayout::new(), None);
+        }
+        let read = read_limited(path, MAX_LAYOUT_BYTES as u64 + 1)
+            .map_err(|error| format!("não consegui ler o layout: {error}"))
+            .and_then(|bytes| {
+                String::from_utf8(bytes).map_err(|_| "o layout não é texto UTF-8".to_string())
+            })
+            .and_then(|text| GraphLayout::parse(&text).map_err(|error| error.0));
+        match read {
+            Ok(layout) => (layout, None),
+            Err(problem) => (
+                GraphLayout::new(),
+                Some(format!(
+                    "o layout foi ignorado e as caixas foram calculadas: {problem}"
+                )),
+            ),
+        }
     }
 
     /// `graph.list`: the graph files of the project and the one open.
@@ -143,6 +182,8 @@ impl EditorSession {
         self.graph = Some(OpenGraph {
             name: name.to_string(),
             document,
+            layout: GraphLayout::new(),
+            layout_problem: None,
             past: Vec::new(),
             future: Vec::new(),
             backed_up: true,
@@ -176,9 +217,13 @@ impl EditorSession {
                 "O arquivo não foi alterado. Corrija-o num editor de texto ou restaure de scripts/.backup/.",
             )
         })?;
+        let (mut layout, layout_problem) = Self::read_layout(&self.layout_path(name)?);
+        layout.prune(&document);
         self.graph = Some(OpenGraph {
             name: name.to_string(),
             document,
+            layout,
+            layout_problem,
             past: Vec::new(),
             future: Vec::new(),
             backed_up: false,
@@ -193,15 +238,39 @@ impl EditorSession {
         Ok(json!({ "open": Json::Null }))
     }
 
-    /// `graph.view`: the outline of the open graph (see `petunia_graph::outline`).
+    /// `graph.view`: the outline (the accessible view) and the canvas (the same graph as boxes).
     pub fn graph_view(&self) -> Result<Json, Failure> {
         let graph = self.graph.as_ref().ok_or_else(no_graph)?;
         Ok(json!({
             "name": graph.name,
             "outline": outline(&graph.document, graph_catalog()),
+            "canvas": canvas(&graph.document, graph_catalog(), Some(&graph.layout)),
+            "layout_problem": graph.layout_problem,
             "can_undo": !graph.past.is_empty(),
             "can_redo": !graph.future.is_empty(),
         }))
+    }
+
+    /// `graph.set_layout`: moves one box. Positions are not logic, so this saves its own file and
+    /// is not a step in the undo history.
+    pub fn graph_set_layout(&mut self, node: u32, x: f64, y: f64) -> Result<Json, Failure> {
+        let path = {
+            let name = self.graph.as_ref().ok_or_else(no_graph)?.name.clone();
+            self.layout_path(&name)?
+        };
+        let graph = self.open_graph_mut()?;
+        if graph.document.node(node).is_none() {
+            return Err(Failure::bad_request(&format!(
+                "o grafo não tem o nó {node}"
+            )));
+        }
+        let mut layout = graph.layout.clone();
+        layout
+            .place(node, x, y)
+            .map_err(|error| graph_failure(&error))?;
+        write_layout(&path, &layout)?;
+        graph.layout = layout;
+        Ok(json!({ "node": node, "x": x, "y": y }))
     }
 
     /// Applies an edit to a copy; on success the copy becomes the graph, the old one goes into the
@@ -210,9 +279,9 @@ impl EditorSession {
         &mut self,
         edit: impl FnOnce(&mut GraphDocument, &Catalog) -> Result<T, GraphError>,
     ) -> Result<T, Failure> {
-        let path = {
+        let (path, layout_path) = {
             let name = self.graph.as_ref().ok_or_else(no_graph)?.name.clone();
-            self.graph_path(&name)?
+            (self.graph_path(&name)?, self.layout_path(&name)?)
         };
         let graph = self.open_graph_mut()?;
         let mut copy = graph.document.clone();
@@ -236,6 +305,13 @@ impl EditorSession {
         atomic_write(&path, copy.to_text().as_bytes())
             .map_err(|error| io_failure("gravar o grafo", &error))?;
         let before = std::mem::replace(&mut graph.document, copy);
+        // Removing nodes leaves their places behind; drop them so the file stops growing.
+        let mut layout = graph.layout.clone();
+        layout.prune(&graph.document);
+        if layout != graph.layout {
+            write_layout(&layout_path, &layout)?;
+            graph.layout = layout;
+        }
         graph.past.push(before);
         if graph.past.len() > MAX_HISTORY {
             graph.past.remove(0);
@@ -308,9 +384,9 @@ impl EditorSession {
     }
 
     pub fn graph_undo(&mut self) -> Result<Json, Failure> {
-        let path = {
+        let (path, layout_path) = {
             let name = self.graph.as_ref().ok_or_else(no_graph)?.name.clone();
-            self.graph_path(&name)?
+            (self.graph_path(&name)?, self.layout_path(&name)?)
         };
         let graph = self.open_graph_mut()?;
         let Some(previous) = graph.past.pop() else {
@@ -323,6 +399,11 @@ impl EditorSession {
         atomic_write(&path, previous.to_text().as_bytes())
             .map_err(|error| io_failure("gravar o grafo", &error))?;
         let current = std::mem::replace(&mut graph.document, previous);
+        let mut layout = graph.layout.clone();
+        layout.prune(&graph.document);
+        if layout != graph.layout && write_layout(&layout_path, &layout).is_ok() {
+            graph.layout = layout;
+        }
         graph.future.push(current);
         self.refresh_script_diagnostics();
         Ok(json!({ "undone": true }))
@@ -597,6 +678,48 @@ mod tests {
         assert!(
             root.join("scripts/.backup/gira.graph.json").is_file(),
             "the first change of a session kept a backup"
+        );
+
+        // The canvas draws the same graph as boxes, with a place per node.
+        let picture = call(&mut session, json!({ "op": "graph.view" }))["canvas"].clone();
+        assert_eq!(
+            picture["nodes"].as_array().expect("nodes").len(),
+            3,
+            "{picture}"
+        );
+        assert_eq!(
+            picture["edges"].as_array().expect("edges").len(),
+            3,
+            "{picture}"
+        );
+        let moved = call(
+            &mut session,
+            json!({ "op": "graph.set_layout", "node": turn, "x": 640.0, "y": 200.0 }),
+        );
+        assert_eq!(moved["x"], 640.0, "{moved}");
+        let picture = call(&mut session, json!({ "op": "graph.view" }))["canvas"].clone();
+        let box_of = |node: u64| {
+            picture["nodes"]
+                .as_array()
+                .expect("nodes")
+                .iter()
+                .find(|box_| box_["node"] == node)
+                .cloned()
+                .expect("box")
+        };
+        assert_eq!(box_of(turn)["x"], 640.0, "{picture}");
+        assert_eq!(box_of(turn)["y"], 200.0, "{picture}");
+        assert!(
+            box_of(event)["x"].as_f64().expect("x") < box_of(turn)["x"].as_f64().expect("x"),
+            "the event computed by the editor sits left of the action: {picture}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("scripts/gira.layout.json"))
+                .expect("layout")
+                .matches("turn")
+                .count(),
+            0,
+            "positions live beside the graph, not inside it"
         );
 
         // The graph plays: attach it to a drawn object and turn it for a second.

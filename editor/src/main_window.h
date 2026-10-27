@@ -193,6 +193,8 @@ private:
     void setEditingLocked(bool locked);
     QAction* playAction_ = nullptr;
     QToolButton* playButton_ = nullptr;
+    // While the game runs, asks what the graphs reported (which node ran, why a condition failed).
+    QTimer* debugTimer_ = nullptr;
     // Actions disabled while the game runs, so they can be given back.
     QList<QAction*> lockedActions_;
     // Operações > Colisão: add a named collider of each shape, fit the selected one (DR-27).

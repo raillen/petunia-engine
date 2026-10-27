@@ -156,6 +156,11 @@ impl EditorSession {
             ),
             "graph.sources" => self.graph_sources(&Self::graph_request_pin(request, "for")?),
             "graph.code" => self.graph_code(),
+            "graph.set_layout" => self.graph_set_layout(
+                Self::graph_request_node(request, "node")?,
+                number(request, "x")? as f64,
+                number(request, "y")? as f64,
+            ),
 
             "editor.snapshot" => Ok(self.snapshot()),
             "entity.describe" => self.describe(entity(request)?),
@@ -310,6 +315,7 @@ impl EditorSession {
             ),
             "play.start" => self.play_start(),
             "play.stop" => self.play_stop(),
+            "play.debug" => self.play_debug(),
             "play.tick" => self.play_tick(
                 number_or(request, "seconds", 0.016),
                 number_or(request, "forward", 0.0),

@@ -98,6 +98,17 @@ MainWindow::MainWindow() : bridge_(std::make_unique<EngineBridge>()) {
     connect(viewport_, &ViewportWidget::selectionChanged, this, [this] { bridge_->refresh(); });
     connect(viewport_, &ViewportWidget::cameraChanged, this, &MainWindow::updateCameraLabel);
     connect(viewport_, &ViewportWidget::playStopRequested, this, &MainWindow::stopPlay);
+    // The canvas highlights what ran and answers "por que esta condição falhou?" while playing.
+    // A UI timer rather than the viewport's frame loop: 200 ms is enough to read and cannot
+    // compete with drawing.
+    debugTimer_ = new QTimer(this);
+    debugTimer_->setInterval(200);
+    connect(debugTimer_, &QTimer::timeout, this, [this] {
+        const Reply reply = bridge_->call(QStringLiteral("play.debug"));
+        if (reply.ok) {
+            graph_->showDebug(reply.result.toObject());
+        }
+    });
     connect(viewport_, &ViewportWidget::playOutput, this, [this](const QJsonArray& log, const QJsonArray& faults) {
         for (const QJsonValue& value : log) {
             const QJsonObject line = value.toObject();
@@ -1467,6 +1478,8 @@ void MainWindow::startPlay() {
         code_->appendConsole(QStringLiteral("[aviso] %1").arg(problem.toString()));
     }
     viewport_->setPlaying(true);
+    graph_->setPlaying(true);
+    debugTimer_->start();
     setEditingLocked(true);
     playAction_->setText(QStringLiteral("Parar"));
     playAction_->setIcon(PetuniaIcons::get(QStringLiteral("stop"), PetuniaTheme::instance().textActive().name()));
@@ -1483,6 +1496,8 @@ void MainWindow::stopPlay() {
         return;
     }
     viewport_->setPlaying(false);
+    debugTimer_->stop();
+    graph_->setPlaying(false);
     perform(QStringLiteral("play.stop"), {}, false);
     setEditingLocked(false);
     code_->appendConsole(QStringLiteral("— jogo parado —"));

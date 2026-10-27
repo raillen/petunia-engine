@@ -20,6 +20,8 @@ use crate::convert::{display_text, json_to_value, value_to_json};
 const MAX_LOG_LINES: usize = 1000;
 /// A script queues at most this many events per call.
 const MAX_QUEUED_EVENTS: usize = 256;
+/// A frame keeps this many debug marks; older ones are dropped (the newest frame wins).
+const MAX_DEBUG_EVENTS: usize = 256;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LogLevel {
@@ -62,8 +64,31 @@ pub struct GameState {
     pub commands_run: u64,
     pub log: Vec<LogLine>,
     pub events: Vec<QueuedEvent>,
+    /// What the generated graph code reported this frame (play mode, N5).
+    pub debug: DebugTrace,
     /// The physics of the game, when the host was given one (`ScriptHost::attach_physics`).
     pub physics: Option<crate::physics_api::PhysicsRuntime>,
+}
+
+/// One thing the generated code of a graph reported (N5).
+#[derive(Clone, Debug, PartialEq)]
+pub enum DebugEvent {
+    /// This node started running.
+    Ran { entity: u64, node: u32 },
+    /// This `Se` decided: true or false.
+    Check { entity: u64, node: u32, value: bool },
+    /// A value the condition was made of, already written as text.
+    Value {
+        entity: u64,
+        node: u32,
+        text: String,
+    },
+}
+
+/// The marks of one or more frames, each with the frame it belongs to.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DebugTrace {
+    pub events: Vec<(u64, DebugEvent)>,
 }
 
 impl GameState {
@@ -76,6 +101,33 @@ impl GameState {
             tick: self.world.tick(),
             text,
         });
+    }
+
+    fn debug_push(&mut self, event: DebugEvent) {
+        let tick = self.world.tick();
+        if let Some((last_tick, last)) = self.debug.events.last()
+            && *last_tick == tick
+            && matches!((last, &event), (DebugEvent::Ran { entity: a, node: b }, DebugEvent::Ran { entity: c, node: d }) if a == c && b == d)
+        {
+            return;
+        }
+        if self.debug.events.len() >= MAX_DEBUG_EVENTS {
+            self.debug.events.remove(0);
+        }
+        self.debug.events.push((tick, event));
+    }
+
+    /// What the newest frame reported, so a highlight means "ran this frame".
+    pub fn debug_latest(&self) -> (u64, Vec<DebugEvent>) {
+        let tick = self.debug.events.last().map(|(tick, _)| *tick).unwrap_or(0);
+        let events = self
+            .debug
+            .events
+            .iter()
+            .filter(|(event_tick, _)| *event_tick == tick)
+            .map(|(_, event)| event.clone())
+            .collect();
+        (tick, events)
     }
 }
 
@@ -125,6 +177,22 @@ pub(crate) fn entity_arg(args: &[Value], index: usize, operation: &str) -> Resul
             &format!("Int (id de objeto) em {operation}"),
             other,
         )),
+        None => Err(internal("faltou o argumento")),
+    }
+}
+
+pub(crate) fn node_arg(args: &[Value], index: usize, operation: &str) -> Result<u32, VmError> {
+    match args.get(index) {
+        Some(Value::Int(id)) if *id >= 0 && *id <= i64::from(u32::MAX) => Ok(*id as u32),
+        Some(other) => Err(wrong_type(&format!("Int (id de nó) em {operation}"), other)),
+        None => Err(internal("faltou o argumento")),
+    }
+}
+
+pub(crate) fn bool_arg(args: &[Value], index: usize, operation: &str) -> Result<bool, VmError> {
+    match args.get(index) {
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(other) => Err(wrong_type(&format!("Bool em {operation}"), other)),
         None => Err(internal("faltou o argumento")),
     }
 }
@@ -391,6 +459,47 @@ fn write_log(vm: &mut Vm, args: &[Value], level: LogLevel) -> Native {
     let cell = context(vm, "", "log")?;
     let text = args.iter().map(display_text).collect::<Vec<_>>().join(" ");
     cell.0.borrow_mut().push_log(level, text);
+    Ok(Value::None)
+}
+
+/// Longest text a debug value keeps; enough to read a condition, short of a whole table.
+const MAX_DEBUG_TEXT: usize = 200;
+
+pub(crate) fn graph_debug_node(vm: &mut Vm, args: &[Value]) -> Native {
+    let cell = context(vm, "", "graph_debug.node")?;
+    let entity = entity_arg(args, 0, "graph_debug.node")?;
+    let node = node_arg(args, 1, "graph_debug.node")?;
+    cell.0
+        .borrow_mut()
+        .debug_push(DebugEvent::Ran { entity, node });
+    Ok(Value::None)
+}
+
+pub(crate) fn graph_debug_check(vm: &mut Vm, args: &[Value]) -> Native {
+    let cell = context(vm, "", "graph_debug.check")?;
+    let entity = entity_arg(args, 0, "graph_debug.check")?;
+    let node = node_arg(args, 1, "graph_debug.check")?;
+    let value = bool_arg(args, 2, "graph_debug.check")?;
+    cell.0.borrow_mut().debug_push(DebugEvent::Check {
+        entity,
+        node,
+        value,
+    });
+    Ok(Value::None)
+}
+
+pub(crate) fn graph_debug_value(vm: &mut Vm, args: &[Value]) -> Native {
+    let cell = context(vm, "", "graph_debug.value")?;
+    let entity = entity_arg(args, 0, "graph_debug.value")?;
+    let node = node_arg(args, 1, "graph_debug.value")?;
+    let Some(value) = args.get(2) else {
+        return Err(internal("faltou o argumento"));
+    };
+    let mut text = display_text(value);
+    text.truncate(MAX_DEBUG_TEXT);
+    cell.0
+        .borrow_mut()
+        .debug_push(DebugEvent::Value { entity, node, text });
     Ok(Value::None)
 }
 

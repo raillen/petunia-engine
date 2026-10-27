@@ -36,6 +36,41 @@ pub struct ApiFunction {
 /// Capabilities a game script is granted.
 pub const GAME_CAPABILITIES: &[&str] = &["world.read", "world.write", "game"];
 
+/// The natives generated graph code calls to report what ran (N5). **Not** in [`API`]: they are not
+/// something a person writes or a node the palette offers, only what play mode reads afterwards.
+pub const DEBUG_API: &[ApiFunction] = &[
+    ApiFunction {
+        module: "graph_debug",
+        name: "node",
+        params: &[("entity", "Int"), ("id", "Int")],
+        returns: "None",
+        summary: "Marca que o nó começou a rodar.",
+        permission: "",
+        example: "",
+        variadic: false,
+    },
+    ApiFunction {
+        module: "graph_debug",
+        name: "check",
+        params: &[("entity", "Int"), ("id", "Int"), ("value", "Bool")],
+        returns: "None",
+        summary: "Registra o que uma condição decidiu.",
+        permission: "",
+        example: "",
+        variadic: false,
+    },
+    ApiFunction {
+        module: "graph_debug",
+        name: "value",
+        params: &[("entity", "Int"), ("id", "Int"), ("value", "Any")],
+        returns: "None",
+        summary: "Registra um valor que a condição usou.",
+        permission: "",
+        example: "",
+        variadic: false,
+    },
+];
+
 /// Names a script file may define; the host calls them when the thing happens.
 pub const HANDLERS: &[(&str, &str)] = &[
     (
@@ -604,7 +639,7 @@ pub fn script_surface() -> PreludeSurface {
         }
     }
     let mut modules: HashMap<&str, HashMap<String, HostFunction>> = HashMap::new();
-    for function in API {
+    for function in API.iter().chain(DEBUG_API) {
         let params = function
             .params
             .iter()

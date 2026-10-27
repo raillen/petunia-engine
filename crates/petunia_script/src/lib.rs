@@ -24,8 +24,8 @@ pub use api::{API, ApiFunction, GAME_CAPABILITIES, HANDLERS, KEYWORDS, api_json,
 pub use compile::{Compiled, MAX_SCRIPT_BYTES, ScriptDiagnostic, ScriptSeverity, compile};
 pub use doctor::{project_diagnostics, script_names};
 pub use graph::{
-    GRAPH_EVENTS, GRAPH_SUFFIX, GraphEvent, blame_node, compile_graph, graph_catalog,
-    graph_max_bytes, graph_names,
+    GRAPH_EVENTS, GRAPH_SUFFIX, GraphEvent, blame_node, compile_graph, compile_graph_with,
+    graph_catalog, graph_max_bytes, graph_names,
 };
 pub use host::{
     LoadReport, RunReport, SCRIPT_EXTENSION, SCRIPTS_DIRECTORY, ScriptFault, ScriptHost,

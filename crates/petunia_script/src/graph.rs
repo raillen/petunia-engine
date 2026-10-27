@@ -132,9 +132,14 @@ fn to_script(finding: &Diagnostic) -> ScriptDiagnostic {
 /// Parses and compiles a graph's text. Errors come as script diagnostics (a sentence aimed at a
 /// node, not at a line of generated text).
 pub fn compile_graph(text: &str) -> Result<Compiled, Vec<ScriptDiagnostic>> {
+    compile_graph_with(text, false)
+}
+
+/// [`compile_graph`], with the marks play mode reads (N5). `false` gives exactly the same text.
+pub fn compile_graph_with(text: &str, debug: bool) -> Result<Compiled, Vec<ScriptDiagnostic>> {
     let document = GraphDocument::parse(text)
         .map_err(|error| vec![ScriptDiagnostic::general("GRAPH_INVALID", error.0)])?;
-    petunia_graph::compile(&document, graph_catalog())
+    petunia_graph::compile_with(&document, graph_catalog(), debug)
         .map_err(|findings| findings.iter().map(to_script).collect())
 }
 
