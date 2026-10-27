@@ -45,6 +45,7 @@ São **24 decisões**. Estados possíveis:
 | **DR-28** | Personagem, modo Jogar e solidez automática | **ACEITA** (2026-10-26) | `Character` com tempo de coiote; `F6` roda a cena numa cópia; tudo que é desenhado é sólido; camadas de colisão ([física](../02-arquitetura/06-fisica-e-cordas.md)) |
 | **DR-29** | Luzes de cena e importação de modelos GLB | **ACEITA** (2026-10-26, "Fase 2: aprovado") | Tabela `Light` (sol e pontual); `gltf` só em `petunia_import`; modelo vira malhas editáveis ([editor](../02-arquitetura/11-editor.md)) |
 | **DR-30** | Sistema de nós (no lugar do Event Sheet) | **ACEITA** (2026-10-26, "tudo aprovado"; N1 implementado) | Grafo tipado 1:1 com a API; compila para Aipo; vista em contorno completa como primeira entrega; tela de nós própria sem biblioteca nova |
+| **DR-31** | Prefabs embutidos e o nó Esperar | **ACEITA** (2026-10-26, "prossiga com a implementação"; N4 implementado) | Porta, Item coletável e Ponto de nascimento como moldes de linhas + grafos; `Esperar` compila para uma função por espera |
 | **DR-24** | Workspaces e prioridades antes da API | **EM PARTE ACEITA** (andares, cavernas B) | Mapa (com Jogar), Pintura sem UV, Animação, Efeitos por nós; antes da API: andares, cavernas, terreno, prefabs, Jogar ([análise](../02-arquitetura/14-workspaces-e-prioridades.md)) |
 
 ---
@@ -600,6 +601,24 @@ Se uma biblioteca for necessária mais tarde, passa no checklist de admissão an
 | Execução: cada nó roda depois de **um só** | `EXEC_MERGE` / `EXEC_FANOUT` recusam duas ligações | Mantém o código gerado em blocos (`if`/`repeat`/`each`) |
 
 **Reabrir se:** a vista em contorno não bastar para quem usa leitor de tela (teste com uma pessoa real antes do N3), ou se a tela própria passar de 3 mil linhas.
+
+## DR-31 — Prefabs embutidos e o nó Esperar · ACEITA (2026-10-26)
+
+**Pedido:** "prossiga com a implementação" (passo N4 do DR-30).
+
+**Decisão:**
+
+1. **Prefab = molde de linhas + grafos.** Criar um prefab (`prefab.spawn`) cria os objetos numa única ação de desfazer, na frente da câmera, no andar atual, e põe na pasta `scripts/` os grafos de que ele precisa. **Um grafo que já existe com o mesmo nome nunca é sobrescrito** (a pessoa pode tê-lo editado). O comportamento é, portanto, um grafo comum que se abre e muda na aba Lógica.
+2. **Três moldes embutidos**, em `crates/petunia_editor/src/prefabs.rs`:
+   - **Porta:** objeto cinemático com uma colisão sólida e um sensor maior; sobe 3,2 m quando um personagem entra no sensor, espera 3 s e desce; a variável `aberta` impede abrir duas vezes. Grafo `porta`.
+   - **Item coletável:** esfera com sensor; some e avisa no console quando um personagem a toca. Grafo `item`.
+   - **Ponto de nascimento:** objeto com a tabela `PlayerStart` e uma marca que não bloqueia. Sem grafo.
+3. **Nó Esperar (`flow.wait`).** Compila para: `graph_wait_start(entity, id, segundos)` no ponto da espera e **uma função `graph_after_<id>(entity)` com o que vem depois**, chamada quando o tempo acaba. Cada objeto conta as suas esperas (chave pelo objeto). O contador desce em `on_update`; se o grafo não tem esse evento, o compilador cria um. Regras: depois do Esperar **só o próprio objeto continua disponível** (outros valores dão `VALUE_NOT_READY`); esperar de novo antes do fim **reinicia** a contagem; dentro de repetição dá aviso `WAIT_IN_LOOP`.
+4. **Defeito achado pelos prefabs e corrigido:** o motor **nunca avisava** que um personagem (cinemático) tocou um sensor ou uma parede estática, porque o Rapier ignora por padrão pares cinemático × fixo. Agora todas as colisões ligam `KINEMATIC_FIXED` e `KINEMATIC_KINEMATIC`. Sem isso, `on_collision` não disparava para o jogador (teste de regressão que falha sem a correção).
+
+**Fora desta etapa (declarado):** prefabs do próprio projeto, com revisão e instâncias que seguem o molde; porta com animação (hoje ela só sobe e desce de uma vez); "spawn" que **cria** criaturas (hoje é só o ponto de nascimento do jogador); item que conta pontos (variáveis valem por objeto e só enquanto o jogo roda).
+
+**Reabrir se:** os moldes precisarem de variantes por projeto antes do sistema de pacotes, ou se a contagem de esperas por objeto pesar com muitos objetos.
 
 ---
 

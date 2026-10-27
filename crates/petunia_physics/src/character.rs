@@ -359,6 +359,41 @@ mod tests {
     }
 
     #[test]
+    fn a_character_walking_into_a_static_trigger_or_wall_reports_the_contact() {
+        // A trigger (a sensor, not solid) 4 m east of the start, and a solid wall further on.
+        let (sensor_body, mut sensor) =
+            block(2, Vec3::new(4.0, 0.9, 0.0), Vec3::new(1.0, 2.0, 2.0));
+        sensor.trigger = true;
+        let (wall_body, wall) = block(3, Vec3::new(8.0, 1.0, 0.0), Vec3::new(1.0, 2.0, 4.0));
+        let mut simulation = world_with(
+            &[(sensor_body, sensor), (wall_body, wall)],
+            Vec3::new(0.0, 0.9, 0.0),
+            CharacterDescription::new(100),
+        );
+        run(&mut simulation, 30);
+        simulation
+            .set_character_intent(100, Vec3::new(4.0, 0.0, 0.0))
+            .expect("character");
+        let mut touched: Vec<u64> = Vec::new();
+        for _ in 0..240 {
+            for event in simulation.step() {
+                if event.phase == crate::ContactPhase::Started {
+                    touched.push(event.first.owner);
+                    touched.push(event.second.owner);
+                }
+            }
+        }
+        assert!(
+            touched.contains(&2),
+            "the trigger reported the character: {touched:?}"
+        );
+        assert!(
+            touched.contains(&3),
+            "the wall reported the character: {touched:?}"
+        );
+    }
+
+    #[test]
     fn it_falls_lands_and_walks_where_it_is_told() {
         let mut simulation = world_with(
             &[],

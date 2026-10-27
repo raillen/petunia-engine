@@ -394,6 +394,13 @@ impl Simulation {
                     rapier::InteractionTestMode::And,
                 ))
                 .active_events(rapier::ActiveEvents::COLLISION_EVENTS)
+                // A character (kinematic) walking into a static trigger or wall must report it:
+                // by default Rapier skips kinematic against fixed pairs.
+                .active_collision_types(
+                    rapier::ActiveCollisionTypes::default()
+                        | rapier::ActiveCollisionTypes::KINEMATIC_KINEMATIC
+                        | rapier::ActiveCollisionTypes::KINEMATIC_FIXED,
+                )
                 .user_data(references.len() as u128);
             if collider.trigger {
                 builder = builder.density(0.0);

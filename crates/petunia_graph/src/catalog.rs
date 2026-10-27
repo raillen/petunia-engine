@@ -123,6 +123,7 @@ pub enum Lowering {
     If,
     Repeat,
     Each,
+    Wait,
     Compare,
     Logic,
     Not,
@@ -517,6 +518,20 @@ fn fixed_nodes() -> Vec<NodeSpec> {
             ],
             Vec::new(),
             Lowering::Each,
+        ),
+        fixed(
+            "flow.wait",
+            "Esperar",
+            "Fluxo",
+            "Espera alguns segundos de jogo e então continua com o que vem depois. Depois da espera só o próprio objeto continua disponível: guarde o que precisar numa variável antes. Esperar de novo antes do fim reinicia a contagem.",
+            NodeClass::Flow,
+            vec![
+                exec_in(),
+                data_in("seconds", "Segundos", DataType::Float),
+                exec_out("done", "Depois de esperar"),
+            ],
+            Vec::new(),
+            Lowering::Wait,
         ),
         fixed(
             "op.compare",

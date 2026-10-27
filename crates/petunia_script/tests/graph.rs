@@ -455,3 +455,139 @@ fn a_graph_file_loads_from_the_scripts_folder_and_clashes_are_reported() {
     assert!((x_of(&host, id) - 1.0).abs() < 1e-6);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn waiting_continues_the_chain_later_for_each_object_on_its_own() {
+    // on_start: wait 1 s, then move_x(2) ; and again: wait 1 s, move_x(1).
+    let text = graph(
+        &[
+            (1, "event.on_start", json!({})),
+            (2, "flow.wait", json!({ "seconds": 1.0 })),
+            (3, "api.transform.move_x", json!({ "delta": 2.0 })),
+            (4, "flow.wait", json!({ "seconds": 1.0 })),
+            (5, "api.transform.move_x", json!({ "delta": 1.0 })),
+        ],
+        &[
+            ("1.then", "2.in"),
+            ("2.done", "3.in"),
+            ("3.then", "4.in"),
+            ("4.done", "5.in"),
+        ],
+    );
+    let compiled = compile_graph(&text).expect("compiles");
+    assert!(
+        compiled.text.contains("graph_wait_start(entity, 2, 1.0)"),
+        "{}",
+        compiled.text
+    );
+    assert!(compiled.text.contains("fn graph_after_2(entity) {"));
+    assert!(
+        compiled.text.contains("fn on_update(entity, dt) {"),
+        "an on_update is made to count down"
+    );
+    let (world, id) = world_with("espera");
+    let mut host = ScriptHost::new(world).expect("host");
+    host.load_graph("espera", &text).expect("loads");
+    host.update(0.5);
+    assert!(
+        x_of(&host, id).abs() < 1e-6,
+        "nothing yet: x = {}",
+        x_of(&host, id)
+    );
+    host.update(0.5);
+    assert!(
+        (x_of(&host, id) - 2.0).abs() < 1e-6,
+        "after 1 s: x = {}",
+        x_of(&host, id)
+    );
+    host.update(0.5);
+    host.update(0.5);
+    assert!(
+        (x_of(&host, id) - 3.0).abs() < 1e-6,
+        "after 2 s: x = {}",
+        x_of(&host, id)
+    );
+    for _ in 0..10 {
+        host.update(0.5);
+    }
+    assert!((x_of(&host, id) - 3.0).abs() < 1e-6, "it does not repeat");
+    assert!(host.take_faults().is_empty());
+}
+
+#[test]
+fn waiting_again_before_the_end_restarts_the_count() {
+    // on_update: wait 0.5 s then move_x. The wait starts again every frame, so it never ends.
+    let text = graph(
+        &[
+            (1, "event.on_update", json!({})),
+            (2, "flow.wait", json!({ "seconds": 0.5 })),
+            (3, "api.transform.move_x", json!({ "delta": 1.0 })),
+        ],
+        &[("1.then", "2.in"), ("2.done", "3.in")],
+    );
+    let compiled = compile_graph(&text).expect("compiles");
+    assert_eq!(
+        compiled.text.matches("fn on_update(").count(),
+        1,
+        "the graph's own on_update counts the waits down:\n{}",
+        compiled.text
+    );
+    let (world, id) = world_with("reinicia");
+    let mut host = ScriptHost::new(world).expect("host");
+    host.load_graph("reinicia", &text).expect("loads");
+    for _ in 0..20 {
+        host.update(0.1);
+    }
+    assert!(
+        x_of(&host, id).abs() < 1e-6,
+        "the wait never ends: x = {}",
+        x_of(&host, id)
+    );
+    assert!(host.take_faults().is_empty());
+}
+
+#[test]
+fn after_a_wait_only_the_object_is_still_there() {
+    let text = graph(
+        &[
+            (1, "event.on_collision", json!({})),
+            (2, "flow.wait", json!({ "seconds": 1.0 })),
+            (3, "api.transform.move_x", json!({})),
+        ],
+        &[
+            ("1.then", "2.in"),
+            ("2.done", "3.in"),
+            ("1.other", "3.entity"),
+        ],
+    );
+    assert!(codes(&text).contains(&"VALUE_NOT_READY".to_string()));
+    // The object itself is fine.
+    let fine = graph(
+        &[
+            (1, "event.on_collision", json!({})),
+            (2, "flow.wait", json!({ "seconds": 1.0 })),
+            (3, "api.transform.move_x", json!({ "delta": 1.0 })),
+        ],
+        &[
+            ("1.then", "2.in"),
+            ("2.done", "3.in"),
+            ("1.entity", "3.entity"),
+        ],
+    );
+    assert!(compile_graph(&fine).is_ok());
+}
+
+#[test]
+fn a_wait_inside_a_loop_warns() {
+    let text = graph(
+        &[
+            (1, "event.on_start", json!({})),
+            (2, "flow.repeat", json!({ "count": 3 })),
+            (3, "flow.wait", json!({ "seconds": 1.0 })),
+            (4, "api.transform.move_x", json!({ "delta": 1.0 })),
+        ],
+        &[("1.then", "2.in"), ("2.body", "3.in"), ("3.done", "4.in")],
+    );
+    let compiled = compile_graph(&text).expect("compiles");
+    assert!(compiled.warnings.iter().any(|w| w.code == "WAIT_IN_LOOP"));
+}

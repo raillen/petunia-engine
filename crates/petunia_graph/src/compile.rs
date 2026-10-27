@@ -113,6 +113,12 @@ struct Generator<'a> {
     uses_state: bool,
     reached: BTreeSet<u32>,
     parts: usize,
+    /// `Esperar` nodes reached, and the chains that continue after each: `(wait, first node,
+    /// event the wait is under)`. Each continues in its own function, called when time is up.
+    waits: BTreeSet<u32>,
+    pending: Vec<(u32, u32, u32)>,
+    current_event: u32,
+    loop_depth: usize,
 }
 
 fn error(node: Option<u32>, pin: Option<&str>, code: &'static str, message: String) -> Diagnostic {
@@ -162,6 +168,10 @@ impl<'a> Generator<'a> {
             uses_state: false,
             reached: BTreeSet::new(),
             parts: 0,
+            waits: BTreeSet::new(),
+            pending: Vec::new(),
+            current_event: 0,
+            loop_depth: 0,
         }
     }
 
@@ -201,6 +211,7 @@ impl<'a> Generator<'a> {
             seen.insert(handler.clone(), id);
             self.emit_event(id, &handler);
         }
+        self.emit_waits(seen.contains_key("on_update"));
         self.warn_loose_nodes();
     }
 
@@ -453,8 +464,13 @@ impl<'a> Generator<'a> {
             scope.insert((id, name.clone()));
         }
         self.reached.insert(id);
+        self.current_event = id;
         self.line(&format!("fn {handler}({}) {{", params.join(", ")), Some(id));
         self.indent += 1;
+        if handler == "on_update" {
+            // Replaced by the call that counts the waits down, or dropped when there are none.
+            self.line(TICK_MARKER, Some(id));
+        }
         let before = self.body.len();
         if let Some(first) = self.next(id, "then") {
             self.emit_chain(first, scope, 1);
@@ -465,6 +481,60 @@ impl<'a> Generator<'a> {
         self.indent -= 1;
         self.line("}", Some(id));
         self.line("", None);
+    }
+
+    /// What comes after each `Esperar`: one function per wait, plus the function that counts every
+    /// wait of this object down each frame (and an `on_update` to call it when the graph has none).
+    fn emit_waits(&mut self, has_update: bool) {
+        let mut index = 0;
+        while index < self.pending.len() {
+            let Some(&(wait, first, event)) = self.pending.get(index) else {
+                break;
+            };
+            index += 1;
+            let mut scope = Scope::new();
+            scope.insert((event, "entity".to_string()));
+            self.current_event = event;
+            self.line(&format!("fn graph_after_{wait}(entity) {{"), Some(wait));
+            self.indent += 1;
+            let before = self.body.len();
+            self.emit_chain(first, scope, 1);
+            if self.body.len() == before {
+                self.line("return", Some(wait));
+            }
+            self.indent -= 1;
+            self.line("}", Some(wait));
+            self.line("", None);
+        }
+        if self.waits.is_empty() {
+            return;
+        }
+        self.line("fn graph_wait_tick(entity, dt) {", None);
+        self.indent += 1;
+        let ids: Vec<u32> = self.waits.iter().copied().collect();
+        for wait in ids {
+            self.line(
+                &format!("if graph_wait_due(entity, {wait}, dt) {{"),
+                Some(wait),
+            );
+            self.indent += 1;
+            if self.pending.iter().any(|(id, _, _)| *id == wait) {
+                self.line(&format!("graph_after_{wait}(entity)"), Some(wait));
+            } else {
+                self.line("return", Some(wait));
+            }
+            self.indent -= 1;
+            self.line("}", Some(wait));
+        }
+        self.indent -= 1;
+        self.line("}", None);
+        self.line("", None);
+        if !has_update {
+            self.line("fn on_update(entity, dt) {", None);
+            self.line("    graph_wait_tick(entity, dt)", None);
+            self.line("}", None);
+            self.line("", None);
+        }
     }
 
     /// Writes a chain of nodes, following the `then` / `done` wire after each one.
@@ -570,6 +640,29 @@ impl<'a> Generator<'a> {
                     }
                     current = self.next(id, "done");
                 }
+                (Lowering::Wait, NodeClass::Flow) => {
+                    self.parts = 0;
+                    if let Some(seconds) = self.input(id, "seconds", &scope, &mut Vec::new()) {
+                        self.waits.insert(id);
+                        self.line(
+                            &format!("graph_wait_start(entity, {id}, {seconds})"),
+                            Some(id),
+                        );
+                        if self.loop_depth > 0 {
+                            let message = format!(
+                                "o {} está dentro de uma repetição: cada volta reinicia a mesma espera, então só a última vale",
+                                self.title(id)
+                            );
+                            self.diagnostics
+                                .push(warning(Some(id), "WAIT_IN_LOOP", message));
+                        }
+                        if let Some(next) = self.next(id, "done") {
+                            self.pending.push((id, next, self.current_event));
+                        }
+                    }
+                    // The rest of the chain runs later, in its own function.
+                    return;
+                }
                 (Lowering::Repeat, NodeClass::Flow) => {
                     self.parts = 0;
                     let count = self.input(id, "count", &scope, &mut Vec::new());
@@ -578,7 +671,9 @@ impl<'a> Generator<'a> {
                         self.indent += 1;
                         let mut inner = scope.clone();
                         inner.insert((id, "index".to_string()));
+                        self.loop_depth += 1;
                         self.emit_chain(body, inner, depth + 1);
+                        self.loop_depth -= 1;
                         self.indent -= 1;
                         self.line("}", Some(id));
                     } else if self.next(id, "body").is_none() {
@@ -601,7 +696,9 @@ impl<'a> Generator<'a> {
                         let mut inner = scope.clone();
                         inner.insert((id, "index".to_string()));
                         inner.insert((id, "item".to_string()));
+                        self.loop_depth += 1;
                         self.emit_chain(body, inner, depth + 1);
+                        self.loop_depth -= 1;
                         self.indent -= 1;
                         self.line("}", Some(id));
                     } else if self.next(id, "body").is_none() {
@@ -693,7 +790,7 @@ impl<'a> Generator<'a> {
                 .map_or(source.pin.as_str(), |pin| pin.label.as_str())
                 .to_string();
             let message = format!(
-                "o {} usa '{}' do {}, que ainda não existe nesse ponto: o valor só fica pronto depois que esse nó roda, no mesmo caminho",
+                "o {} usa '{}' do {}, que ainda não existe nesse ponto: o valor só fica pronto depois que esse nó roda, no mesmo caminho (e depois de um Esperar só o próprio objeto continua disponível)",
                 self.title(consumer),
                 label,
                 self.title(source.node)
@@ -812,13 +909,28 @@ impl<'a> Generator<'a> {
                 .to_string(),
             None,
         )];
-        if self.uses_state {
+        if self.uses_state || !self.waits.is_empty() {
             for text in STATE_PRELUDE.lines() {
                 lines.push((text.to_string(), None));
             }
         }
+        if !self.waits.is_empty() {
+            for text in WAIT_PRELUDE.lines() {
+                lines.push((text.to_string(), None));
+            }
+        }
         lines.push((String::new(), None));
-        lines.extend(self.body);
+        let counting = !self.waits.is_empty();
+        for (text, node) in self.body {
+            if text.trim_start() == TICK_MARKER {
+                if counting {
+                    let indent = &text[..text.len() - text.trim_start().len()];
+                    lines.push((format!("{indent}graph_wait_tick(entity, dt)"), node));
+                }
+            } else {
+                lines.push((text, node));
+            }
+        }
         while lines.last().is_some_and(|(text, _)| text.is_empty()) {
             lines.pop();
         }
@@ -855,6 +967,27 @@ fn graph_state_get(entity, name, fallback) {
 fn graph_state_set(entity, name, value) {
     graph_state[String(entity) + \":\" + name] = value
 }";
+
+/// Counting down the waits of one object: a wait is a number of seconds left, kept per object.
+const WAIT_PRELUDE: &str = "fn graph_wait_start(entity, id, seconds) {
+    graph_state[String(entity) + \":wait\" + String(id)] = seconds
+}
+fn graph_wait_due(entity, id, dt) {
+    let key = String(entity) + \":wait\" + String(id)
+    if not graph_state.has(key) {
+        return false
+    }
+    let left = graph_state[key] - dt
+    if left > 0.0 {
+        graph_state[key] = left
+        return false
+    }
+    graph_state.remove(key)
+    return true
+}";
+
+/// A line the compiler later turns into the wait countdown call, or drops.
+const TICK_MARKER: &str = "\u{1}tick";
 
 /// Names of the data input pins, in catalog order.
 fn data_inputs(spec: &NodeSpec) -> Vec<String> {
