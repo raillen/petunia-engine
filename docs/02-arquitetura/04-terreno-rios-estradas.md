@@ -18,7 +18,7 @@ O Petunia3D já tem as peças centrais (`LOCAL`): spline Bézier com quadros por
 | Armazenamento | `ValueKind::Terrain` + tabela `Terrain` | O terreno inteiro é um valor da cena, com alturas, materiais e furos; uma linha por cena |
 | Comandos | `terrain.*` e `surface.follow` | `create`, `generate`, `brush` (com `mirror_x`/`mirror_z`), `paint`, `patch`, `holes`, `erode`, `surface.follow`; todos com desfazer |
 | Consultas | `terrain.height`, `terrain.info` | Altura e normal numa posição; resumo de blocos e amostras |
-| Render | `crates/petunia_render::terrain` | Malha por chunk, 8 cores de camada, LOD 1/2/4, saias e furos; o adaptador OpenGL usa cor por vértice |
+| Render | `crates/petunia_render::terrain` | Malha por chunk, 8 cores de camada, LOD 1/2/4, saias e furos; **culling por chunk** (`Frustum` com a proporção do viewport + `chunk_sphere`: o bloco fora da vista não é malhado nem enviado); o adaptador OpenGL usa cor por vértice |
 | Física | `petunia_physics::scene` | Heightfield do Rapier por chunk; trimesh no chunk com furo (para o personagem entrar na caverna) |
 | Editor | `crates/petunia_editor::terrain_tool` | Pincel com prévia ao vivo, anel, `begin/drag/end/cancel/set/preview`, um desfazer; `SurfaceFollow` re-projeta os objetos |
 | Preferência | `preferences.surface_follow` | Novo objeto nasce com `SurfaceFollow` quando ligada |

@@ -11,7 +11,7 @@ Este documento é a lista viva do que foi implementado e do que falta no sistema
 | Terreno (dados) | `petunia_terrain`: chunks, amostras, materiais, furos, consultas, limites | — | 90% |
 | Terreno (geração) | fBm determinístico próprio; parâmetros validados; **heightmap em arquivo** (`terrain.heights`, importar/exportar `.pthm`) | Biomas | 88% |
 | Terreno (edição) | Brushes 3D, 4 falloffs, 6 operações, erosão térmica e hidráulica, espelhamento x/z, *stamp* de heightmap e de malha 3D | Brushes plano/caminho, máscaras | 92% |
-| Terreno (render) | Malha por chunk, cores por camada (8), LOD 1/2/4, saias, furos, plano de corte | Materiais por textura, culling por chunk, verificação visual | 80% |
+| Terreno (render) | Malha por chunk, cores por camada (8), LOD 1/2/4, saias, furos, plano de corte, **culling por chunk** pelo volume de visão do viewport | Materiais por textura, verificação visual do LOD | 92% |
 | Terreno (física) | Heightfield no Rapier; trimesh nos chunks com furo | Terreno com transformação não-identidade | 80% |
 | Terreno (editor) | Pincel `terrain.begin/drag/end/cancel/set/preview`, anel, prévia ao vivo, um desfazer; menu **Criar > Terreno**, ferramenta **T**, barra de opções, **Gerar terreno**, **Raio X** em arame, **Corte** com **altura digitável** (sugerida pela caverna selecionada), **Exportar/Importar heightmap** e teste de fumaça repetível | Verificação visual do LOD | 97% |
 | Cavernas (SDF) | `petunia_sculpt` (chunks 16³, surface nets, 5 modos, caminho, gerador, fundir, facetada) + espelhamento X, preencher, oco, ruído, **booleanos** (`sculpt.boolean`) e **carimbo de malha** (`sculpt.stamp_mesh`) | Malha sólida (o carimbo imprime a superfície) | 98% |
@@ -24,6 +24,18 @@ Este documento é a lista viva do que foi implementado e do que falta no sistema
 | Água (render) | — (outro agent) | Flow map, Gerstner 4–8, refração, espuma | 0% |
 
 ## Implementado
+
+### 2026-10-29 — culling por chunk
+
+| Item | Evidência |
+|---|---|
+| **Volume de visão** (`Frustum`, 6 planos extraídos da matriz visão-projeção) com teste de esfera e de caixa | **7 testes**: esfera na frente visível, atrás/ao lado/além do plano distante escondida, esfera enorme em volta da câmera visível, caixa seguindo a esfera e matriz degenerada que não recusa nada |
+| **Limites por bloco** incluindo as amostras da borda compartilhada (a malha lê o vizinho) e a saia do LOD mais grosso | **1 teste**: a esfera contém todos os vértices do LOD 4 (a saia mais funda) em dois blocos vizinhos com relevo diferente |
+| **O quadro passa a receber o viewport**: `extract_frame_in(viewport)` monta o volume com a proporção real e **não malha** o bloco fora dele; `session.frame_in(viewport)` e o FFI usam a largura/altura do viewport | teste do editor: bloco a 320 m na diagonal **não é construído** quando a câmera olha para o lado oposto (0 itens) e é construído quando olha para ele (1 item); `frame()` sem viewport (16:9) também recorta |
+| **Medida**: terreno de 25 blocos (5 × 5), câmera do projeto de exemplo no horizonte | **11 blocos construídos** de 25 (14 descartados); olhando para baixo, 25, porque a esfera de cada bloco toca a câmera |
+| Sem buraco na imagem | capturas no display virtual com terreno gerado: superfície contínua, sem bloco faltando; teste de fumaça **12/12** |
+
+O recorte é **conservador**: a esfera de cada bloco inclui a saia mais funda e a borda do vizinho, então um bloco visível nunca é descartado (pode sobrar bloco que não aparece). Ele não reduz o custo ao olhar para baixo, quando os blocos realmente estão em volta da câmera.
 
 ### 2026-10-29 — heightmap em arquivo e o corte que mira a caverna
 
@@ -147,11 +159,11 @@ As três causas da instabilidade eram do harness e da janela, não de tempo de e
 
 | # | Item | Depende de | Critério de pronto |
 |---|---|---|---|
-| 1 | **Culling por chunk** no terreno (hoje todo bloco do mundo entra no quadro) | plano de corte de visão com a proporção do viewport | o quadro deixa de montar/desenhar os blocos fora da vista |
-| 2 | Biomas na geração | heightmap em arquivo (feito) | uma semente escolher um bioma e ele aparecer na cor e na forma |
+| 1 | Biomas na geração | heightmap em arquivo (feito) | uma semente escolher um bioma e ele aparecer na cor e na forma |
+| 2 | Materiais por textura no terreno | atlas / assets de textura | a superfície trocar de textura por camada, não só de cor |
 | 3 | Rios e estradas | spline/varredura | — |
 
-Itens concluídos nesta rodada: **altura do corte sugerida pela caverna**, **heightmap em arquivo** (`terrain.heights`, exportar e importar com um desfazer) e **teste de fumaça 12/12**.
+Itens concluídos nesta rodada: **altura do corte sugerida pela caverna**, **heightmap em arquivo** (`terrain.heights`, exportar e importar com um desfazer), **culling por chunk** (11 de 25 blocos num mundo 5 × 5) e **teste de fumaça 12/12**.
 
 ## Não verificado (honesto)
 
