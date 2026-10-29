@@ -19,6 +19,7 @@ serde_json.workspace = true
 aipo-source = { path = "../../../aipo-lang/crates/aipo-source" }
 aipo-diagnostics = { path = "../../../aipo-lang/crates/aipo-diagnostics" }
 aipo-syntax = { path = "../../../aipo-lang/crates/aipo-syntax" }
+aipo-ast = { path = "../../../aipo-lang/crates/aipo-ast" }
 aipo-hir = { path = "../../../aipo-lang/crates/aipo-hir" }
 aipo-sema = { path = "../../../aipo-lang/crates/aipo-sema" }
 aipo-ir = { path = "../../../aipo-lang/crates/aipo-ir" }

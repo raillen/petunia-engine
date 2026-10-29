@@ -8,6 +8,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMenu>
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
@@ -214,6 +215,10 @@ CodePanel::CodePanel(EngineBridge* bridge, QWidget* parent) : QWidget(parent), b
             return;
         }
         const QString name = item->data(Qt::UserRole).toString();
+        if (item->data(Qt::UserRole + 1).toBool()) {
+            say(QStringLiteral("Script ausente: clique duas vezes para criar `%1.aipo`.").arg(name));
+            return;
+        }
         if (name == current_) {
             return;
         }
@@ -223,6 +228,40 @@ CodePanel::CodePanel(EngineBridge* bridge, QWidget* parent) : QWidget(parent), b
             return;
         }
         load(name);
+    });
+    connect(scripts_, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem* item) {
+        if (item == nullptr || !item->data(Qt::UserRole + 1).toBool()) {
+            return;
+        }
+        const QString name = item->data(Qt::UserRole).toString();
+        const Reply reply = bridge_->call(QStringLiteral("script.new"), QJsonObject{{"name", name}});
+        if (!reply.ok) {
+            say(reply.message);
+            return;
+        }
+        reloadList(name);
+        load(name);
+        say(QStringLiteral("Script %1 criado a partir do nome pedido pelo objeto.").arg(name));
+    });
+    scripts_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(scripts_, &QListWidget::customContextMenuRequested, this, [this](const QPoint& position) {
+        QListWidgetItem* item = scripts_->itemAt(position);
+        if (item == nullptr || item->data(Qt::UserRole + 1).toBool()) {
+            return;
+        }
+        scripts_->setCurrentItem(item);
+        QMenu menu(this);
+        QAction* toGraph = menu.addAction(PetuniaIcons::get(QStringLiteral("connect")), QStringLiteral("Transformar em grafo…"));
+        QAction* rename = menu.addAction(PetuniaIcons::get(QStringLiteral("mode_edit")), QStringLiteral("Renomear…"));
+        QAction* remove = menu.addAction(PetuniaIcons::get(QStringLiteral("delete")), QStringLiteral("Excluir…"));
+        QAction* chosen = menu.exec(scripts_->viewport()->mapToGlobal(position));
+        if (chosen == toGraph) {
+            asGraph();
+        } else if (chosen == rename) {
+            renameCurrent();
+        } else if (chosen == remove) {
+            deleteCurrent();
+        }
     });
     connect(newButton, &QToolButton::clicked, this, &CodePanel::create);
     connect(saveButton_, &QToolButton::clicked, this, &CodePanel::save);
@@ -310,6 +349,23 @@ void CodePanel::reloadList(const QString& select) {
         row->setToolTip(QStringLiteral("%1.aipo — %2").arg(name, facts.join(QStringLiteral(", "))));
         row->setData(Qt::AccessibleTextRole, QStringLiteral("%1, %2").arg(name, facts.join(QStringLiteral(", "))));
     }
+    for (const QJsonValue& value : reply.result.toObject().value(QStringLiteral("missing")).toArray()) {
+        const QJsonObject item = value.toObject();
+        const QString name = item.value(QStringLiteral("name")).toString();
+        auto* row = new QListWidgetItem(PetuniaIcons::get(QStringLiteral("warning")),
+                                        QStringLiteral("! %1 (ausente)").arg(name), scripts_);
+        row->setData(Qt::UserRole, name);
+        row->setData(Qt::UserRole + 1, true);
+        QStringList objects;
+        for (const QJsonValue& entity : item.value(QStringLiteral("attached")).toArray()) {
+            const QJsonObject object = entity.toObject();
+            objects << QStringLiteral("#%1 %2").arg(object.value(QStringLiteral("id")).toInt()).arg(object.value(QStringLiteral("name")).toString());
+        }
+        const QString tip = QStringLiteral("O objeto pede o script `%1`, mas `%1.aipo` não existe. Clique duas vezes para criá-lo. %2")
+                                .arg(name, objects.join(QStringLiteral(", ")));
+        row->setToolTip(tip);
+        row->setData(Qt::AccessibleTextRole, tip);
+    }
     scripts_->setVisible(scripts_->count() > 0);
     noScripts_->setVisible(scripts_->count() == 0);
     const QString want = select.isEmpty() ? current_ : select;
@@ -358,6 +414,10 @@ void CodePanel::open(const QString& name) {
     }
     reloadList(name);
     load(name);
+}
+
+void CodePanel::reload() {
+    reloadList(current_);
 }
 
 void CodePanel::focusEditor() {
@@ -562,6 +622,83 @@ void CodePanel::create() {
     load(name);
     bridge_->refresh();
     editor_->setFocus();
+}
+
+void CodePanel::renameCurrent() {
+    if (current_.isEmpty() || !maybeSave()) {
+        return;
+    }
+    bool accepted = false;
+    const QString name = QInputDialog::getText(this, QStringLiteral("Renomear script"),
+                                               QStringLiteral("Novo nome (letras, números, _ e -):"),
+                                               QLineEdit::Normal, current_, &accepted)
+                             .trimmed();
+    if (!accepted || name.isEmpty() || name == current_) {
+        return;
+    }
+    const Reply reply = bridge_->call(
+        QStringLiteral("script.rename"),
+        QJsonObject{{"name", current_}, {"new", name}, {"kind", "script"}});
+    if (!reply.ok) {
+        QMessageBox::warning(this, QStringLiteral("Não foi possível"), reply.explanation());
+        return;
+    }
+    current_ = name;
+    reloadList(name);
+    load(name);
+    say(QStringLiteral("Renomeado para %1.").arg(name));
+}
+
+void CodePanel::deleteCurrent() {
+    if (current_.isEmpty() || !maybeSave()) {
+        return;
+    }
+    const QString name = current_;
+    const QString question = QStringLiteral("Excluir o script \"%1\"?\n\nUma cópia vai para scripts/.backup/ e os objetos que o usam ficarão sem ele.").arg(name);
+    if (QMessageBox::question(this, QStringLiteral("Excluir script"), question) != QMessageBox::Yes) {
+        return;
+    }
+    const Reply reply = bridge_->call(
+        QStringLiteral("script.delete"),
+        QJsonObject{{"name", name}, {"kind", "script"}, {"force", true}});
+    if (!reply.ok) {
+        QMessageBox::warning(this, QStringLiteral("Não foi possível"), reply.explanation());
+        return;
+    }
+    current_.clear();
+    editor_->clear();
+    editor_->setEnabled(false);
+    setDirty(false);
+    reloadList();
+    bridge_->refresh();
+    say(QStringLiteral("Script %1 excluído; cópia em scripts/.backup/.").arg(name));
+}
+
+void CodePanel::asGraph() {
+    if (current_.isEmpty()) {
+        return;
+    }
+    bool ok = false;
+    const QString suggestion = current_ + QStringLiteral("_grafo");
+    const QString name = QInputDialog::getText(this, QStringLiteral("Transformar em grafo"),
+                                               QStringLiteral("Nome do novo grafo (o script não muda):"),
+                                               QLineEdit::Normal, suggestion, &ok)
+                             .trimmed();
+    if (!ok || name.isEmpty()) {
+        return;
+    }
+    QJsonObject request{{"name", current_}, {"graph", name}};
+    if (dirty_) {
+        request.insert(QStringLiteral("text"), editor_->toPlainText());
+    }
+    const Reply reply = bridge_->call(QStringLiteral("script.to_graph"), request);
+    if (!reply.ok) {
+        QMessageBox::warning(this, QStringLiteral("Não foi possível"),
+                             reply.explanation() + QStringLiteral("\n\nO recorte atual aceita evento, funções auxiliares, globais, variáveis locais, chamadas da API, `if`/`elif`, `while`, `loop`, `repeat`, `each`, `break`/`continue` e `return`; campos, índices, listas e dicionários como valor ainda não."));
+        return;
+    }
+    say(QStringLiteral("Grafo %1 criado a partir de %2; os dois ficam independentes.").arg(name, current_));
+    emit graphOpenRequested(name);
 }
 
 void CodePanel::attach() {

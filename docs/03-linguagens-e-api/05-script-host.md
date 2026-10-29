@@ -76,7 +76,7 @@ Há um teste que tenta `sh.run`, `fs.read_text`, `env.get` e `io.println` e conf
 
 ## Como roda
 
-- **Uma VM por arquivo**, isolada das outras. Elas só compartilham o mundo.
+- **Uma VM por anexo** (objeto + script), isolada das outras. O módulo compilado é compartilhado, mas o estado de topo é executado uma vez por objeto, então `var` de módulo não vaza de um objeto para outro. Os anexos só compartilham o mundo.
 - **Orçamento por chamada**: 100 mil instruções (cerca de 10 ms). Passou disso, o script é interrompido com `SCRIPT_BUDGET_EXCEEDED`, dizendo o limite e o que fazer.
 - **Falha desliga só aquele objeto**: o motor registra uma linha no console e não chama de novo, em vez de repetir o erro 60 vezes por segundo. Salvar o arquivo corrigido religa.
 - **Falha não tratada** (`world.set` recusado sem `attempt`) conta como falha do script, e não passa por sucesso. Tratada com `attempt { ... } failed erro { ... }`, segue.

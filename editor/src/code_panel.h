@@ -27,12 +27,18 @@ public:
 
     // Asks what to do with unsaved text. `false` means the person chose to stay.
     bool maybeSave();
+    // Re-reads the script list (after the scene changed the Script table, for example).
+    void reload();
     // Puts the cursor in the editor.
     void focusEditor();
     // Writes a line to the Console tab (the game's output goes here too).
     void appendConsole(const QString& line) { console(line); }
     // Opens a script by name (after it was created or attached elsewhere).
     void open(const QString& name);
+
+signals:
+    // A graph was created from the current script: the window opens it in the logic workspace.
+    void graphOpenRequested(const QString& name);
 
 private:
     void onSnapshot();
@@ -44,6 +50,9 @@ private:
     void run();
     void create();
     void attach();
+    void asGraph();
+    void renameCurrent();
+    void deleteCurrent();
     void scheduleCheck();
     void check();
     void showProblems(const QJsonArray& diagnostics);

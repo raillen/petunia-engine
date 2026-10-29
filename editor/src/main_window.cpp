@@ -10,6 +10,7 @@
 #include <QRandomGenerator>
 #include <QDoubleSpinBox>
 #include <QComboBox>
+#include <QSpinBox>
 #include <QCheckBox>
 #include <QApplication>
 #include <QCloseEvent>
@@ -60,6 +61,18 @@
 // Two taps on G, R or S within this time enter free mode (Petunia3D default: 350 ms).
 static constexpr qint64 kDoubleTapMilliseconds = 350;
 
+static QString componentModeName(ComponentMode mode) {
+    switch (mode) {
+    case ComponentMode::Vertex:
+        return QStringLiteral("vertex");
+    case ComponentMode::Edge:
+        return QStringLiteral("edge");
+    case ComponentMode::Face:
+        return QStringLiteral("face");
+    }
+    return QStringLiteral("face");
+}
+
 MainWindow::MainWindow() : bridge_(std::make_unique<EngineBridge>()) {
     setWindowTitle(QStringLiteral("Petunia Editor[*]"));
     resize(1360, 820);
@@ -83,10 +96,12 @@ MainWindow::MainWindow() : bridge_(std::make_unique<EngineBridge>()) {
     setContentsMargins(PetuniaTheme::instance().scaled(5), 0, PetuniaTheme::instance().scaled(5), 0);
 
     buildActions();
+    buildMeshActions();
     buildMenus();
     buildAppBar();
     buildToolPalette();
     buildSculptBar();
+    buildMeshBar();
     buildDocks();
 
     cameraLabel_ = new QLabel(this);
@@ -364,14 +379,16 @@ void MainWindow::buildActions() {
     sunLightAction_ = make(QStringLiteral("Sol (luz direcional)"), QStringLiteral("Raios paralelos, como o sol: só a rotação do objeto importa"));
     sunLightAction_->setProperty("iconName", QStringLiteral("view_lit"));
     {
-        // Ready-made objects with their behaviour (Porta, Item coletável, Ponto de nascimento).
+        // Ready-made objects with their behaviour (Porta, Item, Ponto de nascimento, Personagem).
         const QList<std::tuple<QString, QString, QString, QString>> prefabs = {
             {QStringLiteral("door"), QStringLiteral("Porta"), QStringLiteral("cube"),
              QStringLiteral("Uma porta que sobe quando um personagem chega perto, espera e desce. O comportamento é o grafo `porta` (aba Lógica)")},
             {QStringLiteral("pickup"), QStringLiteral("Item coletável"), QStringLiteral("favorite"),
              QStringLiteral("Uma esfera que some quando um personagem a toca. O comportamento é o grafo `item` (aba Lógica)")},
             {QStringLiteral("spawn"), QStringLiteral("Ponto de nascimento"), QStringLiteral("pin"),
-             QStringLiteral("Onde o jogador nasce ao jogar (PlayerStart), com uma marca que não bloqueia")},
+             QStringLiteral("Onde o jogador nasce ao jogar (PlayerStart), com uma marca que não bloqueia. Não é o personagem: use Personagem jogável")},
+            {QStringLiteral("player"), QStringLiteral("Personagem jogável"), QStringLiteral("capsule"),
+             QStringLiteral("Um personagem com colisão sólida que anda com W A S D e pula com Espaço")},
         };
         for (const auto& [id, title, icon, tip] : prefabs) {
             QAction* action = make(title, tip);
@@ -511,6 +528,7 @@ void MainWindow::buildActions() {
     });
     connect(codeAction_, &QAction::triggered, this, [this] {
         switchWorkspace(QStringLiteral("code"));
+        code_->reload();
         code_->focusEditor();
     });
     connect(logicAction_, &QAction::triggered, this, [this] {
@@ -518,6 +536,18 @@ void MainWindow::buildActions() {
         graph_->reload();
     });
     connect(graph_, &GraphPanel::message, this, [this](const QString& text) { statusBar()->showMessage(text, 8000); });
+    connect(graph_, &GraphPanel::scriptOpenRequested, this, [this](const QString& name) {
+        switchWorkspace(QStringLiteral("code"));
+        if (code_ != nullptr) {
+            code_->open(name);
+        }
+    });
+    connect(code_, &CodePanel::graphOpenRequested, this, [this](const QString& name) {
+        switchWorkspace(QStringLiteral("logic"));
+        if (graph_ != nullptr) {
+            graph_->open(name);
+        }
+    });
     connect(sceneAction_, &QAction::triggered, this, [this] {
         switchWorkspace(QStringLiteral("scene"));
         viewport_->setFocus();
@@ -586,6 +616,11 @@ void MainWindow::buildMenus() {
     edit->addAction(vertexModeAction_);
     edit->addAction(edgeModeAction_);
     edit->addAction(faceModeAction_);
+
+    QMenu* mesh = menus_->addMenu(QStringLiteral("&Malha"));
+    for (QAction* action : std::as_const(meshActions_)) {
+        mesh->addAction(action);
+    }
 
     QMenu* create = menus_->addMenu(QStringLiteral("&Criar"));
     create->addAction(primitivesMenuAction_);
@@ -999,6 +1034,82 @@ void MainWindow::applyDefaultDocks(const QString& id) {
     }
 }
 
+void MainWindow::buildMeshActions() {
+    struct MeshAction {
+        const char* operation;
+        const char* title;
+        const char* icon;
+        const char* tip;
+        const char* shortcut;
+    };
+    const MeshAction actions[] = {
+        {"mesh.inset", "Inserir", "inset", "Recua as faces escolhidas (I)", "I"},
+        {"mesh.extrude", "Extrudar", "extrude", "Puxa as faces escolhidas (Ctrl+E)", "Ctrl+E"},
+        {"mesh.bevel", "Chanfro", "bevel", "Arredonda as arestas escolhidas (Ctrl+B)", "Ctrl+B"},
+        {"mesh.loop_cut", "Corte em laço", "loop_cut", "Corta o anel da aresta escolhida (Ctrl+R)", "Ctrl+R"},
+        {"mesh.subdivide", "Subdividir", "subdivide", "Divide as faces escolhidas", ""},
+        {"mesh.dissolve", "Dissolver arestas", "dissolve", "Junta as duas faces de cada aresta escolhida (Ctrl+X)", "Ctrl+X"},
+        {"mesh.merge", "Fundir vértices", "merge", "Junta os vértices escolhidos num só (M)", "M"},
+        {"mesh.merge_by_distance", "Fundir por distância", "weld", "Junta vértices muito próximos", ""},
+        {"mesh.delete_faces", "Apagar faces", "delete", "Remove as faces escolhidas (X)", "X"},
+        {"mesh.flip", "Virar normais", "flip_normals", "Inverte as faces escolhidas", ""},
+    };
+    for (const MeshAction& entry : actions) {
+        auto* action = new QAction(QString::fromLatin1(entry.title), this);
+        action->setToolTip(QString::fromLatin1(entry.tip));
+        action->setData(QString::fromLatin1(entry.operation));
+        action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+        if (entry.shortcut[0] != '\0') {
+            action->setShortcut(QKeySequence(QString::fromLatin1(entry.shortcut)));
+        }
+        setActionIcon(action, QString::fromLatin1(entry.icon));
+        const QString operation = QString::fromLatin1(entry.operation);
+        connect(action, &QAction::triggered, this, [this, operation] { applyMesh(operation); });
+        viewport_->addAction(action);
+        meshActions_.append(action);
+    }
+}
+
+void MainWindow::buildMeshBar() {
+    meshBar_ = new QToolBar(QStringLiteral("Malha"), this);
+    meshBar_->setObjectName(QStringLiteral("PetuniaToolOptions"));
+    meshBar_->setMovable(false);
+    meshBar_->setFloatable(false);
+    meshBar_->setAccessibleName(QStringLiteral("Operações de edição de malha"));
+    // Icons only: the names are in the tooltips and in the Malha menu, and the value fields fit.
+    meshBar_->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    sceneLayout_->insertWidget(1, meshBar_);
+    meshBar_->hide();
+    meshBar_->addWidget(new QLabel(QStringLiteral(" Malha ")));
+    for (QAction* action : std::as_const(meshActions_)) {
+        meshBar_->addAction(action);
+    }
+    meshBar_->addSeparator();
+    meshBar_->addWidget(new QLabel(QStringLiteral(" Distância ")));
+    meshDistance_ = new QDoubleSpinBox;
+    meshDistance_->setRange(0.01, 10.0);
+    meshDistance_->setSingleStep(0.05);
+    meshDistance_->setDecimals(3);
+    meshDistance_->setValue(0.2);
+    meshDistance_->setSuffix(QStringLiteral(" m"));
+    meshDistance_->setAccessibleName(QStringLiteral("Distância da operação de malha"));
+    meshDistance_->setToolTip(QStringLiteral("Inserir, extrudar e chanfro usam esta distância"));
+    meshBar_->addWidget(meshDistance_);
+    meshBar_->addWidget(new QLabel(QStringLiteral("  Cortes ")));
+    meshCuts_ = new QSpinBox;
+    meshCuts_->setRange(1, 32);
+    meshCuts_->setValue(1);
+    meshCuts_->setAccessibleName(QStringLiteral("Número de cortes"));
+    meshCuts_->setToolTip(QStringLiteral("Cortes do laço e da subdivisão"));
+    meshBar_->addWidget(meshCuts_);
+    meshBar_->addWidget(new QLabel(QStringLiteral("  Segmentos ")));
+    meshSegments_ = new QSpinBox;
+    meshSegments_->setRange(1, 8);
+    meshSegments_->setValue(1);
+    meshSegments_->setAccessibleName(QStringLiteral("Segmentos do chanfro"));
+    meshBar_->addWidget(meshSegments_);
+}
+
 void MainWindow::buildSculptBar() {
     // The tool's own options sit under the viewport strip, not across the whole window.
     sculptBar_ = new QToolBar(QStringLiteral("Esculpir"), this);
@@ -1399,6 +1510,7 @@ void MainWindow::onSnapshot() {
     }
     if (!selected && viewport_->isEditMode()) {
         viewport_->setEditMode(false);
+        bridge_->call(QStringLiteral("mesh.edit_mode"), QJsonObject{{QStringLiteral("active"), false}});
     }
     syncEditMode();
 
@@ -1719,6 +1831,27 @@ void MainWindow::showPrimitivesPie() {
     pie->popup(viewportArea.contains(cursor) ? cursor : viewportArea.center());
 }
 
+void MainWindow::applyMesh(const QString& operation) {
+    if (!viewport_->isEditMode()) {
+        statusBar()->showMessage(QStringLiteral("Entre no modo de edição (Tab) com uma malha selecionada."), 5000);
+        return;
+    }
+    QJsonObject fields;
+    const double distance = meshDistance_ != nullptr ? meshDistance_->value() : 0.2;
+    if (operation == QLatin1String("mesh.inset") || operation == QLatin1String("mesh.extrude")) {
+        fields.insert(QStringLiteral("distance"), distance);
+    } else if (operation == QLatin1String("mesh.bevel")) {
+        fields.insert(QStringLiteral("width"), distance);
+        fields.insert(QStringLiteral("segments"), meshSegments_ != nullptr ? meshSegments_->value() : 1);
+    } else if (operation == QLatin1String("mesh.loop_cut") || operation == QLatin1String("mesh.subdivide")) {
+        fields.insert(QStringLiteral("cuts"), meshCuts_ != nullptr ? meshCuts_->value() : 1);
+    }
+    const Reply reply = perform(operation, fields);
+    if (reply.ok) {
+        statusBar()->showMessage(QStringLiteral("%1 concluído. Ctrl+Z desfaz.").arg(operation), 5000);
+    }
+}
+
 void MainWindow::toggleEditMode() {
     if (!bridge_->hasProject()) {
         return;
@@ -1731,6 +1864,7 @@ void MainWindow::toggleEditMode() {
             });
         }
         viewport_->setEditMode(false);
+        bridge_->call(QStringLiteral("mesh.edit_mode"), QJsonObject{{QStringLiteral("active"), false}});
         syncEditMode();
         statusBar()->showMessage(QStringLiteral("Modo Objeto"), 2000);
         viewport_->update();
@@ -1754,6 +1888,9 @@ void MainWindow::toggleEditMode() {
     }
 
     viewport_->setEditMode(true);
+    bridge_->call(QStringLiteral("mesh.edit_mode"), QJsonObject{{QStringLiteral("active"), true}});
+    bridge_->call(QStringLiteral("mesh.component_mode"),
+                  QJsonObject{{QStringLiteral("mode"), componentModeName(viewport_->componentMode())}});
     syncEditMode();
     statusBar()->showMessage(QStringLiteral("Modo Edição: 1 Vértice, 2 Aresta, 3 Face"), 3000);
     viewport_->update();
@@ -1764,6 +1901,8 @@ void MainWindow::setComponentMode(ComponentMode mode) {
         return;
     }
     viewport_->setComponentMode(mode);
+    bridge_->call(QStringLiteral("mesh.component_mode"),
+                  QJsonObject{{QStringLiteral("mode"), componentModeName(mode)}});
     syncEditMode();
     const QString name = (mode == ComponentMode::Vertex) ? QStringLiteral("Vértices (1)")
                        : (mode == ComponentMode::Edge)   ? QStringLiteral("Arestas (2)")
@@ -1790,6 +1929,12 @@ void MainWindow::syncEditMode() {
     if (faceModeAction_) {
         faceModeAction_->setEnabled(inEdit);
         faceModeAction_->setChecked(viewport_->componentMode() == ComponentMode::Face);
+    }
+    if (meshBar_ != nullptr) {
+        meshBar_->setVisible(inEdit);
+    }
+    for (QAction* action : std::as_const(meshActions_)) {
+        action->setEnabled(inEdit);
     }
 }
 

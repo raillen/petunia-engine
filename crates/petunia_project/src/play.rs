@@ -9,6 +9,51 @@ pub const EYE_HEIGHT: f32 = 1.7;
 /// Size of the stand-in hero (a cylinder brush; its collider is a capsule made from it).
 const HERO_SIZE: [f32; 3] = [0.6, 1.8, 0.6];
 
+/// Where the player starts: the eye position and the facing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlayerStart {
+    pub eye: Vec3,
+    pub yaw_degrees: f32,
+}
+
+/// The `PlayerStart` that should be used. A start on a drawn object (a floor with the table added
+/// by accident, for example) loses to a dedicated marker; among markers, the highest wins, then
+/// the lowest id. The scene keeps working even when someone adds the table to the wrong object.
+pub fn player_start(world: &World) -> Option<PlayerStart> {
+    let mut starts = world.entities_with_table("PlayerStart").ok()?;
+    starts.retain(|handle| world.get(*handle, "Transform", "position").is_ok());
+    let drawn = |handle| {
+        world.has_row(handle, "Brush")
+            || world.has_row(handle, "Mesh")
+            || world.has_row(handle, "Sculpt")
+    };
+    let height = |handle| match world.get(handle, "Transform", "position") {
+        Ok(Value::Vec3(position)) => position.y,
+        _ => 0.0,
+    };
+    let id = |handle| world.persistent_id(handle).map_or(u64::MAX, |id| id.0);
+    starts.sort_by(|left, right| {
+        drawn(*left)
+            .cmp(&drawn(*right))
+            .then_with(|| {
+                height(*right)
+                    .partial_cmp(&height(*left))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| id(*left).cmp(&id(*right)))
+    });
+    let start = *starts.first()?;
+    let eye = match world.get(start, "Transform", "position") {
+        Ok(Value::Vec3(position)) => *position,
+        _ => Vec3::ZERO,
+    };
+    let yaw_degrees = match world.get(start, "PlayerStart", "yaw_degrees") {
+        Ok(Value::Float(yaw)) => *yaw as f32,
+        _ => 0.0,
+    };
+    Some(PlayerStart { eye, yaw_degrees })
+}
+
 fn object(value: Json) -> Map<String, Json> {
     match value {
         Json::Object(map) => map,
@@ -37,22 +82,11 @@ pub fn ensure_player(world: &mut World) -> Result<Option<u64>, WorldError> {
     if has_player(world) {
         return Ok(None);
     }
-    let Some(start) = world
-        .entities_with_table("PlayerStart")
-        .unwrap_or_default()
-        .first()
-        .copied()
-    else {
+    let Some(start) = player_start(world) else {
         return Ok(None);
     };
-    let eye = match world.get(start, "Transform", "position") {
-        Ok(Value::Vec3(position)) => *position,
-        _ => Vec3::ZERO,
-    };
-    let yaw = match world.get(start, "PlayerStart", "yaw_degrees") {
-        Ok(Value::Float(yaw)) => *yaw,
-        _ => 0.0,
-    };
+    let eye = start.eye;
+    let yaw = start.yaw_degrees;
     let hero = world.spawn()?;
     let center = Vec3::new(eye.x, eye.y - EYE_HEIGHT + HERO_SIZE[1] * 0.5 + 0.05, eye.z);
     world.insert_row_json(hero, "Name", &object(json!({ "text": "Jogador" })))?;
@@ -86,6 +120,61 @@ mod tests {
         let mut world = World::new(1);
         register_standard_tables(&mut world).expect("tables");
         world
+    }
+
+    #[test]
+    fn a_start_on_a_drawn_floor_does_not_win_over_the_marker() {
+        let mut scene = world();
+        let floor = scene.spawn().expect("floor");
+        scene
+            .insert_row_json(
+                floor,
+                "Transform",
+                &object(json!({ "position": { "x": 0.0, "y": -0.25, "z": 0.0 } })),
+            )
+            .expect("transform");
+        scene
+            .insert_row_json(
+                floor,
+                "Brush",
+                &object(json!({ "shape": "box", "size": { "x": 24.0, "y": 0.5, "z": 24.0 } })),
+            )
+            .expect("brush");
+        scene
+            .insert_row_json(floor, "PlayerStart", &object(json!({ "yaw_degrees": 0.0 })))
+            .expect("start on the floor");
+
+        let marker = scene.spawn().expect("marker");
+        scene
+            .insert_row_json(
+                marker,
+                "Transform",
+                &object(json!({ "position": { "x": 0.0, "y": 1.7, "z": 9.0 } })),
+            )
+            .expect("transform");
+        scene
+            .insert_row_json(
+                marker,
+                "PlayerStart",
+                &object(json!({ "yaw_degrees": 90.0 })),
+            )
+            .expect("marker start");
+
+        let chosen = player_start(&scene).expect("a start");
+        assert_eq!(chosen.eye.y, 1.7);
+        assert_eq!(chosen.yaw_degrees, 90.0);
+        let hero = ensure_player(&mut scene).expect("ok").expect("hero");
+        let handle = scene
+            .handle_of(petunia_world::PersistentId(hero))
+            .expect("alive");
+        let Ok(Value::Vec3(position)) = scene.get(handle, "Transform", "position") else {
+            panic!("no position");
+        };
+        assert!(
+            (position.y - 0.95).abs() < 1e-4,
+            "the hero stands on the floor under the marker: {}",
+            position.y
+        );
     }
 
     #[test]

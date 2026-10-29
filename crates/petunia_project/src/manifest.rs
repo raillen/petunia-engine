@@ -74,7 +74,40 @@ impl ProjectManifest {
                 &format!("linguagem `{}` desconhecida", self.scripting_language),
                 "Use \"aipo\" (padrão) ou \"luau\". Só uma linguagem fica ativa por projeto.",
             ));
+        } else if self.scripting_language == "luau" {
+            found.push(Diagnostic::warning(
+                "project.manifest.luau_pending",
+                target,
+                "a linguagem `luau` está planejada, mas o backend ainda não existe; só Aipo executa nesta versão",
+                "Use \"aipo\" até o Luau entrar. O projeto abre e continua válido.",
+            ));
         }
         found
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostics::Severity;
+
+    #[test]
+    fn luau_is_known_but_warns_until_the_backend_exists() {
+        let mut manifest = ProjectManifest::new("Teste", "scenes/room.scene.json");
+        manifest.scripting_language = "luau".to_string();
+        let findings = manifest.validate();
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.severity == Severity::Warning
+                    && finding.code == "project.manifest.luau_pending"),
+            "{findings:?}"
+        );
+        assert!(
+            !findings
+                .iter()
+                .any(|finding| finding.severity == Severity::Error),
+            "a planned language must not make the project invalid: {findings:?}"
+        );
     }
 }

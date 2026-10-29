@@ -86,7 +86,22 @@ pub fn canvas(document: &GraphDocument, catalog: &Catalog, layout: Option<&Graph
         })
         .collect();
     edges.sort_by_key(|edge| edge.to_string());
-    json!({ "nodes": nodes, "edges": edges })
+    let groups: Vec<Json> = layout
+        .map(|layout| {
+            layout
+                .groups
+                .iter()
+                .map(|group| {
+                    json!({
+                        "id": group.id,
+                        "label": group.label,
+                        "nodes": group.nodes,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    json!({ "nodes": nodes, "edges": edges, "groups": groups })
 }
 
 /// Where each node goes when the layout file does not say: shortest distance from an event, then

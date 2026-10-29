@@ -82,11 +82,15 @@ Se algo falha, a resposta explica o que fazer:
 | `transform.set` | `orientation` (`global`, `local`), `pivot` (`object`, `bounds_center`, `base`), `edit_pivot` | Eixos do gizmo, ponto de pivô, modo **Editar pivô** |
 | `free.begin` · `free.axis` · `free.type` | `tool`, pixels / `axis` / `text` | **Modo Livre** (duplo toque em G, R ou S) |
 | `face.begin` · `face.drag` · `face.end` · `face.cancel` | pixels | **Empurrar/puxar** e **Extrudar** uma face |
-| `script.list` · `script.read` · `script.new` | — / `name` | Scripts da pasta `scripts/`; criar a partir do modelo (nunca sobrescreve) |
+| `script.list` · `script.read` · `script.new` | — / `name` | Scripts da pasta `scripts/`; criar a partir do modelo (nunca sobrescreve). `script.list` também devolve `missing`: nomes pedidos por uma tabela `Script` cujo arquivo ainda não existe |
+| `programming.list` | — | Scripts `.aipo` e grafos `.graph.json`, com **os objetos que usam cada um**; nomes pedidos por uma tabela `Script` sem arquivo aparecem como `missing` |
 | `script.write` | `name`, `text` | Grava; a versão anterior vai para `scripts/.backup/` |
+| `script.rename` | `name`, `new`, `kind`? | Renomeia o `.aipo`/grafo (e o `.layout.json`) e atualiza os anexos; recusa nome ocupado |
+| `script.delete` | `name`, `kind`?, `force`? | Move o arquivo para `scripts/.backup/` e desliga os anexos com `force`; sem `force`, recusa se estiver ligado |
 | `script.check` · `script.format` | `name`, `text` | Erros com linha e coluna; formatar (só texto que passa na sintaxe) |
 | `script.run` | `name`, `text`?, `ticks`? | Executa numa **cópia** do mundo; devolve console, falhas e quantos objetos mudariam |
-| `script.api` · `script.attach` | — / `name` | API para sugestões e ajuda; liga o script ao objeto selecionado (um desfazer) |
+| `script.api` · `script.attach` | — / `name` | API para sugestões e ajuda; **liga mais um** script ao objeto selecionado (um desfazer). O primeiro fica na linha legada do objeto; o segundo vira uma entidade-filha com `owner` e `order`, e os dois rodam |
+| `script.to_graph` | `name`, `graph`, `text`? | Cria um grafo novo (schema v2) a partir do subconjunto Aipo suportado (DR-34/DR-35), incluindo funções auxiliares, globais, variáveis locais, `while`, `loop`, `repeat`, `each`, `break`/`continue` e `return`. `text` permite usar o editor com alterações não salvas; o script original **não** muda e um grafo existente **nunca** é sobrescrito |
 | `create.cave` | `seed` (opcional) | Bloco de rocha com um túnel; com `seed`, com salas e túneis **gerados** (um desfazer) |
 | `create.light` | `kind` (`point` ou `sun`) | Luz na frente da câmera (um desfazer); com uma luz, só as luzes da cena valem (DR-29) |
 | `asset.list` | — | Modelos `.glb`/`.gltf` em `assets/` (caminhos do projeto; não segue links simbólicos) |
@@ -104,6 +108,10 @@ Se algo falha, a resposta explica o que fazer:
 | `graph.sources` | `for` `{node,pin}` | O que uma entrada pode receber: valores que já existem quando o nó roda |
 | `graph.code` | — | **Ver como código**: o texto Aipo e o nó de cada linha, ou os problemas |
 | `graph.set_layout` | `node`, `x`, `y` | Onde a caixa fica em `scripts/<nome>.layout.json` (DR-32). Não entra no desfazer: posição não é lógica |
+| `graph.set_layouts` | `nodes`: `[{node,x,y}]` | Move várias caixas numa gravação só (arrastar um grupo) |
+| `graph.group` / `graph.ungroup` | `label`, `nodes` / `group` | Agrupa caixas num quadro visual salvo no layout; desagrupar não move os nós |
+
+No canvas (**Caixas e fios**): arraste uma caixa para mover; arraste de uma **saída** até uma **entrada** para ligar (clicar saída e depois entrada também funciona); arraste o fundo ou use o botão do meio para mover o canvas; `Ctrl`+roda, `+`, `-` e os botões dão zoom; `Home`, `F` ou **Centralizar** enquadram os nós; `Ctrl+clique` soma caixas à seleção e `Ctrl+A` escolhe todas; **Agrupar** cria um quadro que move as caixas juntas. Um pino de objeto (`entity`, `other`, `target`) tem **Escolher objeto…** com busca por id e nome.
 | `sculpt.begin` · `sculpt.drag` · `sculpt.end` · `sculpt.cancel` | pixels, `invert` | Esculpe a caverna sob o mouse; o arrasto vira **um** `world.batch` |
 | `sculpt.mode` | `mode` (`carve`, `add`, `inflate`, `flatten`, `smooth`), `force` (0 a 1) | Modo e força do pincel |
 | `sculpt.radius` | `meters` (0,25 a 16) | Raio do pincel |

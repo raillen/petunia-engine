@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use petunia_world::{Value, World};
 
-use crate::diagnostics::{Diagnostic, Report};
+use crate::diagnostics::{Diagnostic, Report, Severity};
 use crate::error::ProjectError;
 use crate::io::{MAX_MANIFEST_BYTES, MAX_SCENE_BYTES, read_limited, resolve_inside};
 use crate::manifest::{MANIFEST_FILE, ProjectManifest};
@@ -49,7 +49,9 @@ pub fn load_project(root: &Path) -> LoadOutcome {
         }
     };
     let manifest_problems = manifest.validate();
-    let manifest_invalid = !manifest_problems.is_empty();
+    let manifest_invalid = manifest_problems
+        .iter()
+        .any(|finding| finding.severity == Severity::Error);
     report.extend(manifest_problems);
     if manifest_invalid {
         return LoadOutcome {
@@ -260,15 +262,61 @@ fn check_world(world: &World, report: &mut Report) {
         }
     }
 
-    let has_start = world
-        .entities_with_table("PlayerStart")
-        .is_ok_and(|found| !found.is_empty());
-    if !has_start {
+    let starts = world.entities_with_table("PlayerStart").unwrap_or_default();
+    if starts.is_empty() {
         report.push(Diagnostic::warning(
             "scene.player_start.missing",
             "cena",
             "não há ponto de início do jogador; a câmera começa na origem",
             "Adicione uma entidade com as tabelas Transform e PlayerStart.",
         ));
+    } else if starts.len() > 1 {
+        for handle in starts {
+            let drawn = world.has_row(handle, "Brush")
+                || world.has_row(handle, "Mesh")
+                || world.has_row(handle, "Sculpt");
+            if !drawn {
+                continue;
+            }
+            let id = world.persistent_id(handle).map_or(0, |id| id.0);
+            report.push(Diagnostic::warning(
+                "scene.player_start.on_drawn_object",
+                &format!("entidade #{id}"),
+                "há mais de um ponto de início e este está num objeto desenhado (como um piso); o motor prefere um marcador sem forma",
+                "Remova PlayerStart deste objeto e deixe-o só no marcador de início.",
+            ));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::create_sample_project;
+
+    #[test]
+    fn a_manifest_warning_does_not_block_loading() {
+        let root = std::env::temp_dir().join(format!(
+            "petunia_project_luau_warning_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        create_sample_project(&root, "Luau pendente").expect("sample");
+        let manifest_path = root.join(MANIFEST_FILE);
+        let text = std::fs::read_to_string(&manifest_path).expect("manifest");
+        std::fs::write(&manifest_path, text.replace("\"aipo\"", "\"luau\"")).expect("write");
+
+        let outcome = load_project(&root);
+        assert!(outcome.project.is_some(), "{:?}", outcome.report);
+        assert!(
+            outcome
+                .report
+                .diagnostics
+                .iter()
+                .any(|finding| finding.code == "project.manifest.luau_pending"),
+            "{:?}",
+            outcome.report
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

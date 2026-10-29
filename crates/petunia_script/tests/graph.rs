@@ -58,7 +58,7 @@ fn pin(text: &str) -> Json {
 /// A graph file from `(id, kind, params)` nodes and `(from, to)` edges.
 fn graph(nodes: &[(u32, &str, Json)], edges: &[(&str, &str)]) -> String {
     json!({
-        "schema_version": 1,
+        "schema_version": 2,
         "nodes": nodes.iter().map(|(id, kind, params)| json!({ "id": id, "kind": kind, "params": params })).collect::<Vec<_>>(),
         "edges": edges.iter().map(|(from, to)| json!({ "from": pin(from), "to": pin(to) })).collect::<Vec<_>>(),
     })
@@ -93,6 +93,15 @@ fn the_catalog_has_one_node_per_api_function() {
     }
     assert!(catalog.get("flow.if").is_some());
     assert!(catalog.get("event.on_update").is_some());
+}
+
+#[test]
+fn version_one_graphs_are_migrated_to_version_two() {
+    let text = graph(&[(1, "event.on_start", json!({}))], &[])
+        .replace("\"schema_version\":2", "\"schema_version\":1");
+    let document = petunia_graph::GraphDocument::parse(&text).expect("old graph reads");
+    assert_eq!(document.schema_version, petunia_graph::SCHEMA_VERSION);
+    assert!(document.to_text().contains("\"schema_version\": 2"));
 }
 
 #[test]
@@ -208,6 +217,83 @@ fn loops_give_their_index_and_item_inside_the_body() {
         lines.iter().filter(|l| l.level == LogLevel::Info).count(),
         1
     );
+}
+
+#[test]
+fn a_while_node_repeats_until_its_condition_is_false() {
+    let text = graph(
+        &[
+            (1, "event.on_start", json!({})),
+            (2, "var.set", json!({ "name": "contador", "value": 0 })),
+            (3, "flow.while", json!({})),
+            (4, "var.get", json!({ "name": "contador", "fallback": 0 })),
+            (5, "op.compare", json!({ "operator": "<", "b": 3 })),
+            (6, "var.set", json!({ "name": "contador" })),
+            (7, "op.math", json!({ "operator": "+", "b": 1 })),
+            (8, "api.transform.move_x", json!({ "delta": 0.5 })),
+        ],
+        &[
+            ("1.then", "2.in"),
+            ("2.then", "3.in"),
+            ("4.value", "5.a"),
+            ("5.result", "3.condition"),
+            ("3.body", "6.in"),
+            ("4.value", "7.a"),
+            ("7.result", "6.value"),
+            ("6.then", "8.in"),
+        ],
+    );
+    let compiled = compile_graph(&text).expect("compiles");
+    assert!(compiled.text.contains("while ("), "{}", compiled.text);
+    let (world, id) = world_with("enquanto");
+    let mut host = ScriptHost::new(world).expect("host");
+    host.load_graph("enquanto", &text).expect("loads");
+    host.update(0.016);
+    assert!((x_of(&host, id) - 1.5).abs() < 1e-6);
+    assert!(host.take_faults().is_empty());
+}
+
+#[test]
+fn each_can_hide_the_index_from_the_body() {
+    let text = graph(
+        &[
+            (1, "event.on_start", json!({})),
+            (2, "api.world.find", json!({ "table": "Script" })),
+            (3, "flow.each", json!({ "with_index": "false" })),
+            (4, "api.log.info", json!({})),
+        ],
+        &[
+            ("1.then", "3.in"),
+            ("2.result", "3.list"),
+            ("3.body", "4.in"),
+            ("3.item", "4.message"),
+        ],
+    );
+    let compiled = compile_graph(&text).expect("compiles");
+    assert!(compiled.text.contains("each item"), "{}", compiled.text);
+    assert!(
+        !compiled.text.contains("each position"),
+        "{}",
+        compiled.text
+    );
+    let (world, _) = world_with("sem_indice");
+    let mut host = ScriptHost::new(world).expect("host");
+    host.load_graph("sem_indice", &text).expect("loads");
+    host.update(0.016);
+    assert_eq!(host.take_log().len(), 1);
+    assert!(host.take_faults().is_empty());
+}
+
+#[test]
+fn a_break_outside_a_loop_is_refused() {
+    let text = graph(
+        &[
+            (1, "event.on_start", json!({})),
+            (2, "flow.break", json!({})),
+        ],
+        &[("1.then", "2.in")],
+    );
+    assert!(codes(&text).contains(&"BREAK_OUTSIDE_LOOP".to_string()));
 }
 
 #[test]

@@ -38,11 +38,43 @@ const WIRE_COLOR: Color = Color::new(0.10, 0.12, 0.16, 0.55);
 const FACE_SELECTION_COLOR: Color = Color::new(1.0, 0.62, 0.15, 1.0);
 const EDGE_SELECTION_COLOR: Color = Color::new(1.0, 0.85, 0.20, 1.0);
 const VERTEX_SELECTION_COLOR: Color = Color::new(1.0, 1.0, 1.0, 1.0);
+/// Every vertex of the mesh while the vertex tool is active: a dot small enough not to hide the
+/// surface, bright enough to find on a dark or a light material.
+const VERTEX_MARKER_COLOR: Color = Color::new(0.72, 0.84, 1.0, 0.95);
+const MAX_VERTEX_MARKERS: usize = 20_000;
 /// Default distances (meters) when the request does not say.
 const DEFAULT_INSET: f32 = 0.2;
 const DEFAULT_EXTRUDE: f32 = 0.5;
 const DEFAULT_BEVEL: f32 = 0.1;
 const DEFAULT_WELD: f32 = 0.001;
+
+/// What a click chooses in edit mode. The UI sends it so the overlay can show the right handles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub(crate) enum MeshComponentMode {
+    Vertex,
+    Edge,
+    #[default]
+    Face,
+}
+
+impl MeshComponentMode {
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "vertex" | "vertices" | "vertice" | "vértices" | "vértice" => Some(Self::Vertex),
+            "edge" | "edges" | "aresta" | "arestas" => Some(Self::Edge),
+            "face" | "faces" => Some(Self::Face),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Vertex => "vertex",
+            Self::Edge => "edge",
+            Self::Face => "face",
+        }
+    }
+}
 
 /// Faces, edges and vertices chosen on one mesh, valid while its geometry is the same.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -363,6 +395,22 @@ fn compute_edit(
 }
 
 impl EditorSession {
+    /// `mesh.edit_mode`: tells the renderer whether the mesh handles (all vertices, for example)
+    /// should be shown. Entering/leaving edit mode is a view state, not a document change.
+    pub fn set_mesh_edit_mode(&mut self, active: bool) -> Json {
+        self.mesh_edit_mode = active;
+        json!({ "active": active })
+    }
+
+    /// `mesh.component_mode`: which components a click chooses; it also chooses which handles the
+    /// overlay shows (all vertices in vertex mode).
+    pub fn set_mesh_component_mode(&mut self, mode: &str) -> Result<Json, Failure> {
+        let mode = MeshComponentMode::parse(mode)
+            .ok_or_else(|| Failure::bad_request("`mode` é `vertex`, `edge` ou `face`"))?;
+        self.mesh_component_mode = mode;
+        Ok(json!({ "mode": mode.as_str() }))
+    }
+
     fn target_entity(&self, request: &Json) -> Result<u64, Failure> {
         match request.get("entity") {
             Some(value) => value
@@ -487,6 +535,18 @@ impl EditorSession {
     /// Runs the op named `op` (`mesh.*`). See the module notes.
     pub(crate) fn mesh_request(&mut self, op: &str, request: &Json) -> Result<Json, Failure> {
         match op {
+            "mesh.edit_mode" => {
+                return Ok(self.set_mesh_edit_mode(
+                    request
+                        .get("active")
+                        .and_then(Json::as_bool)
+                        .unwrap_or(false),
+                ));
+            }
+            "mesh.component_mode" => {
+                let mode = request.get("mode").and_then(Json::as_str).unwrap_or("face");
+                return self.set_mesh_component_mode(mode);
+            }
             "mesh.preview" => return self.mesh_preview(request),
             "mesh.preview_end" => {
                 let commit = request
@@ -1027,6 +1087,15 @@ impl EditorSession {
                 }
             }
         }
+        if self.mesh_edit_mode && self.mesh_component_mode == MeshComponentMode::Vertex {
+            for vertex in 0..mesh.positions.len().min(MAX_VERTEX_MARKERS) {
+                items.push(OverlayItem::Square {
+                    center: world_point(vertex as u32),
+                    color: VERTEX_MARKER_COLOR,
+                    size_pixels: 5.0,
+                });
+            }
+        }
         let selection = self.components(entity, &mesh);
         for face in &selection.faces {
             let Some(corners) = mesh.faces.get(*face as usize) else {
@@ -1067,6 +1136,7 @@ impl EditorSession {
 #[cfg(test)]
 mod tests {
     use petunia_math::{PolygonMesh, Vec3};
+    use petunia_render::OverlayItem;
     use serde_json::{Value as Json, json};
 
     use crate::session::EditorSession;
@@ -1478,6 +1548,51 @@ mod tests {
         assert_eq!(
             call(&mut session, json!({ "op": "mesh.preview_end" })),
             Json::Null
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn vertex_mode_draws_a_handle_for_every_vertex() {
+        let (mut session, root) = opened("mesh_vertex_handles");
+        let entity = brush_at(&mut session, "box", Vec3::new(40.0, 1.0, 40.0));
+        call(
+            &mut session,
+            json!({ "op": "selection.set", "entity": entity }),
+        );
+        call(&mut session, json!({ "op": "mesh.convert" }));
+        call(
+            &mut session,
+            json!({ "op": "mesh.edit_mode", "active": true }),
+        );
+        call(
+            &mut session,
+            json!({ "op": "mesh.component_mode", "mode": "vertex" }),
+        );
+        let vertices = geometry(&session, entity).positions.len();
+        let mut items = Vec::new();
+        session.mesh_overlay(&mut items);
+        let handles = items
+            .iter()
+            .filter(|item| matches!(item, OverlayItem::Square { .. }))
+            .count();
+        assert_eq!(
+            handles, vertices,
+            "a handle for each of {vertices} vertices"
+        );
+        call(
+            &mut session,
+            json!({ "op": "mesh.component_mode", "mode": "face" }),
+        );
+        let mut items = Vec::new();
+        session.mesh_overlay(&mut items);
+        assert_eq!(
+            items
+                .iter()
+                .filter(|item| matches!(item, OverlayItem::Square { .. }))
+                .count(),
+            0,
+            "no vertex handles in face mode"
         );
         let _ = std::fs::remove_dir_all(&root);
     }

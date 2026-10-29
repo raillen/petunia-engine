@@ -1,5 +1,7 @@
 #include "graph_panel.h"
 
+#include <algorithm>
+
 #include <QAction>
 #include <QCursor>
 #include <QDialog>
@@ -22,6 +24,7 @@
 #include <QTreeWidgetItemIterator>
 #include <QVBoxLayout>
 #include <QHash>
+#include <QJsonValue>
 
 #include "engine_bridge.h"
 #include "node_canvas.h"
@@ -101,6 +104,61 @@ QString pickNode(QWidget* parent, EngineBridge* bridge, const QString& title, co
     return list->currentItem()->data(Qt::UserRole).toString();
 }
 
+// A searchable list of the scene's objects, by id and name, for an input that needs an object.
+quint64 pickEntity(QWidget* parent, EngineBridge* bridge, const QString& title, quint64 current) {
+    QDialog dialog(parent);
+    dialog.setWindowTitle(title);
+    dialog.resize(460, 420);
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* hint = new QLabel(QStringLiteral("Digite parte do nome ou o número. Setas escolhem, Enter confirma, Esc cancela."), &dialog);
+    hint->setWordWrap(true);
+    layout->addWidget(hint);
+    auto* query = new QLineEdit(&dialog);
+    query->setAccessibleName(QStringLiteral("Buscar objeto"));
+    layout->addWidget(query);
+    auto* list = new QListWidget(&dialog);
+    list->setAccessibleName(QStringLiteral("Objetos da cena"));
+    layout->addWidget(list, 1);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    layout->addWidget(buttons);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    auto refill = [&] {
+        const QJsonArray entities = bridge->snapshot().value(QStringLiteral("entities")).toArray();
+        const QString needle = query->text().trimmed();
+        list->clear();
+        for (const QJsonValue& value : entities) {
+            const QJsonObject entity = value.toObject();
+            if (entity.contains(QStringLiteral("owner"))) {
+                continue;  // a collider is part of an object, not an object
+            }
+            const quint64 id = static_cast<quint64>(entity.value(QStringLiteral("id")).toDouble());
+            const QString name = textOf(entity, "name");
+            const QString label = QStringLiteral("#%1  %2").arg(id).arg(name.isEmpty() ? QStringLiteral("Objeto") : name);
+            if (!needle.isEmpty() && !label.contains(needle, Qt::CaseInsensitive)) {
+                continue;
+            }
+            auto* item = new QListWidgetItem(label, list);
+            item->setData(Qt::UserRole, QVariant::fromValue(id));
+            item->setData(Qt::AccessibleDescriptionRole, QStringLiteral("Objeto %1, id %2").arg(name).arg(id));
+            if (id == current) {
+                list->setCurrentItem(item);
+            }
+        }
+        if (list->currentRow() < 0 && list->count() > 0) {
+            list->setCurrentRow(0);
+        }
+    };
+    QObject::connect(query, &QLineEdit::textChanged, &dialog, refill);
+    QObject::connect(list, &QListWidget::itemActivated, &dialog, [&](QListWidgetItem*) { dialog.accept(); });
+    refill();
+    query->setFocus();
+    if (dialog.exec() != QDialog::Accepted || list->currentItem() == nullptr) {
+        return 0;
+    }
+    return list->currentItem()->data(Qt::UserRole).toULongLong();
+}
+
 }  // namespace
 
 GraphPanel::GraphPanel(EngineBridge* bridge, QWidget* parent) : QWidget(parent), bridge_(bridge) {
@@ -121,7 +179,7 @@ GraphPanel::GraphPanel(EngineBridge* bridge, QWidget* parent) : QWidget(parent),
     sideLayout->setContentsMargins(6, 6, 6, 6);
     sideLayout->setSpacing(4);
     auto* sideHeader = new QHBoxLayout;
-    auto* sideTitle = new QLabel(QStringLiteral("Grafos"), sidebar);
+    auto* sideTitle = new QLabel(QStringLiteral("Scripts e grafos"), sidebar);
     sideTitle->setProperty("role", QStringLiteral("panelTitle"));
     sideHeader->addWidget(sideTitle, 1);
     newButton_ = new QToolButton(sidebar);
@@ -132,12 +190,12 @@ GraphPanel::GraphPanel(EngineBridge* bridge, QWidget* parent) : QWidget(parent),
     sideHeader->addWidget(newButton_);
     sideLayout->addLayout(sideHeader);
     graphs_ = new QListWidget(sidebar);
-    graphs_->setAccessibleName(QStringLiteral("Grafos do projeto"));
-    graphs_->setToolTip(QStringLiteral("Grafos da pasta scripts/ do projeto (arquivos .graph.json)"));
+    graphs_->setAccessibleName(QStringLiteral("Scripts e grafos do projeto"));
+    graphs_->setToolTip(QStringLiteral("Scripts .aipo e grafos .graph.json; um ponto marca os que rodam no objeto selecionado"));
     graphs_->setFrameShape(QFrame::NoFrame);
     graphs_->setIconSize(QSize(16, 16));
     sideLayout->addWidget(graphs_, 1);
-    noGraphs_ = new QLabel(QStringLiteral("Nenhum grafo ainda.\nO botão + cria um. Depois, \"Ligar ao objeto\" faz ele rodar no jogo."), sidebar);
+    noGraphs_ = new QLabel(QStringLiteral("Nenhum script ou grafo ainda.\nO botão + cria um grafo; use o workspace Código para um script .aipo. Depois, \"Ligar ao objeto\" faz ele rodar no jogo."), sidebar);
     noGraphs_->setWordWrap(true);
     noGraphs_->setProperty("role", QStringLiteral("muted"));
     noGraphs_->setAlignment(Qt::AlignTop | Qt::AlignLeft);
@@ -203,6 +261,39 @@ GraphPanel::GraphPanel(EngineBridge* bridge, QWidget* parent) : QWidget(parent),
     barWidget->setMinimumWidth(1);
     layout->addWidget(barWidget);
 
+    // Canvas-only controls live on a second row: the main bar keeps its usual positions.
+    canvasBar_ = new QWidget(page);
+    canvasBar_->setObjectName(QStringLiteral("PetuniaViewportHeader"));
+    canvasBar_->setAttribute(Qt::WA_StyledBackground);
+    auto* canvasBarLayout = new QHBoxLayout(canvasBar_);
+    canvasBarLayout->setContentsMargins(6, 1, 6, 3);
+    canvasBarLayout->setSpacing(2);
+    auto makeCanvasButton = [canvasBarLayout](const QString& text, const QString& icon, const QString& tip) {
+        auto* button = new QToolButton;
+        button->setText(text);
+        button->setToolTip(tip);
+        button->setAccessibleName(text);
+        button->setProperty("role", QStringLiteral("header"));
+        button->setProperty("iconName", icon);
+        button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        button->setIcon(PetuniaIcons::get(icon));
+        canvasBarLayout->addWidget(button);
+        return button;
+    };
+    auto* allButton = makeCanvasButton(QStringLiteral("Todos"), QStringLiteral("select_all"),
+                                       QStringLiteral("Selecionar todas as caixas (Ctrl+A); depois use Agrupar"));
+    zoomOutButton_ = makeCanvasButton(QStringLiteral("−"), QStringLiteral("minus"), QStringLiteral("Diminuir o zoom do canvas"));
+    zoomInButton_ = makeCanvasButton(QStringLiteral("+"), QStringLiteral("plus"), QStringLiteral("Aumentar o zoom do canvas"));
+    fitButton_ = makeCanvasButton(QStringLiteral("Centralizar"), QStringLiteral("frame_all"),
+                                  QStringLiteral("Enquadrar todos os nós na tela (Home)"));
+    groupButton_ = makeCanvasButton(QStringLiteral("Agrupar"), QStringLiteral("collection"),
+                                    QStringLiteral("Agrupar as caixas escolhidas (Ctrl+clique para escolher várias)"));
+    ungroupButton_ = makeCanvasButton(QStringLiteral("Desagrupar"), QStringLiteral("close"),
+                                      QStringLiteral("Desfazer o grupo da caixa escolhida"));
+    canvasBarLayout->addStretch(1);
+    canvasBar_->hide();
+    layout->addWidget(canvasBar_);
+
     auto* splitter = new QSplitter(Qt::Vertical);
     views_ = new QStackedWidget;
     tree_ = new QTreeWidget;
@@ -217,11 +308,35 @@ GraphPanel::GraphPanel(EngineBridge* bridge, QWidget* parent) : QWidget(parent),
     tree_->setIconSize(QSize(16, 16));
     tree_->setFrameShape(QFrame::NoFrame);
     views_->addWidget(tree_);
+    auto* codePage = new QWidget(views_);
+    auto* codeLayout = new QVBoxLayout(codePage);
+    codeLayout->setContentsMargins(8, 6, 8, 0);
+    codeLayout->setSpacing(4);
+    auto* codeHint = new QLabel(
+        QStringLiteral("Código gerado pelo grafo. Mudar o grafo muda este texto; "
+                       "edite e use \"Aplicar código\" para voltar ao grafo."),
+        codePage);
+    codeHint->setWordWrap(true);
+    codeHint->setProperty("role", QStringLiteral("muted"));
+    auto* codeHeader = new QHBoxLayout;
+    codeHeader->setSpacing(6);
+    codeHeader->addWidget(codeHint, 1);
+    asScriptButton_ = new QToolButton(codePage);
+    asScriptButton_->setText(QStringLiteral("Transformar em script"));
+    asScriptButton_->setToolTip(QStringLiteral("Copia o código gerado para um arquivo .aipo independente; o grafo não o atualiza depois"));
+    asScriptButton_->setAccessibleName(asScriptButton_->text());
+    asScriptButton_->setProperty("role", QStringLiteral("header"));
+    asScriptButton_->setProperty("iconName", QStringLiteral("script"));
+    asScriptButton_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    asScriptButton_->setIcon(PetuniaIcons::get(QStringLiteral("script")));
+    codeHeader->addWidget(asScriptButton_);
+    codeLayout->addLayout(codeHeader);
     code_ = new QPlainTextEdit;
     code_->setReadOnly(true);
     code_->setAccessibleName(QStringLiteral("Código gerado pelo grafo"));
     code_->setLineWrapMode(QPlainTextEdit::NoWrap);
-    views_->addWidget(code_);
+    codeLayout->addWidget(code_, 1);
+    views_->addWidget(codePage);
     canvas_ = new NodeCanvas;
     views_->addWidget(canvas_);
     splitter->addWidget(views_);
@@ -262,8 +377,51 @@ GraphPanel::GraphPanel(EngineBridge* bridge, QWidget* parent) : QWidget(parent),
 
     connect(bridge_, &EngineBridge::snapshotChanged, this, &GraphPanel::onSnapshot);
     connect(graphs_, &QListWidget::currentItemChanged, this, [this](QListWidgetItem* item) {
-        if (item != nullptr && item->data(Qt::UserRole).toString() != openName_) {
-            openGraph(item->data(Qt::UserRole).toString());
+        selectedName_ = item != nullptr ? item->data(Qt::UserRole).toString() : QString();
+        selectedKind_ = item != nullptr ? item->data(Qt::UserRole + 1).toString() : QString();
+        updateButtons();
+        if (item == nullptr) {
+            return;
+        }
+        if (selectedKind_ == QLatin1String("graph")) {
+            if (selectedName_ != openName_) {
+                openGraph(selectedName_);
+            }
+        } else if (selectedKind_ == QLatin1String("script")) {
+            emit scriptOpenRequested(selectedName_);
+        } else if (selectedKind_ == QLatin1String("missing")) {
+            emit message(QStringLiteral("O objeto pede o script `%1`, mas o arquivo ainda não existe. Crie `%1.aipo` no workspace Código ou um grafo com esse nome.").arg(selectedName_));
+        }
+    });
+    connect(graphs_, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem* item) {
+        if (item == nullptr || item->data(Qt::UserRole + 1).toString() != QLatin1String("missing")) {
+            return;
+        }
+        const QString name = item->data(Qt::UserRole).toString();
+        const Reply reply = bridge_->call(QStringLiteral("script.new"), QJsonObject{{"name", name}});
+        if (!reply.ok) {
+            emit message(reply.message);
+            return;
+        }
+        reloadList(openName_);
+        emit scriptOpenRequested(name);
+        emit message(QStringLiteral("Script %1 criado a partir do nome pedido pelo objeto.").arg(name));
+    });
+    graphs_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(graphs_, &QListWidget::customContextMenuRequested, this, [this](const QPoint& position) {
+        QListWidgetItem* item = graphs_->itemAt(position);
+        if (item == nullptr || item->data(Qt::UserRole + 1).toString() == QLatin1String("missing")) {
+            return;
+        }
+        graphs_->setCurrentItem(item);
+        QMenu menu(this);
+        QAction* rename = menu.addAction(PetuniaIcons::get(QStringLiteral("mode_edit")), QStringLiteral("Renomear…"));
+        QAction* remove = menu.addAction(PetuniaIcons::get(QStringLiteral("delete")), QStringLiteral("Excluir…"));
+        QAction* chosen = menu.exec(graphs_->viewport()->mapToGlobal(position));
+        if (chosen == rename) {
+            renameSelected();
+        } else if (chosen == remove) {
+            deleteSelected();
         }
     });
     connect(newButton_, &QToolButton::clicked, this, &GraphPanel::createGraph);
@@ -274,6 +432,29 @@ GraphPanel::GraphPanel(EngineBridge* bridge, QWidget* parent) : QWidget(parent),
     connect(undoButton_, &QToolButton::clicked, this, &GraphPanel::undo);
     connect(redoButton_, &QToolButton::clicked, this, &GraphPanel::redo);
     connect(attachButton_, &QToolButton::clicked, this, &GraphPanel::attach);
+    connect(asScriptButton_, &QToolButton::clicked, this, &GraphPanel::asScript);
+    connect(applyCodeButton_, &QToolButton::clicked, this, &GraphPanel::applyCode);
+    connect(code_, &QPlainTextEdit::cursorPositionChanged, this, [this] {
+        if (codeLines_.isEmpty()) {
+            return;
+        }
+        const int line = code_->textCursor().blockNumber();
+        if (line >= 0 && line < codeLines_.size()) {
+            const int node = codeLines_.at(line).toInt();
+            if (node != 0) {
+                selectNode(node);
+                if (canvas_ != nullptr) {
+                    canvas_->selectNode(node);
+                }
+            }
+        }
+    });
+    connect(allButton, &QToolButton::clicked, this, [this] { if (canvas_ != nullptr) canvas_->selectAll(); });
+    connect(zoomOutButton_, &QToolButton::clicked, this, [this] { if (canvas_ != nullptr) canvas_->zoomOut(); });
+    connect(zoomInButton_, &QToolButton::clicked, this, [this] { if (canvas_ != nullptr) canvas_->zoomIn(); });
+    connect(fitButton_, &QToolButton::clicked, this, [this] { if (canvas_ != nullptr) canvas_->fitGraph(); });
+    connect(groupButton_, &QToolButton::clicked, this, &GraphPanel::groupSelection);
+    connect(ungroupButton_, &QToolButton::clicked, this, &GraphPanel::ungroupSelection);
     connect(codeButton_, &QToolButton::toggled, this, [this](bool on) {
         showMode(on ? QStringLiteral("code") : switch_->current());
         if (on) {
@@ -324,13 +505,18 @@ GraphPanel::GraphPanel(EngineBridge* bridge, QWidget* parent) : QWidget(parent),
         selectNode(node);
         removeCurrent();
     });
-    connect(canvas_, &NodeCanvas::nodeMoved, this, [this](int node, double x, double y) {
+    connect(canvas_, &NodeCanvas::nodesMoved, this, [this](const QJsonArray& places) {
         const Reply reply = bridge_->call(
-            QStringLiteral("graph.set_layout"),
-            QJsonObject{{"node", node}, {"x", x}, {"y", y}});
+            QStringLiteral("graph.set_layouts"),
+            QJsonObject{{"nodes", places}});
         if (!reply.ok) {
             emit message(reply.message);
+            refreshView();
         }
+    });
+    connect(canvas_, &NodeCanvas::selectionChanged, this, &GraphPanel::updateButtons);
+    connect(canvas_, &NodeCanvas::zoomChanged, this, [this](int percent) {
+        emit message(QStringLiteral("Zoom %1 %.").arg(percent));
     });
     connect(canvas_, &NodeCanvas::connectRequested, this, [this](const QJsonObject& from, const QJsonObject& to) {
         if (run(QStringLiteral("graph.connect"), QJsonObject{{"from", from}, {"to", to}})) {
@@ -366,6 +552,8 @@ void GraphPanel::onSnapshot() {
     if (key != projectKey_) {
         projectKey_ = key;
         openName_.clear();
+        selectedName_.clear();
+        selectedKind_.clear();
         selectedKey_.clear();
         tree_->clear();
         diagnostics_->clear();
@@ -391,6 +579,11 @@ void GraphPanel::reload() {
     }
 }
 
+void GraphPanel::open(const QString& name) {
+    reloadList(name);
+    openGraph(name);
+}
+
 bool GraphPanel::run(const QString& operation, const QJsonObject& fields, QJsonObject* result) {
     const Reply reply = bridge_->call(operation, fields);
     if (!reply.ok) {
@@ -405,19 +598,60 @@ bool GraphPanel::run(const QString& operation, const QJsonObject& fields, QJsonO
 }
 
 void GraphPanel::reloadList(const QString& select) {
-    QJsonObject listing;
-    const Reply reply = bridge_->call(QStringLiteral("graph.list"));
+    const Reply reply = bridge_->call(QStringLiteral("programming.list"));
     if (!reply.ok) {
         return;
     }
-    listing = reply.result.toObject();
+    QList<QJsonObject> items;
+    for (const QJsonValue& value : reply.result.toObject().value(QStringLiteral("items")).toArray()) {
+        items.append(value.toObject());
+    }
+    std::sort(items.begin(), items.end(), [](const QJsonObject& left, const QJsonObject& right) {
+        const bool leftAttached = !left.value(QStringLiteral("attached")).toArray().isEmpty();
+        const bool rightAttached = !right.value(QStringLiteral("attached")).toArray().isEmpty();
+        if (leftAttached != rightAttached) {
+            return leftAttached;
+        }
+        const QString leftKind = left.value(QStringLiteral("kind")).toString();
+        const QString rightKind = right.value(QStringLiteral("kind")).toString();
+        if (leftKind != rightKind) {
+            return leftKind == QLatin1String("graph");
+        }
+        return left.value(QStringLiteral("name")).toString() < right.value(QStringLiteral("name")).toString();
+    });
     const QSignalBlocker blocker(graphs_);
     graphs_->clear();
-    for (const QJsonValue& value : listing.value(QStringLiteral("graphs")).toArray()) {
-        auto* item = new QListWidgetItem(PetuniaIcons::get(QStringLiteral("connect")), value.toString(), graphs_);
-        item->setData(Qt::UserRole, value.toString());
-        if (value.toString() == select) {
+    selectedName_.clear();
+    selectedKind_.clear();
+    for (const QJsonObject& entry : std::as_const(items)) {
+        const QString name = entry.value(QStringLiteral("name")).toString();
+        const QString kind = entry.value(QStringLiteral("kind")).toString();
+        const QJsonArray attached = entry.value(QStringLiteral("attached")).toArray();
+        QString label = name;
+        if (!attached.isEmpty()) {
+            QStringList objects;
+            for (const QJsonValue& object : attached) {
+                const QJsonObject entity = object.toObject();
+                objects << QStringLiteral("#%1 %2").arg(entity.value(QStringLiteral("id")).toInt()).arg(entity.value(QStringLiteral("name")).toString());
+            }
+            label = QStringLiteral("• %1  —  %2").arg(name, objects.join(QStringLiteral(", ")));
+        }
+        if (kind == QLatin1String("missing")) {
+            label = QStringLiteral("! %1  —  arquivo ausente").arg(name);
+        }
+        const QString icon = kind == QLatin1String("graph") ? QStringLiteral("connect")
+            : (kind == QLatin1String("script") ? QStringLiteral("script") : QStringLiteral("warning"));
+        auto* item = new QListWidgetItem(PetuniaIcons::get(icon), label, graphs_);
+        item->setData(Qt::UserRole, name);
+        item->setData(Qt::UserRole + 1, kind);
+        item->setData(Qt::AccessibleDescriptionRole,
+                      kind == QLatin1String("missing")
+                          ? QStringLiteral("Script %1 pedido por um objeto, mas o arquivo não existe").arg(name)
+                          : QStringLiteral("%1 %2, %3 objeto(s) usam").arg(kind, name).arg(attached.size()));
+        if (kind == QLatin1String("graph") && name == select) {
             graphs_->setCurrentItem(item);
+            selectedName_ = name;
+            selectedKind_ = kind;
         }
     }
     noGraphs_->setVisible(graphs_->count() == 0);
@@ -433,7 +667,14 @@ void GraphPanel::openGraph(const QString& name) {
     }
     openName_ = name;
     selectedKey_.clear();
+    selectedName_ = name;
+    selectedKind_ = QStringLiteral("graph");
     renderView(view);
+    canvasFitted_ = false;
+    if (canvas_ != nullptr && views_->currentIndex() == 2) {
+        canvas_->fitGraph();
+        canvasFitted_ = true;
+    }
 }
 
 void GraphPanel::refreshView() {
@@ -499,6 +740,7 @@ void addInputs(QTreeWidgetItem* owner, QTreeWidget* tree, const QJsonObject& ste
                         {"label", textOf(input, "label")},
                         {"valueType", textOf(input, "type")},
                         {"source", source},
+                        {"constant", input.value(QStringLiteral("constant"))},
                         {"nested", nested.value(QStringLiteral("node")).toInt(0)}};
         auto* item = makeItem(owner, tree, text, icon, row, keyOf(QStringLiteral("input"), node, textOf(input, "pin")), hint);
         if (!nested.isEmpty()) {
@@ -663,6 +905,16 @@ void GraphPanel::showMode(const QString& mode) {
         index = 1;
     } else if (mode == QLatin1String("canvas")) {
         index = 2;
+        if (canvas_ != nullptr) {
+            if (!canvasFitted_) {
+                canvas_->fitGraph();
+                canvasFitted_ = true;
+            }
+            canvas_->setFocus();
+        }
+    }
+    if (canvasBar_ != nullptr) {
+        canvasBar_->setVisible(index == 2);
     }
     views_->setCurrentIndex(index);
     updateButtons();
@@ -724,13 +976,30 @@ void GraphPanel::showDebug(const QJsonObject& debug) {
     debugRows_->show();
 }
 
+void GraphPanel::applyCode() {
+    if (openName_.isEmpty()) {
+        return;
+    }
+    const Reply reply = bridge_->call(
+        QStringLiteral("graph.from_code"),
+        QJsonObject{{QStringLiteral("text"), code_->toPlainText()}});
+    if (!reply.ok) {
+        emit message(QStringLiteral("Não foi possível aplicar o código: %1").arg(reply.explanation()));
+        return;
+    }
+    refreshView();
+    emit message(QStringLiteral("Código aplicado ao grafo."));
+}
+
 void GraphPanel::showCode() {
     const Reply reply = bridge_->call(QStringLiteral("graph.code"));
     const QJsonObject result = reply.result.toObject();
     if (result.value(QStringLiteral("ok")).toBool()) {
+        codeLines_ = result.value(QStringLiteral("line_nodes")).toArray();
         code_->setPlainText(textOf(result, "text"));
         return;
     }
+    codeLines_ = QJsonArray();
     QStringList lines{QStringLiteral("Ainda não dá para gerar o código. Falta resolver:"), QString()};
     for (const QJsonValue& value : result.value(QStringLiteral("problems")).toArray()) {
         lines << QStringLiteral("- %1").arg(textOf(value.toObject(), "message"));
@@ -785,7 +1054,23 @@ void GraphPanel::updateButtons() {
     undoButton_->setEnabled(open && canUndo_);
     redoButton_->setEnabled(open && canRedo_);
     codeButton_->setEnabled(open);
-    attachButton_->setEnabled(open && !projectKey_.isEmpty());
+    asScriptButton_->setEnabled(open);
+    attachButton_->setEnabled(!projectKey_.isEmpty() && !selectedName_.isEmpty() && selectedKind_ != QLatin1String("missing"));
+    if (zoomInButton_ != nullptr) {
+        zoomInButton_->setEnabled(open);
+    }
+    if (zoomOutButton_ != nullptr) {
+        zoomOutButton_->setEnabled(open);
+    }
+    if (fitButton_ != nullptr) {
+        fitButton_->setEnabled(open);
+    }
+    if (groupButton_ != nullptr) {
+        groupButton_->setEnabled(open && canvas_ != nullptr && canvas_->selectedNodes().size() >= 2);
+    }
+    if (ungroupButton_ != nullptr) {
+        ungroupButton_->setEnabled(open && canvas_ != nullptr && canvas_->groupOf(canvas_->currentNode()) != 0);
+    }
 }
 
 void GraphPanel::addEvent() {
@@ -861,9 +1146,18 @@ void GraphPanel::editInput(const QJsonObject& row, const QPoint& where) {
     const QJsonObject target{{"node", node}, {"pin", pin}};
     QMenu menu(this);
     menu.setAccessibleName(QStringLiteral("Como preencher %1").arg(textOf(row, "label")));
+    const bool entityPin = valueType == QLatin1String("Inteiro")
+        && (pin == QLatin1String("entity") || pin == QLatin1String("other") || pin == QLatin1String("target"));
+    QAction* thisObject = nullptr;
+    QAction* chooseObject = nullptr;
+    if (entityPin) {
+        thisObject = menu.addAction(QStringLiteral("Este objeto (o dono do evento)"));
+        chooseObject = menu.addAction(QStringLiteral("Escolher objeto…"));
+        menu.addSeparator();
+    }
     QAction* fixed = nullptr;
     if (valueType != QLatin1String("Dicionário") && valueType != QLatin1String("Lista")) {
-        fixed = menu.addAction(QStringLiteral("Valor fixo…"));
+        fixed = menu.addAction(entityPin ? QStringLiteral("Número do objeto…") : QStringLiteral("Valor fixo…"));
     }
     QMenu* sourcesMenu = menu.addMenu(QStringLiteral("Usar o valor de…"));
     const Reply sourcesReply = bridge_->call(QStringLiteral("graph.sources"), QJsonObject{{"for", target}});
@@ -886,7 +1180,17 @@ void GraphPanel::editInput(const QJsonObject& row, const QPoint& where) {
         return;
     }
     bool changed = false;
-    if (chosen == fixed) {
+    if (chosen == thisObject) {
+        changed = run(QStringLiteral("graph.set"), QJsonObject{{"node", node}, {"name", pin}, {"value", QJsonValue::Null}});
+    } else if (chosen == chooseObject) {
+        const quint64 current = row.value(QStringLiteral("constant")).isDouble()
+            ? static_cast<quint64>(row.value(QStringLiteral("constant")).toDouble())
+            : 0;
+        const quint64 id = pickEntity(this, bridge_, QStringLiteral("Escolher objeto para %1").arg(textOf(row, "label")), current);
+        if (id != 0) {
+            changed = run(QStringLiteral("graph.set"), QJsonObject{{"node", node}, {"name", pin}, {"value", static_cast<double>(id)}});
+        }
+    } else if (chosen == fixed) {
         QVariant value;
         bool ok = false;
         const QString title = QStringLiteral("Valor de %1").arg(textOf(row, "label"));
@@ -989,21 +1293,166 @@ void GraphPanel::createGraph() {
     QJsonObject view;
     if (run(QStringLiteral("graph.new"), QJsonObject{{"name", name.trimmed()}}, &view)) {
         openName_ = name.trimmed();
+        selectedName_ = name.trimmed();
+        selectedKind_ = QStringLiteral("graph");
         selectedKey_.clear();
         reloadList(openName_);
         renderView(view);
+        canvasFitted_ = false;
+        if (canvas_ != nullptr && views_->currentIndex() == 2) {
+            canvas_->fitGraph();
+            canvasFitted_ = true;
+        }
         emit message(QStringLiteral("Grafo criado. Use o botão Evento para começar."));
     }
 }
 
 void GraphPanel::attach() {
-    if (openName_.isEmpty()) {
+    const QString name = !selectedName_.isEmpty() ? selectedName_ : openName_;
+    if (name.isEmpty() || selectedKind_ == QLatin1String("missing")) {
         return;
     }
     QJsonObject result;
-    if (run(QStringLiteral("script.attach"), QJsonObject{{"name", openName_}}, &result)) {
+    if (run(QStringLiteral("script.attach"), QJsonObject{{"name", name}}, &result)) {
         bridge_->refresh();
-        emit message(QStringLiteral("O grafo %1 foi ligado ao objeto selecionado.").arg(openName_));
+        reloadList(openName_);
+        emit message(QStringLiteral("%1 foi ligado ao objeto selecionado.").arg(name));
+    }
+}
+
+void GraphPanel::asScript() {
+    if (openName_.isEmpty()) {
+        return;
+    }
+    const Reply reply = bridge_->call(QStringLiteral("graph.code"));
+    const QJsonObject result = reply.result.toObject();
+    if (!result.value(QStringLiteral("ok")).toBool()) {
+        emit message(QStringLiteral("O grafo ainda tem problemas; resolva-os antes de transformar em script."));
+        return;
+    }
+    bool ok = false;
+    const QString suggestion = openName_ + QStringLiteral("_script");
+    const QString name = QInputDialog::getText(this, QStringLiteral("Transformar em script"),
+                                               QStringLiteral("Nome do novo script .aipo:"), QLineEdit::Normal,
+                                               suggestion, &ok);
+    if (!ok || name.trimmed().isEmpty()) {
+        return;
+    }
+    const Reply saved = bridge_->call(
+        QStringLiteral("script.write"),
+        QJsonObject{{"name", name.trimmed()}, {"text", result.value(QStringLiteral("text"))}});
+    if (!saved.ok) {
+        emit message(QStringLiteral("Não foi possível criar o script %1: %2").arg(name.trimmed(), saved.message));
+        return;
+    }
+    emit message(QStringLiteral("Script %1 criado a partir do grafo; ele agora é independente.").arg(name.trimmed()));
+    emit scriptOpenRequested(name.trimmed());
+}
+
+void GraphPanel::renameSelected() {
+    if (selectedName_.isEmpty()) {
+        return;
+    }
+    bool ok = false;
+    const QString name = QInputDialog::getText(this, QStringLiteral("Renomear"),
+                                               QStringLiteral("Novo nome (letras, números, _ e -):"),
+                                               QLineEdit::Normal, selectedName_, &ok)
+                             .trimmed();
+    if (!ok || name.isEmpty() || name == selectedName_) {
+        return;
+    }
+    const QString old = selectedName_;
+    const QString kind = selectedKind_;
+    const Reply reply = bridge_->call(
+        QStringLiteral("script.rename"),
+        QJsonObject{{"name", old}, {"new", name}, {"kind", kind}});
+    if (!reply.ok) {
+        QMessageBox::warning(this, QStringLiteral("Não foi possível"), reply.explanation());
+        return;
+    }
+    if (kind == QLatin1String("graph") && openName_ == old) {
+        openName_ = name;
+        selectedName_ = name;
+        refreshView();
+    }
+    reloadList(openName_);
+    emit message(QStringLiteral("%1 renomeado para %2.").arg(old, name));
+}
+
+void GraphPanel::deleteSelected() {
+    if (selectedName_.isEmpty()) {
+        return;
+    }
+    const QString name = selectedName_;
+    const QString kind = selectedKind_;
+    const QString question = QStringLiteral("Excluir \"%1\"?\n\nUma cópia vai para scripts/.backup/ e os objetos que usam %1 ficarão sem ele.")
+                                 .arg(name);
+    if (QMessageBox::question(this, QStringLiteral("Excluir"), question) != QMessageBox::Yes) {
+        return;
+    }
+    const Reply reply = bridge_->call(
+        QStringLiteral("script.delete"),
+        QJsonObject{{"name", name}, {"kind", kind}, {"force", true}});
+    if (!reply.ok) {
+        QMessageBox::warning(this, QStringLiteral("Não foi possível"), reply.explanation());
+        return;
+    }
+    if (kind == QLatin1String("graph") && openName_ == name) {
+        openName_.clear();
+        selectedName_.clear();
+        selectedKind_.clear();
+        tree_->clear();
+        diagnostics_->clear();
+        code_->clear();
+        status_->clear();
+        if (canvas_ != nullptr) {
+            canvas_->setGraph(QJsonObject{});
+        }
+    }
+    reloadList(openName_);
+    emit message(QStringLiteral("%1 excluído; cópia em scripts/.backup/.").arg(name));
+}
+
+void GraphPanel::groupSelection() {
+    if (openName_.isEmpty() || canvas_ == nullptr) {
+        return;
+    }
+    const QList<int> chosen = canvas_->selectedNodes();
+    if (chosen.size() < 2) {
+        emit message(QStringLiteral("Escolha duas ou mais caixas com Ctrl+clique para agrupar."));
+        return;
+    }
+    bool ok = false;
+    const QString label = QInputDialog::getText(this, QStringLiteral("Agrupar caixas"),
+                                                QStringLiteral("Nome do grupo:"), QLineEdit::Normal,
+                                                QStringLiteral("Grupo"), &ok);
+    if (!ok || label.trimmed().isEmpty()) {
+        return;
+    }
+    QJsonArray nodes;
+    for (int node : chosen) {
+        nodes.append(node);
+    }
+    if (run(QStringLiteral("graph.group"),
+            QJsonObject{{"label", label.trimmed()}, {"nodes", nodes}})) {
+        refreshView();
+        emit message(QStringLiteral("Grupo %1 criado. Arraste o quadro para mover as caixas juntas.").arg(label.trimmed()));
+    }
+}
+
+void GraphPanel::ungroupSelection() {
+    if (openName_.isEmpty() || canvas_ == nullptr) {
+        return;
+    }
+    const int node = canvas_->currentNode();
+    const int group = canvas_->groupOf(node);
+    if (group == 0) {
+        emit message(QStringLiteral("A caixa escolhida não está em um grupo."));
+        return;
+    }
+    if (run(QStringLiteral("graph.ungroup"), QJsonObject{{"group", group}})) {
+        refreshView();
+        emit message(QStringLiteral("Grupo desfeito."));
     }
 }
 

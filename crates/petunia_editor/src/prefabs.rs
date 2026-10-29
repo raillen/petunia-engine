@@ -47,7 +47,12 @@ pub const PREFABS: &[PrefabInfo] = &[
     PrefabInfo {
         id: "spawn",
         title: "Ponto de nascimento",
-        summary: "Onde o jogador nasce ao jogar (tabela PlayerStart), com uma marca que não bloqueia ninguém.",
+        summary: "Onde o jogador nasce ao jogar (tabela PlayerStart), com uma marca que não bloqueia ninguém. Não é o personagem; use Personagem jogável para isso.",
+    },
+    PrefabInfo {
+        id: "player",
+        title: "Personagem jogável",
+        summary: "Um personagem controlado pelo teclado (W A S D, Espaço), com uma cápsula de colisão sólida.",
     },
 ];
 
@@ -303,6 +308,20 @@ pub fn build(id: &str, at: Vec3) -> Result<Built, Failure> {
                 )],
             ))
         }
+        "player" => {
+            let rows = vec![
+                json!({
+                    "Name": { "text": "Jogador" },
+                    "Transform": { "position": vector_json(Vec3::new(at.x, at.y + 0.9, at.z)) },
+                    "Brush": { "shape": "cylinder", "size": { "x": 0.6, "y": 1.8, "z": 0.6 },
+                               "color": { "r": 0.95, "g": 0.55, "b": 0.75, "a": 1.0 } },
+                    "Character": { "player": true }
+                }),
+                json!({ "Collider": { "owner": { "$entity_of": 0 }, "name": "corpo", "shape": "capsule",
+                                      "radius": 0.3, "height": 1.8 } }),
+            ];
+            Ok((rows, Vec::new()))
+        }
         "spawn" => {
             let rows = vec![
                 json!({
@@ -434,6 +453,70 @@ mod tests {
         let reply = session.handle(&request);
         assert_eq!(reply["ok"], true, "{request} -> {reply}");
         reply["result"].clone()
+    }
+
+    #[test]
+    fn the_player_prefab_spawns_a_working_keyboard_character() {
+        let root = std::env::temp_dir().join(format!(
+            "petunia_editor_test_player_prefab_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let mut session = EditorSession::new().expect("session");
+        call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "player" }),
+        );
+        let spawned = call(
+            &mut session,
+            json!({ "op": "prefab.spawn", "id": "player" }),
+        );
+        let player = spawned["entity"].as_u64().expect("player id");
+        let started = call(&mut session, json!({ "op": "play.start" }));
+        assert_eq!(started["has_player"], true, "{started}");
+        assert_eq!(started["stand_in_player"], false, "{started}");
+        assert!(
+            started["problems"].as_array().expect("list").is_empty(),
+            "{started}"
+        );
+        for _ in 0..90 {
+            call(
+                &mut session,
+                json!({ "op": "play.tick", "seconds": 1.0 / 60.0 }),
+            );
+        }
+        let standing = session
+            .frame()
+            .expect("frame")
+            .items
+            .into_iter()
+            .find(|item| item.entity == player)
+            .map(|item| item.transform.position)
+            .expect("the player is drawn");
+        assert!(
+            standing.y > 0.5 && standing.y < 1.5,
+            "the player stands on the floor: {standing:?}"
+        );
+        for _ in 0..60 {
+            call(
+                &mut session,
+                json!({ "op": "play.tick", "seconds": 1.0 / 60.0, "forward": 1.0 }),
+            );
+        }
+        let walked = session
+            .frame()
+            .expect("frame")
+            .items
+            .into_iter()
+            .find(|item| item.entity == player)
+            .map(|item| item.transform.position)
+            .expect("the player is drawn");
+        assert!(
+            walked.z < standing.z - 1.0,
+            "the player walks: {standing:?} -> {walked:?}"
+        );
+        call(&mut session, json!({ "op": "play.stop" }));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -599,7 +682,7 @@ mod tests {
             json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "prefab" }),
         );
         let listed = call(&mut session, json!({ "op": "prefab.list" }));
-        assert_eq!(listed["prefabs"].as_array().expect("list").len(), 3);
+        assert_eq!(listed["prefabs"].as_array().expect("list").len(), 4);
         let before = call(&mut session, json!({ "op": "editor.snapshot" }))["entity_count"]
             .as_u64()
             .expect("count");

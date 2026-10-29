@@ -69,7 +69,7 @@ pub struct Compiled {
     pub diagnostics: Vec<ScriptDiagnostic>,
 }
 
-fn convert(source: &Source, diagnostic: &Diagnostic) -> ScriptDiagnostic {
+pub(crate) fn convert(source: &Source, diagnostic: &Diagnostic) -> ScriptDiagnostic {
     let severity = match diagnostic.severity {
         Severity::Error | Severity::Fault => ScriptSeverity::Error,
         Severity::Warning => ScriptSeverity::Warning,

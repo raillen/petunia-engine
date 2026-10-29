@@ -10,9 +10,96 @@ O essencial foi verificado **em display virtual** (nada apareceu na sua tela), c
 
 Três análises novas pedem a sua decisão: [paridade da interface](../02-arquitetura/12-paridade-ui-petunia3d.md), [edição de malha](../02-arquitetura/13-primitivas-e-edicao-de-malha.md) e [pintura e animação](../01-pesquisa/07-pintura-e-animacao.md).
 
-**Consolidação de 2026-10-27:** os PRs #2 a #7 foram mesclados na `main` (personagem e Jogar, luzes e GLB, grafo de nós N1–N5, prefabs). A `main` tinha **397 testes** antes destas correções; com elas, tem **402 testes, 0 falhas**, e o editor compila no Qt 6.4.2.
+**Consolidação de 2026-10-27:** os PRs #2 a #7 foram mesclados na `main` (personagem e Jogar, luzes e GLB, grafo de nós N1–N5, prefabs). A `main` tinha **397 testes** antes destas correções; com elas, tem **441 testes, 0 falhas** (2026-10-28), e o editor compila no Qt 6.4.2.
 
-## Etapa atual: integridade de dados (2026-10-27)
+## Etapa atual: intercâmbio Aipo ⇄ IR e isolamento por objeto (2026-10-28)
+
+| O quê | Verificação |
+|---|---|
+| **Uma VM por anexo** (objeto + script): o módulo compilado é compartilhado, o estado de topo não vaza entre objetos | teste: o mesmo script em dois objetos move os dois para a mesma posição, não soma o estado |
+| **Leitor Aipo → IR** para o subconjunto explícito do DR-34 | 6 testes: ida e volta, atribuição composta/`while`, `loop`/`each`, recusa com linha e leitura do código gerado por grafo |
+| **Escritor IR → Aipo** canônico e determinístico | o IR lido da saída é igual ao primeiro |
+| **Fora do subconjunto** (`struct`, closures, `attempt`, etc.) | `IR_UNSUPPORTED`, sem conversão silenciosa |
+| **IR → grafo** (evento, funções auxiliares, globais, variáveis locais, `while`, `loop`, `repeat`, `each`, `break`/`continue`, `return`, chamadas, `if`/`elif` e expressões) | 15 testes: execução ponta a ponta, condição/`elif`, `repeat` com índice, `while`, `loop` com `break`/`continue`, `each` com uma e duas variáveis, função auxiliar, global/local, chamada de valor, variáveis e escopo por handler, e recusas de `let` reatribuído/`break` fora de laço |
+| **Editor:** `script.to_graph` e menu **Transformar em grafo…** no script | teste de operação cria o grafo, abre, compila e converte função auxiliar; recusa lista como valor e nome ocupado. O menu não foi exercitado no smoke |
+| **Schema v2 e migração** | **implementado:** grafos v1 são lidos e migrados para v2; `flow.while`, `flow.loop`, `flow.break`, `flow.continue` e `flow.each.with_index`; 14 testes de modelo e 21 testes públicos de grafo |
+| **Edição contínua das duas vistas** | **implementado no recorte suportado:** `graph.code` gera Aipo e `graph.from_code` recria o grafo; botão **Aplicar código** no painel Lógica. Fora do subconjunto, diagnóstico |
+
+## Etapa atual: renomear e apagar scripts/grafos (2026-10-27)
+
+| O quê | Verificação |
+|---|---|
+| **Renomear** script ou grafo: move o arquivo (e o `.layout.json` do grafo), atualiza todos os anexos e o grafo aberto; recusa nome ocupado | 1 teste: `a` → `c`, arquivo e anexo acompanham; nome `b` existente é recusado |
+| **Excluir**: sem `force` recusa se houver anexos (`SCRIPT_IN_USE`); com `force`, move para `scripts/.backup/` e desliga os anexos | teste: recusa, exclusão com backup, lista limpa |
+| **Menu de contexto** na lista de scripts (workspace Código) e na lista de scripts/grafos (workspace Lógica): Renomear…/Excluir… com confirmação | compilado; não exercitado no teste de fumaça |
+| Workspace inteiro (2026-10-28) | **441 testes, 0 falhas**; fmt dos crates alterados e clippy ok; editor compila; teste de fumaça **11/11** |
+
+**Não verificado:** renomear/excluir pela janela; leitor de tela.
+
+## Antes: vários scripts por objeto (2026-10-27)
+
+| O quê | Verificação |
+|---|---|
+| **Primeiro script** continua na linha `Script` do objeto; o **segundo** vira entidade-filha com `owner` e `order`; anexar de novo o mesmo arquivo não duplica | 1 teste de ponta a ponta: dois scripts no mesmo objeto, os dois rodam no mesmo quadro |
+| **Ordem e isolamento**: objeto → `order` → arquivo; uma falha desliga só aquele anexo | testado pelo host; o teste confere os dois logs |
+| **Salvar, reabrir, duplicar e excluir**: os anexos viajam com o objeto e não contam como objetos na Hierarquia | teste: fecha e abre, duplica, exclui e confere as contagens |
+| Janela: **Anexar** acrescenta scripts; os anexos aparecem sob o objeto; `owner` é somente leitura, `order`/`enabled` editáveis | compilado; não exercitado no teste de fumaça |
+| Workspace inteiro | **413 testes, 0 falhas** (naquela etapa); fmt/clippy ok; editor compila; teste de fumaça **11/11** |
+
+**Não verificado:** vários scripts pela janela (só pelo protocolo/teste); reordenar por arrastar; leitor de tela.
+
+## Antes: Luau, duas vistas e idioma (2026-10-27)
+
+| O quê | Verificação |
+|---|---|
+| **As duas vistas de nós existem**: **Contorno** (lista/sheet, acessível por teclado) e **Caixas e fios** (canvas), ambas sobre o mesmo `graph.json` e as mesmas operações | **visto** no display virtual; o teste de fumaça edita e arrasta nas duas |
+| **Não há Event Sheet/Gameplay IR separado**: o Contorno é a vista em lista do grafo; o grafo compila direto para Aipo (decisão no DR-30) | documentado; nenhuma camada IR separada |
+| **Luau**: será implementado depois da integração da Aipo; uma linguagem por projeto. Até lá, `"luau"` no manifesto é **válido com aviso** (`project.manifest.luau_pending`) e não bloqueia abrir o projeto | 2 testes: validação do manifesto e carregamento com aviso |
+| **Idioma de nós/sheets**: plano registrado; arquivos guardam ids, catálogo concentra os textos, Contorno e canvas compartilham a tradução; o Aipo gerado não é traduzido | DR-19 (revisão 2026-10-27) |
+| Workspace inteiro | **412 testes, 0 falhas** (naquela etapa); fmt/clippy ok; editor compila; teste de fumaça **11/11** |
+
+**Não verificado:** a tradução em si ainda não foi feita; o Luau ainda não roda.
+
+## Antes: edição de malha na janela (2026-10-27)
+
+| O quê | Verificação |
+|---|---|
+| **Vértices visíveis no modo de edição**: todos os vértices da malha aparecem como pontos; os escolhidos ficam maiores e brancos | **visto (display virtual)**; teste: um marcador por vértice no modo vértice e nenhum no modo face |
+| **Barra Malha**: inserir, extrudar, chanfro, corte em laço, subdividir, dissolver, fundir, fundir por distância, apagar faces e virar normais | **visto**: inset aplicado num cubo; bevel inválido mostrou a razão; barra com distância, cortes e segmentos |
+| Atalhos de modelagem (`I`, `Ctrl+E`, `Ctrl+B`, `Ctrl+R`, `Ctrl+X`, `M`, `X`) e menu **Malha** na barra superior | compilado; os atalhos só valem com o viewport em foco e no modo de edição |
+| Modo de edição avisa o motor (`mesh.edit_mode`, `mesh.component_mode`); ao sair ou trocar de projeto, os marcadores somem | teste do overlay e chamadas no caminho da janela |
+| Workspace inteiro | **410 testes, 0 falhas** (naquela etapa); fmt/clippy ok; editor compila; teste de fumaça **11/11** |
+
+**Não verificado:** bevel/loop cut/merge em todas as combinações de seleção pela janela; leitor de tela; malhas grandes.
+
+## Antes: colisão do jogador e fluxo de código (2026-10-27)
+
+| O quê | Verificação |
+|---|---|
+| Prefab **Personagem jogável**: cilindro com `Character.player` e cápsula sólida | 1 teste de ponta a ponta (nasce, fica no chão, anda com o teclado) |
+| **`PlayerStart` no Piso não vence o marcador**: câmera e herói usam o ponto de início sem forma | 1 teste: o marcador em y = 1,7 vence o piso em y = −0,25 e o herói nasce a 0,95 |
+| Project Doctor avisa quando há vários inícios e um está num objeto desenhado | aviso novo em `check` |
+| **Personagem com `RigidBody` dinâmico** passa a ser corrigido para cinemático, em vez de ficar parado | teste: o corpo é corrigido, o personagem fica de pé e o aviso aparece |
+| **Personagem com apenas um gatilho** recebe a cápsula automática de caminhada | teste: o personagem fica de pé e anda |
+| **Fluxo código ↔ nós decidido:** grafo é a fonte; código é somente leitura; “Transformar em script” separa o texto; `.aipo` não vira grafo automaticamente | registrado no DR-30 (revisão 2026-10-27) |
+| Workspace inteiro | **409 testes, 0 falhas** (naquela etapa); fmt/clippy ok; editor compila; teste de fumaça **11/11** |
+
+**Não verificado:** o prefab novo e a correção do corpo dinâmico na janela real (cobertos por testes de domínio/editor); leitor de tela.
+
+## Antes: área de programação e canvas (2026-10-27)
+
+| O quê | Verificação |
+|---|---|
+| Canvas: arrastar caixas, **puxar fios** de uma saída até uma entrada, clique-clique, seleção múltipla (`Ctrl+clique`, `Ctrl+A`), **agrupar/desagrupar** e mover o grupo | **visto (display virtual)**: fio criado e gravado, posições salvas, grupo criado e movido; teste do layout/grupos |
+| Canvas: pan (arrastar o fundo/botão do meio), zoom 25–400 % (`Ctrl`+roda, `+`/`-`, botões), **Centralizar** (`Home`/botão) e canvas amplo | **visto**: zoom 110 → 149 %, pan e centralizar |
+| Pinos de objeto: **Escolher objeto…** com busca por id e nome | **visto**: #9 escolhido e gravado no grafo |
+| Workspace Lógica lista scripts `.aipo` e grafos, marca os ligados ao objeto e mostra arquivos pedidos mas ausentes; o workspace Código também lista os ausentes e cria com dois cliques | 1 teste; **visto** na lista |
+| **Transformar em script** copia o código gerado para um `.aipo` independente; **Ver como código** mapeia linha → nó | compilado; não exercitado no teste de fumaça |
+| Workspace inteiro | **404 testes, 0 falhas**; `cargo fmt` e `clippy -D warnings` ok; editor compila; teste de fumaça **11/11** |
+
+**Não verificado:** leitor de tela no canvas; grafo grande; o clique em **Transformar em script** e a lista de scripts ausentes pela janela.
+
+## Antes: integridade de dados (2026-10-27)
 
 | O quê | Verificação |
 |---|---|
@@ -188,7 +275,7 @@ Primeira versão do redesenho (uma barra no topo, hierarquia em árvore, inspeto
 
 | O quê | Verificação |
 |---|---|
-| Crate **`petunia_script`**: compila e roda scripts **Aipo**, uma VM por arquivo, `on_start` / `on_update` / `on_event`, orçamento de 100 mil instruções por chamada ([doc](../03-linguagens-e-api/05-script-host.md), [DR-25](../06-decisoes/registro-de-decisoes.md)) | 20 testes (ciclo de vida, orçamento, falha tratada e não tratada, sandbox, eventos, isolamento, determinismo, simulação) |
+| Crate **`petunia_script`**: compila e roda scripts **Aipo**, uma VM por anexo (objeto + script), `on_start` / `on_update` / `on_event`, orçamento de 100 mil instruções por chamada ([doc](../03-linguagens-e-api/05-script-host.md), [DR-25](../06-decisoes/registro-de-decisoes.md)) | 17 testes de host (ciclo de vida, orçamento, falha tratada e não tratada, sandbox, eventos, isolamento por objeto, determinismo, simulação) + 5 testes do leitor/escritor IR + 11 testes de IR → grafo |
 | API do script (`world`, `game`, `log`) descrita **uma vez** como dado: superfície do compilador, funções nativas e ajuda do editor | teste de coerência da tabela |
 | Tabela `Script` (`file`, `enabled`); `petunia check` lista erros de script com linha e coluna | testado de ponta a ponta (sai com código 1) |
 | `petunia run` executa os scripts todo quadro | **não rodou** (precisa de janela) |
@@ -280,7 +367,8 @@ Detalhes: [editor](../02-arquitetura/11-editor.md), [paridade](../02-arquitetura
 | Item | Estado | Evidência |
 |---|---|---|
 | `cargo fmt`, `cargo clippy --workspace --all-targets -D warnings` | **passou** | limpo |
-| Suíte completa, **402 testes** (2026-10-27) | **passou** | mesh 181 (164 do Petunia3D), script 55 (15 + 16 do host + 7 de física + 17 de grafo), editor 49, graph 21 (12 + 9 de edição), physics 18, sculpt 17, render 16, world 14, math 11, commands 6, import 6, input 3, project 3, schema 2 |
+| Suíte completa, **441 testes** (2026-10-28) | **passou** | inclui 6 de Aipo → IR, 14 de IR → grafo, 1 de `script.to_graph` no editor, 1 de isolamento por objeto e 14 de modelo de grafo com migração v1→v2 |
+| Suíte completa, **414 testes** (2026-10-27) | **passou** | mesh 181 (164 do Petunia3D), script 55 (15 + 16 do host + 7 de física + 17 de grafo), editor 57, graph 22 (13 + 9 de edição), physics 18, sculpt 17, render 16, world 14, math 11, commands 6, import 6, input 3, project 6, schema 2 |
 | Formas orientadas para fora (caixa, rampa, cilindro, cone, esfera, escada) | **passou** | teste por geometria, em vários níveis de detalhe |
 | Gizmo: acertar a alça, mover só no eixo e no snap, girar em passos, escalar sem zerar | **passou** | 6 testes em `petunia_editor` |
 | Um arrasto vira **um** passo de desfazer; sem mudança, nenhum | **passou** | teste de gesto |

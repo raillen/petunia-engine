@@ -155,9 +155,13 @@ pub fn project_diagnostics(root: &Path, world: &World) -> Vec<Diagnostic> {
             continue;
         }
         let id = world.persistent_id(handle).map_or(0, |id| id.0);
+        let owner = match world.get(handle, "Script", "owner") {
+            Ok(Value::Int(owner)) if *owner > 0 => *owner as u64,
+            _ => id,
+        };
         found.push(Diagnostic::warning(
             "SCRIPT_MISSING",
-            &format!("entidade {id}"),
+            &format!("entidade {owner}"),
             &format!(
                 "o objeto aponta para o script `{file}`, que não existe em {SCRIPTS_DIRECTORY}/"
             ),

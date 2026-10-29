@@ -69,7 +69,7 @@ O crate `petunia_script` embute a linguagem **Aipo** ([DR-25](06-decisoes/regist
 
 | Crate | Para que serve | Recursos |
 |---|---|---|
-| `aipo-source`, `aipo-diagnostics`, `aipo-syntax`, `aipo-hir`, `aipo-sema`, `aipo-ir`, `aipo-bytecode` | Compilar e dar erros com linha e coluna | padrão |
+| `aipo-source`, `aipo-diagnostics`, `aipo-syntax`, `aipo-ast`, `aipo-hir`, `aipo-sema`, `aipo-ir`, `aipo-bytecode` | Compilar e dar erros com linha e coluna; `aipo-ast` fornece os operadores do leitor IR (DR-34) | padrão |
 | `aipo-vm` | Executar, com orçamento de instruções | **sem** recursos padrão |
 | `aipo-runtime`, `aipo-stdlib` | Biblioteca padrão (com `sh`, `fs`, `env`, `io` **removidos** pelo host) | `aipo-stdlib` **sem** recursos padrão (sem `regex`) |
 | `aipo-host` | Capabilities e handles | padrão |

@@ -112,6 +112,18 @@ struct NodeRef<'a> {
 
 type Scope = BTreeSet<(u32, String)>;
 
+/// What the compiler needs to know about a function node before writing calls to it.
+#[derive(Clone, Debug)]
+struct FunctionSignature {
+    id: u32,
+    params: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct GlobalSpec {
+    mutable: bool,
+}
+
 struct Generator<'a> {
     document: &'a GraphDocument,
     nodes: BTreeMap<u32, NodeRef<'a>>,
@@ -135,6 +147,10 @@ struct Generator<'a> {
     loop_depth: usize,
     /// Whether the generated code says what ran, for play mode (N5).
     debug: bool,
+    functions: BTreeMap<String, FunctionSignature>,
+    globals: BTreeMap<String, GlobalSpec>,
+    current_function: Option<String>,
+    function_params: BTreeSet<String>,
 }
 
 fn error(node: Option<u32>, pin: Option<&str>, code: &'static str, message: String) -> Diagnostic {
@@ -157,6 +173,22 @@ fn warning(node: Option<u32>, code: &'static str, message: String) -> Diagnostic
     }
 }
 
+fn each_uses_index(node: &GraphNode) -> bool {
+    match node.params.get("with_index") {
+        None => true,
+        Some(value) => value.as_str() != Some("false"),
+    }
+}
+
+fn parse_parameters(node: &GraphNode) -> Vec<String> {
+    text_setting(node, "params")
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 impl<'a> Generator<'a> {
     fn new(document: &'a GraphDocument, catalog: &'a Catalog, debug: bool) -> Self {
         let nodes = document
@@ -170,6 +202,47 @@ impl<'a> Generator<'a> {
                         spec: catalog.get(&node.kind),
                     },
                 )
+            })
+            .collect();
+        let functions = document
+            .nodes
+            .iter()
+            .filter_map(|node| {
+                let spec = catalog.get(&node.kind)?;
+                if !matches!(spec.lowering, Lowering::Function) {
+                    return None;
+                }
+                let name = text_setting(node, "name");
+                if name.trim().is_empty() {
+                    return None;
+                }
+                Some((
+                    name,
+                    FunctionSignature {
+                        id: node.id,
+                        params: parse_parameters(node),
+                    },
+                ))
+            })
+            .collect();
+        let globals = document
+            .nodes
+            .iter()
+            .filter_map(|node| {
+                let spec = catalog.get(&node.kind)?;
+                if !matches!(spec.lowering, Lowering::Global) {
+                    return None;
+                }
+                let name = text_setting(node, "name");
+                if name.trim().is_empty() {
+                    return None;
+                }
+                Some((
+                    name,
+                    GlobalSpec {
+                        mutable: text_setting(node, "mode") == "var",
+                    },
+                ))
             })
             .collect();
         Self {
@@ -189,6 +262,10 @@ impl<'a> Generator<'a> {
             current_event: 0,
             loop_depth: 0,
             debug,
+            functions,
+            globals,
+            current_function: None,
+            function_params: BTreeSet::new(),
         }
     }
 
@@ -204,6 +281,30 @@ impl<'a> Generator<'a> {
     fn run(&mut self) {
         self.check_nodes();
         self.check_edges();
+        let globals: Vec<u32> = self
+            .nodes
+            .iter()
+            .filter_map(|(id, entry)| {
+                let spec = entry.spec?;
+                matches!(spec.lowering, Lowering::Global).then_some(*id)
+            })
+            .collect();
+        for id in globals {
+            self.emit_global(id);
+        }
+        let mut functions: Vec<(String, u32)> = self
+            .functions
+            .iter()
+            .map(|(name, signature)| (name.clone(), signature.id))
+            .collect();
+        functions.sort();
+        let mut seen_functions = BTreeSet::new();
+        for (name, id) in functions {
+            if !seen_functions.insert(name.clone()) {
+                continue;
+            }
+            self.emit_function(id, &name);
+        }
         let mut events: Vec<(String, u32)> = Vec::new();
         for (id, entry) in &self.nodes {
             if let Some(spec) = entry.spec
@@ -235,6 +336,8 @@ impl<'a> Generator<'a> {
     /// Ghost nodes and parameters that do not fit their node.
     fn check_nodes(&mut self) {
         let entries: Vec<NodeRef<'a>> = self.nodes.values().copied().collect();
+        let mut function_names = BTreeSet::new();
+        let mut global_names = BTreeSet::new();
         for entry in entries {
             let id = entry.node.id;
             let Some(spec) = entry.spec else {
@@ -268,9 +371,11 @@ impl<'a> Generator<'a> {
                                 ));
                             }
                         }
-                        SettingChoices::Text => {
+                        SettingChoices::Text | SettingChoices::TextOptional => {
                             let valid = value.as_str().is_some_and(|text| {
-                                !text.trim().is_empty() && text.len() <= MAX_NAME_BYTES
+                                (!text.trim().is_empty()
+                                    || matches!(setting.choices, SettingChoices::TextOptional))
+                                    && text.len() <= MAX_NAME_BYTES
                             });
                             if !valid {
                                 let message = format!(
@@ -322,6 +427,96 @@ impl<'a> Generator<'a> {
                     ));
                 }
             }
+            match &spec.lowering {
+                Lowering::Function => {
+                    let name = text_setting(entry.node, "name");
+                    if !function_names.insert(name.clone()) {
+                        let message = format!(
+                            "o {} repete a função '{}'; cada função só pode aparecer uma vez no grafo",
+                            self.title(id),
+                            name
+                        );
+                        self.diagnostics.push(error(
+                            Some(id),
+                            Some("name"),
+                            "FUNCTION_DUPLICATE",
+                            message,
+                        ));
+                    }
+                    let params = parse_parameters(entry.node);
+                    if params.len() > 8 {
+                        let message = format!(
+                            "a função '{}' tem {} parâmetros; o máximo é 8",
+                            name,
+                            params.len()
+                        );
+                        self.diagnostics.push(error(
+                            Some(id),
+                            Some("params"),
+                            "FUNCTION_TOO_MANY_PARAMS",
+                            message,
+                        ));
+                    }
+                    let mut seen = BTreeSet::new();
+                    for param in &params {
+                        if !seen.insert(param.clone()) {
+                            let message =
+                                format!("a função '{}' repete o parâmetro '{}'", name, param);
+                            self.diagnostics.push(error(
+                                Some(id),
+                                Some("params"),
+                                "FUNCTION_DUPLICATE_PARAM",
+                                message,
+                            ));
+                        }
+                        if param.len() > MAX_NAME_BYTES {
+                            let message = format!(
+                                "o parâmetro '{}' da função '{}' é grande demais",
+                                param, name
+                            );
+                            self.diagnostics.push(error(
+                                Some(id),
+                                Some("params"),
+                                "FUNCTION_PARAM_TOO_LONG",
+                                message,
+                            ));
+                        }
+                    }
+                }
+                Lowering::Global => {
+                    let name = text_setting(entry.node, "name");
+                    if !global_names.insert(name.clone()) {
+                        let message = format!(
+                            "o {} repete a global '{}'; cada global só pode aparecer uma vez",
+                            self.title(id),
+                            name
+                        );
+                        self.diagnostics.push(error(
+                            Some(id),
+                            Some("name"),
+                            "GLOBAL_DUPLICATE",
+                            message,
+                        ));
+                    }
+                }
+                Lowering::Call | Lowering::CallValue => {
+                    let name = text_setting(entry.node, "name");
+                    if !self.functions.contains_key(&name) {
+                        let message = format!(
+                            "o {} chama '{}', que não existe neste grafo",
+                            self.title(id),
+                            name
+                        );
+                        self.diagnostics.push(error(
+                            Some(id),
+                            Some("name"),
+                            "FUNCTION_UNKNOWN",
+                            message,
+                        ));
+                    }
+                }
+                _ => {}
+            }
         }
     }
 
@@ -363,6 +558,22 @@ impl<'a> Generator<'a> {
                 ));
                 continue;
             };
+            if matches!(from_spec.lowering, Lowering::Each)
+                && edge.from.pin == "index"
+                && !each_uses_index(from.node)
+            {
+                let message = format!(
+                    "o {} está no modo 'Só o item/chave'; ligue a posição só depois de escolher 'Com posição/chave'",
+                    from_spec.title
+                );
+                self.diagnostics.push(error(
+                    Some(edge.from.node),
+                    Some("with_index"),
+                    "EACH_INDEX_UNAVAILABLE",
+                    message,
+                ));
+                continue;
+            }
             match (from_pin.kind, to_pin.kind) {
                 (PinKind::Exec, PinKind::Exec) => {
                     let key = (edge.from.node, edge.from.pin.clone());
@@ -489,6 +700,54 @@ impl<'a> Generator<'a> {
                 );
             }
         }
+    }
+
+    fn emit_global(&mut self, id: u32) {
+        let Some(entry) = self.nodes.get(&id).copied() else {
+            return;
+        };
+        let Some(spec) = entry.spec else {
+            return;
+        };
+        let name = text_setting(entry.node, "name");
+        let mode = text_setting(entry.node, "mode");
+        let value = self.input(id, "value", &Scope::new(), &mut Vec::new());
+        self.reached.insert(id);
+        if let Some(value) = value {
+            let keyword = if mode == "var" { "var" } else { "let" };
+            self.line(&format!("{keyword} {name} = {value}"), Some(id));
+            self.line("", None);
+        } else {
+            let message = format!("o {} precisa de um valor inicial", spec.title);
+            self.diagnostics
+                .push(error(Some(id), Some("value"), "PIN_MISSING", message));
+        }
+    }
+
+    fn emit_function(&mut self, id: u32, name: &str) {
+        let Some(entry) = self.nodes.get(&id).copied() else {
+            return;
+        };
+        let params = parse_parameters(entry.node);
+        self.reached.insert(id);
+        self.current_event = id;
+        self.current_function = Some(name.to_string());
+        self.function_params = params.iter().cloned().collect();
+        self.line(&format!("fn {name}({}) {{", params.join(", ")), Some(id));
+        self.indent += 1;
+        self.mark(id);
+        let before = self.body.len();
+        if let Some(first) = self.next(id, "then") {
+            self.emit_chain(first, Scope::new(), 1);
+        }
+        if self.body.len() == before {
+            self.line("return", Some(id));
+        }
+        self.indent -= 1;
+        self.line("}", Some(id));
+        self.line("", None);
+        self.current_function = None;
+        self.function_params.clear();
     }
 
     fn emit_event(&mut self, id: u32, handler: &str) {
@@ -709,6 +968,15 @@ impl<'a> Generator<'a> {
                 (Lowering::Wait, NodeClass::Flow) => {
                     self.parts = 0;
                     self.mark(id);
+                    if self.current_function.is_some() {
+                        let message = format!(
+                            "o {} está dentro de uma função; uma espera não pode ser retomada por uma chamada de função",
+                            self.title(id)
+                        );
+                        self.diagnostics
+                            .push(error(Some(id), None, "WAIT_IN_FUNCTION", message));
+                        return;
+                    }
                     if let Some(seconds) = self.input(id, "seconds", &scope, &mut Vec::new()) {
                         self.waits.insert(id);
                         self.line(
@@ -757,14 +1025,19 @@ impl<'a> Generator<'a> {
                     self.mark(id);
                     let list = self.input(id, "list", &scope, &mut Vec::new());
                     if let (Some(list), Some(body)) = (list, self.next(id, "body")) {
-                        self.line(
-                            &format!("each position{id}, item{id} in {list} {{"),
-                            Some(id),
-                        );
+                        let with_index = each_uses_index(node);
+                        let names = if with_index {
+                            format!("position{id}, item{id}")
+                        } else {
+                            format!("item{id}")
+                        };
+                        self.line(&format!("each {names} in {list} {{"), Some(id));
                         self.indent += 1;
                         let mut inner = scope.clone();
-                        inner.insert((id, "index".to_string()));
                         inner.insert((id, "item".to_string()));
+                        if with_index {
+                            inner.insert((id, "index".to_string()));
+                        }
                         self.loop_depth += 1;
                         self.emit_chain(body, inner, depth + 1);
                         self.loop_depth -= 1;
@@ -776,6 +1049,185 @@ impl<'a> Generator<'a> {
                             .push(warning(Some(id), "FLOW_EMPTY", message));
                     }
                     current = self.next(id, "done");
+                }
+                (Lowering::While, NodeClass::Flow) => {
+                    self.parts = 0;
+                    self.mark(id);
+                    let condition = self.input(id, "condition", &scope, &mut Vec::new());
+                    let body = self.next(id, "body");
+                    if body.is_none() {
+                        let message =
+                            format!("o {} não tem nada em 'A cada volta'", self.title(id));
+                        self.diagnostics
+                            .push(warning(Some(id), "FLOW_EMPTY", message));
+                    }
+                    if let (Some(condition), Some(body)) = (condition, body) {
+                        self.line(&format!("while {condition} {{"), Some(id));
+                        self.indent += 1;
+                        self.loop_depth += 1;
+                        self.emit_chain(body, scope.clone(), depth + 1);
+                        self.loop_depth -= 1;
+                        self.indent -= 1;
+                        self.line("}", Some(id));
+                    }
+                    current = self.next(id, "done");
+                }
+                (Lowering::Loop, NodeClass::Flow) => {
+                    self.parts = 0;
+                    self.mark(id);
+                    if let Some(body) = self.next(id, "body") {
+                        self.line("loop {", Some(id));
+                        self.indent += 1;
+                        self.loop_depth += 1;
+                        self.emit_chain(body, scope.clone(), depth + 1);
+                        self.loop_depth -= 1;
+                        self.indent -= 1;
+                        self.line("}", Some(id));
+                    } else {
+                        let message =
+                            format!("o {} não tem nada em 'A cada volta'", self.title(id));
+                        self.diagnostics
+                            .push(warning(Some(id), "FLOW_EMPTY", message));
+                    }
+                    current = self.next(id, "done");
+                }
+                (Lowering::Break, NodeClass::Flow) => {
+                    self.parts = 0;
+                    self.mark(id);
+                    if self.loop_depth == 0 {
+                        let message = format!(
+                            "o {} está fora de uma repetição; ele só vale dentro de 'Enquanto', 'Para cada', 'Repetir' ou 'Repetir sem parar'",
+                            self.title(id)
+                        );
+                        self.diagnostics
+                            .push(error(Some(id), None, "BREAK_OUTSIDE_LOOP", message));
+                    } else {
+                        self.line("break", Some(id));
+                    }
+                    return;
+                }
+                (Lowering::Continue, NodeClass::Flow) => {
+                    self.parts = 0;
+                    self.mark(id);
+                    if self.loop_depth == 0 {
+                        let message = format!(
+                            "o {} está fora de uma repetição; ele só vale dentro de 'Enquanto', 'Para cada', 'Repetir' ou 'Repetir sem parar'",
+                            self.title(id)
+                        );
+                        self.diagnostics.push(error(
+                            Some(id),
+                            None,
+                            "CONTINUE_OUTSIDE_LOOP",
+                            message,
+                        ));
+                    } else {
+                        self.line("continue", Some(id));
+                    }
+                    return;
+                }
+                (Lowering::Call, NodeClass::Action) => {
+                    self.parts = 0;
+                    self.mark(id);
+                    let name = text_setting(node, "name");
+                    if let Some(signature) = self.functions.get(&name).cloned()
+                        && let Some(arguments) = self.call_arguments(id, &signature, &scope)
+                    {
+                        self.line(&format!("{name}({})", arguments.join(", ")), Some(id));
+                    }
+                    current = self.next(id, "then");
+                }
+                (Lowering::GlobalSet, NodeClass::Action) => {
+                    self.parts = 0;
+                    self.mark(id);
+                    let name = text_setting(node, "name");
+                    match self.globals.get(&name).copied() {
+                        Some(global) if global.mutable => {
+                            if let Some(value) = self.input(id, "value", &scope, &mut Vec::new()) {
+                                self.line(&format!("{name} = {value}"), Some(id));
+                            }
+                        }
+                        Some(_) => {
+                            let message = format!(
+                                "o {} grava '{}', que foi declarado como 'Não muda'",
+                                self.title(id),
+                                name
+                            );
+                            self.diagnostics.push(error(
+                                Some(id),
+                                Some("name"),
+                                "GLOBAL_IMMUTABLE",
+                                message,
+                            ));
+                        }
+                        None => {
+                            let message = format!(
+                                "o {} grava '{}', que não existe neste grafo",
+                                self.title(id),
+                                name
+                            );
+                            self.diagnostics.push(error(
+                                Some(id),
+                                Some("name"),
+                                "GLOBAL_UNKNOWN",
+                                message,
+                            ));
+                        }
+                    }
+                    current = self.next(id, "then");
+                }
+                (Lowering::LocalSet, NodeClass::Action) => {
+                    self.parts = 0;
+                    self.mark(id);
+                    let name = text_setting(node, "name");
+                    if self.current_function.is_none() {
+                        let message = format!(
+                            "o {} usa uma variável local fora de uma função",
+                            self.title(id)
+                        );
+                        self.diagnostics.push(error(
+                            Some(id),
+                            None,
+                            "LOCAL_OUTSIDE_FUNCTION",
+                            message,
+                        ));
+                    } else if let Some(value) = self.input(id, "value", &scope, &mut Vec::new()) {
+                        self.line(&format!("{name} = {value}"), Some(id));
+                    }
+                    current = self.next(id, "then");
+                }
+                (Lowering::LocalDeclare, NodeClass::Action) => {
+                    self.parts = 0;
+                    self.mark(id);
+                    let name = text_setting(node, "name");
+                    if self.current_function.is_none() {
+                        let message = format!(
+                            "o {} declara uma variável local fora de uma função",
+                            self.title(id)
+                        );
+                        self.diagnostics.push(error(
+                            Some(id),
+                            None,
+                            "LOCAL_OUTSIDE_FUNCTION",
+                            message,
+                        ));
+                    } else if let Some(value) = self.input(id, "value", &scope, &mut Vec::new()) {
+                        let keyword = if text_setting(node, "mode") == "var" {
+                            "var"
+                        } else {
+                            "let"
+                        };
+                        self.line(&format!("{keyword} {name} = {value}"), Some(id));
+                    }
+                    current = self.next(id, "then");
+                }
+                (Lowering::Return, NodeClass::Flow) => {
+                    self.parts = 0;
+                    self.mark(id);
+                    match self.input(id, "value", &scope, &mut Vec::new()) {
+                        Some(value) => self.line(&format!("return {value}"), Some(id)),
+                        None => self.line("return", Some(id)),
+                    }
+                    return;
                 }
                 _ => {
                     let message = format!(
@@ -813,6 +1265,9 @@ impl<'a> Generator<'a> {
         }
         if pin.default == PinDefault::ThisObject {
             return Some("entity".to_string());
+        }
+        if pin.default == PinDefault::Optional {
+            return None;
         }
         let message = format!(
             "o {}: falta ligar ou preencher '{}'",
@@ -899,8 +1354,13 @@ impl<'a> Generator<'a> {
         let mut operands = Vec::new();
         let mut ok = true;
         for pin in data_inputs(spec) {
+            let optional = spec
+                .pin(&pin, Direction::In)
+                .map(|found| found.default == PinDefault::Optional)
+                .unwrap_or(false);
             match self.input(id, &pin, scope, stack) {
                 Some(text) => operands.push(text),
+                None if optional => {}
                 None => ok = false,
             }
         }
@@ -931,6 +1391,80 @@ impl<'a> Generator<'a> {
                     operand(0)
                 )
             }
+            Lowering::Field => format!("{}.{}", operand(0), text_setting(entry.node, "name")),
+            Lowering::Index => format!("{}[{}]", operand(0), operand(1)),
+            Lowering::List => {
+                let items: Vec<String> = (1..=16)
+                    .filter_map(|index| self.input(id, &format!("item{index}"), scope, stack))
+                    .collect();
+                format!("[{}]", items.join(", "))
+            }
+            Lowering::Dict => {
+                let mut pairs = Vec::new();
+                for index in 1..=8 {
+                    let key = self.input(id, &format!("key{index}"), scope, stack);
+                    let value = self.input(id, &format!("value{index}"), scope, stack);
+                    if let (Some(key), Some(value)) = (key, value) {
+                        pairs.push(format!("{key}: {value}"));
+                    }
+                }
+                format!("{{{}}}", pairs.join(", "))
+            }
+            Lowering::CallValue => {
+                let name = text_setting(entry.node, "name");
+                let signature = self.functions.get(&name)?.clone();
+                let arguments = self.call_arguments(id, &signature, scope)?;
+                format!("{name}({})", arguments.join(", "))
+            }
+            Lowering::Param => {
+                let name = text_setting(entry.node, "name");
+                if self.current_function.is_none() {
+                    let message =
+                        format!("o {} usa um parâmetro fora de uma função", self.title(id));
+                    self.diagnostics
+                        .push(error(Some(id), None, "PARAM_OUTSIDE_FUNCTION", message));
+                    return None;
+                }
+                if !self.function_params.contains(&name) {
+                    let message = format!(
+                        "o {} usa '{}', que não é parâmetro da função {}",
+                        self.title(id),
+                        name,
+                        self.current_function.as_deref().unwrap_or("")
+                    );
+                    self.diagnostics
+                        .push(error(Some(id), Some("name"), "PARAM_UNKNOWN", message));
+                    return None;
+                }
+                name
+            }
+            Lowering::GlobalGet => {
+                let name = text_setting(entry.node, "name");
+                if !self.globals.contains_key(&name) {
+                    let message = format!(
+                        "o {} lê '{}', que não existe neste grafo",
+                        self.title(id),
+                        name
+                    );
+                    self.diagnostics
+                        .push(error(Some(id), Some("name"), "GLOBAL_UNKNOWN", message));
+                    return None;
+                }
+                name
+            }
+            Lowering::LocalGet => {
+                let name = text_setting(entry.node, "name");
+                if self.current_function.is_none() {
+                    let message = format!(
+                        "o {} usa uma variável local fora de uma função",
+                        self.title(id)
+                    );
+                    self.diagnostics
+                        .push(error(Some(id), None, "LOCAL_OUTSIDE_FUNCTION", message));
+                    return None;
+                }
+                name
+            }
             _ => {
                 let message = format!("o {} não é um valor", self.title(id));
                 self.diagnostics
@@ -940,12 +1474,33 @@ impl<'a> Generator<'a> {
         })
     }
 
+    fn call_arguments(
+        &mut self,
+        id: u32,
+        signature: &FunctionSignature,
+        scope: &Scope,
+    ) -> Option<Vec<String>> {
+        let mut arguments = Vec::new();
+        let mut ok = true;
+        for (index, _) in signature.params.iter().enumerate() {
+            self.parts = 0;
+            match self.input(id, &format!("arg{}", index + 1), scope, &mut Vec::new()) {
+                Some(text) => arguments.push(text),
+                None => ok = false,
+            }
+        }
+        ok.then_some(arguments)
+    }
+
     fn warn_loose_nodes(&mut self) {
         let loose: Vec<(u32, bool)> = self
             .nodes
             .iter()
             .filter_map(|(id, entry)| {
                 let spec = entry.spec?;
+                if matches!(spec.lowering, Lowering::Global) {
+                    return None;
+                }
                 match spec.class {
                     NodeClass::Action | NodeClass::Flow if !self.reached.contains(id) => {
                         Some((*id, true))
@@ -1075,7 +1630,7 @@ fn setting_value(node: &GraphNode, spec: &NodeSpec, name: &str) -> String {
     spec.setting(name)
         .and_then(|setting| match &setting.choices {
             SettingChoices::OneOf(options) => options.first().map(|(value, _)| value.clone()),
-            SettingChoices::Text => None,
+            SettingChoices::Text | SettingChoices::TextOptional => None,
         })
         .unwrap_or_default()
 }
@@ -1119,7 +1674,24 @@ pub fn literal(value: &Json, data_type: DataType) -> Result<String, String> {
                     .ok_or_else(|| "o número não cabe".to_string()),
             },
             Json::String(text) => checked_quote(text),
-            _ => Err("só texto, número, sim/não ou nada cabem aqui".to_string()),
+            Json::Array(values) => {
+                let mut items = Vec::new();
+                for value in values {
+                    items.push(literal(value, DataType::Any)?);
+                }
+                Ok(format!("[{}]", items.join(", ")))
+            }
+            Json::Object(entries) => {
+                let mut items = Vec::new();
+                for (key, value) in entries {
+                    items.push(format!(
+                        "{}: {}",
+                        checked_quote(key)?,
+                        literal(value, DataType::Any)?
+                    ));
+                }
+                Ok(format!("{{{}}}", items.join(", ")))
+            }
         },
         DataType::Dict | DataType::List => {
             Err("este valor precisa vir de outro nó, não de uma constante".to_string())

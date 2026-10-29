@@ -23,6 +23,7 @@ use glutin_winit::{DisplayBuilder, GlWindow};
 use petunia_input::{ActionMap, ActionState, actions};
 use petunia_render::{
     FlyCamera, SculptCache, extract_frame, extract_sculpt_volumes, solid_shapes, start_camera,
+    start_camera_at,
 };
 use petunia_render_gl::GlRenderer;
 use petunia_script::{LoadReport, PhysicsSettings, PlayerInput, ScriptHost};
@@ -118,7 +119,9 @@ impl App {
     // The player is the program the person sees: its console is the terminal it was started from.
     #[allow(clippy::print_stderr)]
     fn new(world: World, config: PlayerConfig) -> Self {
-        let fly = start_camera(&world);
+        let fly = petunia_project::player_start(&world)
+            .map(|start| start_camera_at(start.eye, start.yaw_degrees))
+            .unwrap_or_else(|| start_camera(&world));
         // Colliders, bodies or characters turn physics on, with or without scripts.
         let physical = ["Collider", "RigidBody", "Character"].iter().any(|table| {
             !world

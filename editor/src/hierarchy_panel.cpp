@@ -129,7 +129,10 @@ void HierarchyPanel::reload() {
                 item->setTextAlignment(1, Qt::AlignRight | Qt::AlignVCenter);
                 item->setData(0, kEntityRole, id);
                 item->setData(0, kIconRole, TableIcons::forEntity(tables));
-                item->setToolTip(0, owned ? QStringLiteral("Colisão #%1 (scripts a acham pelo nome)").arg(id)
+                const QString ownedTip = tables.contains(QStringLiteral("Script"))
+                    ? QStringLiteral("Script #%1 ligado a este objeto").arg(id)
+                    : QStringLiteral("Parte do objeto #%1").arg(id);
+                item->setToolTip(0, owned ? ownedTip
                                           : QStringLiteral("#%1 · %2").arg(id).arg(tables.join(QStringLiteral(", "))));
                 if (owned) {
                     parent->setExpanded(true);

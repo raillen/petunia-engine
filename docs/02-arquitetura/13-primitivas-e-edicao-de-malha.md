@@ -1,10 +1,10 @@
 # Primitivas e edição de malha para construir mapas
 
-**Revisão:** 2026-10-25 · **Fonte:** leitura e medição de `petunia3D/crates/mesh` (22,9 mil linhas) e do código da engine (`LOCAL`). Decisão relacionada: [DR-22](../06-decisoes/registro-de-decisoes.md).
+**Revisão:** 2026-10-27 · **Fonte:** leitura e medição de `petunia3D/crates/mesh` (22,9 mil linhas) e do código da engine (`LOCAL`). Decisão relacionada: [DR-22](../06-decisoes/registro-de-decisoes.md).
 
 ## Resumo (TL;DR)
 
-Há **três níveis** de edição para construir mapas. **Os três já existem no motor.** O nível 3 (booleanos, inset, loop cut, bevel e o resto) chegou em 2026-10-25 e tem teste; **ainda falta a interface** (botões e atalhos no Qt): veja os [ganchos que faltam](#ganchos-da-interface-que-faltam).
+Há **três níveis** de edição para construir mapas. **Os três já existem no motor.** O nível 3 (booleanos, inset, loop cut, bevel e o resto) chegou em 2026-10-25 e tem teste; a **interface** chegou em 2026-10-27 (barra **Malha**, vértices visíveis e atalhos). Ainda faltam booleanos, faca e valor ao vivo pela janela: veja os [ganchos](#ganchos-da-interface-que-faltam).
 
 | Nível | O que é | Estado | Custo |
 |---|---|---|---|
@@ -155,7 +155,7 @@ Módulo `petunia_editor/src/mesh_tool.rs`, operações `mesh.*` (lista no [edito
 
 | Limite | Efeito |
 |---|---|
-| **Sem interface ainda** | Só por JSON (testes, agentes, scripts do editor). Botões e atalhos são o próximo passo |
+| **Interface parcial** | Inset, extrudar, chanfro, loop cut, subdividir, dissolver, fundir, apagar e virar já estão na barra **Malha**; booleanos, faca, valor ao vivo arrastando e inspetor de `Mesh` ainda não |
 | Bevel recusa arestas que se encontram num canto | Limite do Petunia3D; chanfre uma aresta de cada vez |
 | Sem UV nem material por face | Cor única por objeto. O módulo de UV (7 arquivos) ficou de fora |
 | Booleanos só entre **sólidos fechados** | Malha aberta (depois de apagar faces) é recusada com motivo |
@@ -164,7 +164,9 @@ Módulo `petunia_editor/src/mesh_tool.rs`, operações `mesh.*` (lista no [edito
 
 ### Ganchos da interface que faltam
 
-A interface Qt (`editor/src/`) está sendo redesenhada em outra sessão, por isso nada dela foi tocado. O que ela precisa ligar:
+> **Atualização (2026-10-27):** a barra **Malha** liga as operações de faces, arestas e vértices; o modo vértice mostra um ponto em cada vértice. A tabela abaixo continua sendo a lista do que falta (booleanos, faca, valor ao vivo, painel de números e inspetor de malha).
+
+A interface Qt (`editor/src/`) agora liga a barra **Malha**; o que ainda falta ligar:
 
 | Gancho | Sugestão | Operação |
 |---|---|---|

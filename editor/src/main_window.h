@@ -24,6 +24,7 @@ class QToolButton;
 class QToolBar;
 class QComboBox;
 class QDoubleSpinBox;
+class QSpinBox;
 class QCheckBox;
 class QPushButton;
 class QDockWidget;
@@ -68,6 +69,9 @@ private:
     void setFullMenus(bool on);
     void buildSculptBar();
     void syncSculptBar(const QJsonObject& snapshot);
+    void buildMeshActions();
+    void buildMeshBar();
+    void applyMesh(const QString& operation);
     void buildDocks();
 
     Reply perform(const QString& operation, const QJsonObject& fields, bool interactive = true);
@@ -155,6 +159,12 @@ private:
     // Set when the window is going away: a focused field emits editingFinished while it is
     // destroyed, and that must not reach an engine that is already gone.
     bool closing_ = false;
+    // Options bar of the mesh edit tools; only visible in edit mode.
+    QToolBar* meshBar_ = nullptr;
+    QList<QAction*> meshActions_;
+    QDoubleSpinBox* meshDistance_ = nullptr;
+    QSpinBox* meshCuts_ = nullptr;
+    QSpinBox* meshSegments_ = nullptr;
     // Options bar of the sculpting tools; only visible while one of them is active.
     QToolBar* sculptBar_ = nullptr;
     QComboBox* sculptMode_ = nullptr;

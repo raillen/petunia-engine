@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QString>
 #include <QWidget>
@@ -32,6 +33,8 @@ public:
 
     // Re-reads the list of graphs and the open one (when the workspace is shown).
     void reload();
+    // Opens a graph by name (after another workspace created it).
+    void open(const QString& name);
 
     // While the game runs: what ran and what this graph's conditions decided (N5).
     void showDebug(const QJsonObject& debug);
@@ -40,6 +43,8 @@ public:
 signals:
     // A short sentence for the window's status bar.
     void message(const QString& text);
+    // A `.aipo` script was chosen in the sidebar: the window opens it in the code workspace.
+    void scriptOpenRequested(const QString& name);
 
 private:
     void onSnapshot();
@@ -48,6 +53,7 @@ private:
     void refreshView();
     void renderView(const QJsonObject& view);
     void showCode();
+    void applyCode();
 
     void addEvent();
     void addAfter();
@@ -59,6 +65,11 @@ private:
     void redo();
     void createGraph();
     void attach();
+    void renameSelected();
+    void deleteSelected();
+    void asScript();
+    void groupSelection();
+    void ungroupSelection();
     void goToDiagnostic(const QJsonObject& diagnostic);
     void contextMenu(const QPoint& position);
     void showMode(const QString& mode);
@@ -78,6 +89,7 @@ private:
     QPlainTextEdit* code_;
     NodeCanvas* canvas_ = nullptr;
     PetuniaSegmented* switch_ = nullptr;
+    QWidget* canvasBar_ = nullptr;
     QListWidget* diagnostics_;
     QListWidget* debugRows_ = nullptr;
     QLabel* status_;
@@ -89,11 +101,22 @@ private:
     QToolButton* undoButton_;
     QToolButton* redoButton_;
     QToolButton* codeButton_;
+    QToolButton* asScriptButton_;
+    QToolButton* applyCodeButton_ = nullptr;
     QToolButton* attachButton_;
+    QToolButton* zoomOutButton_ = nullptr;
+    QToolButton* zoomInButton_ = nullptr;
+    QToolButton* fitButton_ = nullptr;
+    QToolButton* groupButton_ = nullptr;
+    QToolButton* ungroupButton_ = nullptr;
     QString openName_;
+    QString selectedName_;
+    QString selectedKind_;
     QString projectKey_;
     QString selectedKey_;
+    QJsonArray codeLines_;
     bool canUndo_ = false;
     bool canRedo_ = false;
     bool rendering_ = false;
+    bool canvasFitted_ = false;
 };

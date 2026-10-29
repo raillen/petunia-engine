@@ -25,7 +25,7 @@ pub use compile::{
 };
 pub use edit::{add_node, connect, continuation, disconnect, is_event, remove_node, set_param};
 pub use layout::{
-    GraphLayout, LAYOUT_SCHEMA_VERSION, LayoutNode, MAX_COORDINATE, MAX_LAYOUT_BYTES,
+    GraphLayout, LAYOUT_SCHEMA_VERSION, LayoutGroup, LayoutNode, MAX_COORDINATE, MAX_LAYOUT_BYTES,
 };
 pub use model::{
     GraphDocument, GraphEdge, GraphError, GraphNode, MAX_EDGES, MAX_FILE_BYTES, MAX_NAME_BYTES,

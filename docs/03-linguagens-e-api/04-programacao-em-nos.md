@@ -4,6 +4,8 @@
 
 > **Atualização (2026-10-26):** você decidiu por **sistema de nós no lugar do Event Sheet**. A seção "Nível 1 — Event Sheet" abaixo vira a **vista em contorno** do grafo, e a "Vista de nós" deixa de ser opcional e passa a ser o padrão. O desenho novo está em [DR-30](../06-decisoes/registro-de-decisoes.md). O restante (IR 1:1 com a API, "Ver como código", limites, nó-fantasma) continua valendo.
 
+> **Atualização (2026-10-28):** a ida e volta entre Aipo e IR deixou de ser estudo opcional e entrou em implementação com **subconjunto explícito** ([DR-34](../06-decisoes/registro-de-decisoes.md)). O que está fora do subconjunto é **recusado com linha e motivo**; não há conversão silenciosa.
+
 ## Resumo (TL;DR)
 
 **1:1 com a API** significa: **cada função da API é exatamente um nó**, com os mesmos parâmetros, tipos, faixas e erros. Nada existe só no visual, nada existe só no texto.
@@ -87,20 +89,27 @@ Para cada tela visual existe uma **vista em contorno/tabela** (lista hierárquic
 | Direção | Comportamento |
 |---|---|
 | **IR → texto** | Sempre possível. Botão **"Ver como código"** gera Aipo ou Luau legível, pelo **formatador canônico** (a Aipo tem uma forma só) |
-| **Texto → IR** | **Não** é exigido para código livre |
-| **Editar o código gerado** | O bloco **se separa** do visual e vira script (aviso claro). O inverso não é automático |
+| **Texto → IR** | **Sim, no subconjunto do DR-34.** Fora dele, diagnóstico com linha e motivo |
+| **Editar o código gerado** | Hoje o bloco ainda **se separa** do visual e vira script; ligar o texto editado de volta ao grafo é a etapa seguinte do DR-34 |
 
 A linguagem ativa é **uma por projeto** (decidido; padrão Aipo). Como o IR é neutro, **as telas visuais funcionam nas duas**. Isso corrige a minha primeira proposta, que limitava os nós à Aipo.
 
-### Estudo opcional: ida e volta completa (S5b)
+### Ida e volta (S5b) — em implementação
 
-Se um dia você quiser **qualquer** código Aipo virando nós e voltando, é possível, porque a Aipo tem formatador e uma só forma de escrever (`LOCAL`). Teste de aceite:
+O pedido de 2026-10-28 tornou a ida e volta um requisito, não um estudo opcional. A decisão está no [DR-34](../06-decisoes/registro-de-decisoes.md). O caminho é um **IR explícito**, não um espelho de toda a AST:
+
+- **Aipo → IR:** funções, `let`/`var`, atribuição, `if`/`elif`/`else`, `while`, `loop`, `repeat`, `each`, `break`, `continue`, `return`, chamadas, campos, índices, listas e dicionários; literais tipados.
+- **IR → Aipo:** saída canônica e determinística; ler a saída de novo devolve o mesmo IR.
+- **Fora do subconjunto:** `struct`, `enum`, `impl`, imports, closures, `attempt`, `await`, `?.`, ranges e pipelines são **recusados**, com linha e motivo (`IR_UNSUPPORTED`).
+- **Execução:** uma VM por anexo (objeto + script), para o estado de módulo não vazar entre objetos.
+
+O teste de aceite continua sendo a igualdade canônica, mas sobre o subconjunto:
 
 ```text
- formatar(texto)  ==  formatar( nós_para_texto( texto_para_nós( texto ) ) )
+formatar(texto) == formatar(IR_para_texto(texto_para_IR(texto)))
 ```
 
-Rodaria sobre o corpo de conformidade da Aipo (`docs/conformance/programs`, `LOCAL`). **Custo alto e valor incerto** pela lição do Godot. Fica como pesquisa depois da v1.
+**Feito em 2026-10-29:** leitor Aipo → IR e escritor IR → Aipo em `crates/petunia_script/src/source_ir.rs`; **IR → grafo** em `crates/petunia_script/src/ir_graph.rs` para evento, funções auxiliares (`flow.function`/`flow.call`/`flow.call_value`/`flow.param`/`flow.return`), globais (`flow.global`/`global.get`/`global.set`), variáveis locais de função (`local.*`), `let`/`var` de evento (via `var.get`/`var.set`), chamadas, `if`/`elif`/`else`, `while`, `loop`, `repeat` com índice, `each` com uma ou duas variáveis, `break`/`continue`, `return`, campos (`op.field`), índices (`op.index`), listas (`op.list`) e dicionários (`op.dict`); operação **`script.to_graph`**, **`graph.from_code`** e menu **Transformar em grafo…** no editor. Variáveis de evento usam um slot por handler (`on_update/speed`), e reatribuir um `let` é recusado. O **schema de grafo v2** adiciona `flow.while`, `flow.loop`, `flow.break`, `flow.continue` e a opção `with_index` em `flow.each`; grafos v1 são lidos e migrados para v2. Testes de ida e volta, recusa com diagnóstico, execução ponta a ponta e criação segura de um grafo novo. **Ainda falta:** exercitar o menu no smoke e o backend Luau (DR-06, depois da Aipo).
 
 ## O que o schema dá de graça
 
@@ -156,6 +165,21 @@ Para script livre, o depurador é uma **lacuna** da Aipo (veja [aproveitamento d
 | Quem prefere texto estranha | O texto é sempre uma opção equivalente |
 | Programa visual enorme | Quadros recolhíveis, busca, vista em contorno |
 
+## Idioma dos nós e das sheets (planejado)
+
+A tradução da interface vai incluir os **nomes, categorias, resumos e rótulos dos nós** e as frases do **Contorno (sheet)**. O desenho para isso já está preparado:
+
+| Peça | Regra |
+|---|---|
+| Arquivos | `scripts/<nome>.graph.json` guarda **ids** (`kind`, pinos, parâmetros), **nunca** rótulos traduzidos. O layout guarda ids de nós e grupos |
+| Catálogo | `catalog.rs` concentra títulos, categorias, resumos, rótulos de pinos e opções; `graph.rs` concentra os títulos dos eventos; `outline.rs` concentra as frases do Contorno |
+| Duas vistas | Contorno e Caixas e fios leem o **mesmo** `graph.view`; traduzir o catálogo uma vez cobre as duas |
+| Código | O Aipo gerado usa identificadores da linguagem, não rótulos de tela; não é traduzido |
+| Diagnósticos | Já têm **códigos estáveis** (`PIN_MISSING`, `GRAPH_REFUSED`…); a mensagem pode ser traduzida pela interface sem mudar o código |
+| Interface Qt | Entra junto com a tradução geral (`QTranslator`/`.ts`); a documentação segue `DR-19` (inglês canônico + pt-BR) |
+
+**Estado:** planejado; nada traduzido ainda. Os rótulos atuais continuam em português, centralizados nesses arquivos. Quando a tradução da interface começar, o inglês entra primeiro no catálogo e no Contorno.
+
 ## Decisões ligadas
 
-`DR-07` (IR e telas) · `DR-06` (uma linguagem por projeto).
+`DR-07` (IR e telas) · `DR-06` (uma linguagem por projeto) · `DR-19` (idioma da documentação).

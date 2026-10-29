@@ -4,7 +4,7 @@
 
 ## Resumo (TL;DR)
 
-São **24 decisões**. Estados possíveis:
+São **34 decisões**. Estados possíveis:
 
 - **HERDADA:** já decidida na especificação anterior (10/10/2026). Esta documentação **mantém**; só reabre com um ADR.
 - **PROPOSTA:** recomendação minha, aguardando você ou um experimento.
@@ -37,7 +37,7 @@ São **24 decisões**. Estados possíveis:
 | **DR-19** | Idioma da documentação | PROPOSTA | Inglês canônico + pt-BR sincronizado, ao iniciar a implementação |
 | DR-20 | Linguagem do núcleo (7 candidatas) | **DECIDIDA** (2026-10-24) | **Rust**; S0 mede de novo a cada fase |
 | DR-21 | Ponte entre o editor Qt e o motor | **DECIDIDA** (2026-10-24) | **Qt Widgets + JSON sobre interface C**; CXX-Qt fica para depois |
-| **DR-22** | Edição de primitivas e malha para mapas | **Níveis 1 e 3 FEITOS** (nível 3: 2026-10-25, a seu pedido); nível 2 em parte | Brushes paramétricos + malha editável guardada na cena (booleanos, inset, loop cut, bevel…); falta a interface ([análise](../02-arquitetura/13-primitivas-e-edicao-de-malha.md)) |
+| **DR-22** | Edição de primitivas e malha para mapas | **Níveis 1 e 3 FEITOS** (nível 3: 2026-10-25, a seu pedido); interface parcial (2026-10-27); nível 2 em parte | Brushes paramétricos + malha editável guardada na cena (booleanos, inset, loop cut, bevel…); a barra **Malha** já liga as operações de faces/arestas/vértices ([análise](../02-arquitetura/13-primitivas-e-edicao-de-malha.md)) |
 | **DR-23** | Pintura e animação do Petunia3D | PROPOSTA | Reprodução e IK sim; autoria e pintura de textura não; só o pincel de mundo ([análise](../01-pesquisa/07-pintura-e-animacao.md)) |
 | **DR-25** | Script Host: Aipo embutida, sem acesso ao sistema | **ACEITA** (2026-10-25, a seu pedido) | Aipo por dependência de caminho; módulos `sh`/`fs`/`env`/`io` **removidos**; permissões fixas; orçamento por chamada ([doc](../03-linguagens-e-api/05-script-host.md)) |
 | **DR-26** | Layout e design da janela do editor | **ACEITA** (2026-10-25, a seu pedido; revista) | Medidas do Unity com piso da WCAG; menus no `≡`; paleta `Ctrl+K`; workspaces Cena e Código ([design](../02-arquitetura/15-design-da-interface.md)) |
@@ -47,6 +47,8 @@ São **24 decisões**. Estados possíveis:
 | **DR-30** | Sistema de nós (no lugar do Event Sheet) | **ACEITA** (2026-10-26, "tudo aprovado"; N1 implementado) | Grafo tipado 1:1 com a API; compila para Aipo; vista em contorno completa como primeira entrega; tela de nós própria sem biblioteca nova |
 | **DR-31** | Prefabs embutidos e o nó Esperar | **ACEITA** (2026-10-26, "prossiga com a implementação"; N4 implementado) | Porta, Item coletável e Ponto de nascimento como moldes de linhas + grafos; `Esperar` compila para uma função por espera |
 | **DR-24** | Workspaces e prioridades antes da API | **EM PARTE ACEITA** (andares, cavernas B) | Mapa (com Jogar), Pintura sem UV, Animação, Efeitos por nós; antes da API: andares, cavernas, terreno, prefabs, Jogar ([análise](../02-arquitetura/14-workspaces-e-prioridades.md)) |
+| **DR-33** | Vários scripts por objeto | **ACEITA** (2026-10-27, "prossiga") | Primeiro script na linha legada; os seguintes são entidades-filhas com `owner` e `order`; todos rodam |
+| **DR-34** | Intercâmbio Aipo ⇄ IR | **EM IMPLEMENTAÇÃO** (2026-10-28, "continue") | IR com subconjunto explícito; recusa o resto com diagnóstico; uma VM por anexo |
 
 ---
 
@@ -124,6 +126,8 @@ São **24 decisões**. Estados possíveis:
 **Decidido (`LOCAL`):** Luau **ou** Aipo, **uma ativa por projeto na V1**, escolhida ao criar o projeto, pela mesma Script Host API. Backends isolados e versionáveis.
 
 **Esta documentação:** **Aipo é o padrão** (você a quer de primeira classe). Luau é a alternativa. Se S2 mostrar custo alto do Luau, **só Aipo** continua válido.
+
+**Revisão (2026-10-27):** o Luau será implementado **depois de fechar a integração da Aipo**; o usuário escolhe **uma** das duas linguagens por projeto. Até o backend Luau existir, um manifesto com `"luau"` continua válido, mas o Project Doctor emite o aviso `project.manifest.luau_pending`; a execução de scripts Luau ainda não acontece.
 
 **Plano B** se S1 reprovar a Aipo em tempo real: veja [riscos](../05-roadmap/02-riscos-e-fora-de-escopo.md).
 
@@ -321,6 +325,8 @@ Pool e fade (herdados, `LOCAL`) valem em todas.
 3. **Só inglês.**
 
 **Custo:** a opção 1 dobra a manutenção de prosa; a geração a partir do schema reduz isso para a referência da API. O `xtask docs-check` verifica a paridade.
+
+**Revisão (2026-10-27) — interface e nós:** quando a interface for traduzida, entra também o catálogo de nós/sheets. O contrato já está certo: os arquivos guardam ids, nunca rótulos; `catalog.rs`, `graph.rs` e `outline.rs` concentram os textos; Contorno e Caixas e fios usam o mesmo catálogo; o código Aipo não é traduzido. O inglês entra primeiro no catálogo, depois a interface Qt e a documentação (`docs/en` + `docs/pt-BR`).
 
 ---
 
@@ -587,7 +593,7 @@ Se uma biblioteca for necessária mais tarde, passa no checklist de admissão an
 
 ### Perguntas abertas: respondidas
 
-1. **Estado entre chamadas — resolvido.** A Aipo aceita `var` no nível do módulo, **mas o motor de scripts é um por arquivo, compartilhado por todos os objetos que usam o script**. Por isso a variável de um nó é guardada num dicionário do módulo **com o objeto na chave** (`graph_state`). Vale enquanto o jogo roda; não entra no desfazer nem no arquivo da cena. Variáveis que precisam **sobreviver ao salvar** (progresso de jogo) ficam para o sistema de saves. A tabela `GraphState` proposta antes **não** foi criada.
+1. **Estado entre chamadas — resolvido, com revisão.** A Aipo aceita `var` no nível do módulo. Até 2026-10-27 o motor era **um por arquivo**, compartilhado por todos os objetos; por isso a variável de um nó era guardada num dicionário com o objeto na chave (`graph_state`). Desde o DR-34 (2026-10-28) o motor tem **uma VM por anexo (objeto + script)**: o estado de módulo já é isolado por objeto. O `graph_state` gerado continua porque o formato do código do grafo é estável e porque ele expressa estado por objeto de forma explícita; não é mais uma necessidade do host. Vale enquanto o jogo roda; não entra no desfazer nem no arquivo da cena. Variáveis que precisam **sobreviver ao salvar** (progresso de jogo) ficam para o sistema de saves. A tabela `GraphState` proposta antes **não** foi criada.
 2. **Esperar/tempo:** fica para o passo 4 (máquina de estados gerada), como aprovado.
 3. **Rótulos:** português primeiro; títulos e rótulos dos nós vêm de uma tabela no código (`catalog.rs`), prontos para trocar por uma tabela de idiomas.
 
@@ -604,6 +610,10 @@ Se uma biblioteca for necessária mais tarde, passa no checklist de admissão an
 
 **Reabrir se:** a vista em contorno não bastar para quem usa leitor de tela (teste com uma pessoa real antes do N3), ou se a tela própria passar de 3 mil linhas.
 
+**Revisão (2026-10-27) — fluxo código ↔ nós:** o **grafo é a fonte** da lógica visual. **Ver como código** é somente leitura e mostra o texto gerado; **Transformar em script** copia esse texto para um `.aipo` independente. Um script `.aipo` editado **não** altera o grafo, e texto livre **não** vira grafo automaticamente. O workspace de programação lista os dois tipos e marca o que está ligado a cada objeto.
+
+**Revisão (2026-10-28) — S5b aprovado como requisito:** o experimento de ida e volta deixou de ser opcional: o pedido foi “os nós não refletem 1:1 o código, então é impossível intercambiar”. A decisão [DR-34](#dr-34--intercâmbio-aipo--ir--em-implementação-2026-10-28) substitui a promessa de 1:1 total por um **IR com subconjunto explícito**, com recusa diagnosticada do que fica fora. A vista visual continua sendo uma vista do IR, não um espelho de toda a AST.
+
 ## DR-31 — Prefabs embutidos e o nó Esperar · ACEITA (2026-10-26)
 
 **Pedido:** "prossiga com a implementação" (passo N4 do DR-30).
@@ -611,10 +621,11 @@ Se uma biblioteca for necessária mais tarde, passa no checklist de admissão an
 **Decisão:**
 
 1. **Prefab = molde de linhas + grafos.** Criar um prefab (`prefab.spawn`) cria os objetos numa única ação de desfazer, na frente da câmera, no andar atual, e põe na pasta `scripts/` os grafos de que ele precisa. **Um grafo que já existe com o mesmo nome nunca é sobrescrito** (a pessoa pode tê-lo editado). O comportamento é, portanto, um grafo comum que se abre e muda na aba Lógica.
-2. **Três moldes embutidos**, em `crates/petunia_editor/src/prefabs.rs`:
+2. **Quatro moldes embutidos**, em `crates/petunia_editor/src/prefabs.rs`:
    - **Porta:** objeto cinemático com uma colisão sólida e um sensor maior; sobe 3,2 m quando um personagem entra no sensor, espera 3 s e desce; a variável `aberta` impede abrir duas vezes. Grafo `porta`.
    - **Item coletável:** esfera com sensor; some e avisa no console quando um personagem a toca. Grafo `item`.
    - **Ponto de nascimento:** objeto com a tabela `PlayerStart` e uma marca que não bloqueia. Sem grafo.
+   - **Personagem jogável (revisão 2026-10-27):** um `Brush` cilindro com `Character.player`, uma cápsula sólida e o jogador de teclado. Resolve o caso de criar um objeto "player" que não colidia.
 3. **Nó Esperar (`flow.wait`).** Compila para: `graph_wait_start(entity, id, segundos)` no ponto da espera e **uma função `graph_after_<id>(entity)` com o que vem depois**, chamada quando o tempo acaba. Cada objeto conta as suas esperas (chave pelo objeto). O contador desce em `on_update`; se o grafo não tem esse evento, o compilador cria um. Regras: depois do Esperar **só o próprio objeto continua disponível** (outros valores dão `VALUE_NOT_READY`); esperar de novo antes do fim **reinicia** a contagem; dentro de repetição dá aviso `WAIT_IN_LOOP`.
 4. **Defeito achado pelos prefabs e corrigido:** o motor **nunca avisava** que um personagem (cinemático) tocou um sensor ou uma parede estática, porque o Rapier ignora por padrão pares cinemático × fixo. Agora todas as colisões ligam `KINEMATIC_FIXED` e `KINEMATIC_KINEMATIC`. Sem isso, `on_collision` não disparava para o jogador (teste de regressão que falha sem a correção).
 
@@ -636,9 +647,69 @@ Se uma biblioteca for necessária mais tarde, passa no checklist de admissão an
 
 **Fora desta etapa (declarado):** ler as marcas de quadros anteriores (só o último), depurar passo a passo ou com ponto de parada, marcas no jogo exportado, e editar o grafo dentro do canvas com o mouse além de arrastar, clicar e ligar dois pinos.
 
+**Revisão (2026-10-27):** o canvas ganhou arrastar caixas e fios (além do clique-clique), pan, zoom com centralizar, seleção múltipla (`Ctrl+clique`/`Ctrl+A`), **grupos visuais salvos no layout**, menu de objetos nos pinos e uma lista de scripts/grafos ligados ao objeto. O código gerado continua somente leitura; **Transformar em script** copia o texto para um `.aipo` independente.
+
 **Não verificado:** leitor de tela no canvas (o contorno tem texto e descrição falados; **não ouvi** nenhum dos dois), e o destaque com um grafo grande (os testes usam dois ou três nós).
 
 **Reabrir se:** o contorno não bastar para quem usa leitor de tela depois de um teste com uma pessoa real (era a condição do DR-30), ou se 200 ms não acompanharem um grafo grande.
+
+---
+
+## DR-33 — Vários scripts por objeto · ACEITA (2026-10-27)
+
+**Pedido:** "prossiga com a implementação" (lista de pendências de script/nós/sheets).
+
+**Decisão:**
+
+1. O **primeiro** script de um objeto continua na linha `Script` do próprio objeto (`owner` 0), para não migrar projetos existentes.
+2. Ao anexar um **segundo** script, a linha legada vira uma entidade-filha com `Script { owner, file, enabled, order }`, e o novo script vira outra filha. A conversão é **um** `world.batch` (um desfazer).
+3. A execução ordena por **id do objeto**, depois `order`, depois nome do arquivo. Cada anexo tem o seu `on_start`, `on_update`, `on_event` e handlers de colisão; uma falha desliga só aquele anexo.
+4. Excluir o objeto leva os anexos; duplicar copia os anexos. Um anexo cujo objeto sumiu por `world.remove` deixa de rodar.
+5. Na janela, **Anexar** acrescenta (não substitui); os anexos aparecem na Hierarquia sob o objeto. `owner` é somente leitura; `order` e `enabled` são editáveis.
+
+**Fora desta etapa (declarado):** reordenar por arrastar na Hierarquia, um painel dedicado de scripts por objeto, e escolher a linguagem por anexo (a linguagem é uma por projeto).
+
+**Reabrir se:** a linha legada atrapalhar o formato ou se a ordem precisar ser visual em vez de um número.
+
+---
+
+## DR-34 — Intercâmbio Aipo ⇄ IR · EM IMPLEMENTAÇÃO (2026-10-28)
+
+**Pedido:** “os nós não estão funcionando muito bem e nem estão refletindo 1:1 o código, portanto impossível de intercambiar, o que poderíamos fazer?” seguido de “continue”.
+
+**Decisão:**
+
+1. **Não prometer 1:1 total com Aipo.** O grafo atual representa chamadas da API e fluxo de alto nível; ele não é uma AST. A troca completa exigiria um parser e um IR, e o que não for suportado não pode ser convertido “mais ou menos”.
+2. **IR com subconjunto explícito.** O primeiro caminho implementado lê Aipo para dados tipados e escreve Aipo canônico de volta. O subconjunto está em `crates/petunia_script/src/source_ir.rs`: funções simples, globais `let`/`var`, atribuição, `if`/`elif`/`else`, `while`, `loop`, `repeat`, `each`, `break`, `continue`, `return`, chamadas posicionais, campos, índices, listas, dicionários, literais e operadores unários/binários.
+3. **Recusa explícita.** `struct`, `enum`, `impl`, imports, closures, `attempt`, `await`, `?.`, ranges, pipelines e diretivas retornam `IR_UNSUPPORTED` com linha, coluna e motivo. O texto continua válido como script; ele só não vira IR/nós.
+4. **Uma VM por anexo (objeto + script).** O módulo compilado é compartilhado, mas o topo roda uma vez por anexo. `var` de módulo não vaza mais de um objeto para outro. O código gerado por grafo continua usando `graph_state` por compatibilidade e por explicitar a chave do objeto.
+5. **IR → grafo com variáveis e fluxo.** `crates/petunia_script/src/ir_graph.rs` converte evento, funções auxiliares (`flow.function`, `flow.call`, `flow.call_value`, `flow.param`, `flow.return`), globais (`flow.global`, `global.get`, `global.set`), variáveis locais de função (`local.declare`, `local.get`, `local.set`), `let`/`var` de evento e atribuição composta (para `var.get`/`var.set`), chamadas de API, `if`/`elif`/`else` (aninhados em `flow.if`), `while` (`flow.while`), `loop` (`flow.loop`), `repeat` (com índice opcional em `flow.repeat`), `each` com uma variável (`with_index=false`) ou duas (`with_index=true`), `break`/`continue` (`flow.break`/`flow.continue`) e `return`, além de expressões (parâmetros, literais, chamadas de valor e operadores) para o `GraphDocument` atual. O slot da variável de evento inclui o handler (`on_update/speed`), então o mesmo nome em dois handlers não se mistura; reatribuir um `let` é recusado. Campos, índices, listas e dicionários como valor, e esperas dentro de função, ainda são recusados com `IR_GRAPH_UNSUPPORTED`.
+6. **Editor ligado.** `script.to_graph` cria um grafo novo a partir do script (ou do texto não salvo); o menu **Transformar em grafo…** no painel Código abre o resultado na aba Lógica. O script de origem fica intacto e um grafo existente nunca é sobrescrito.
+7. **Próximas etapas, na ordem:** exercitar o menu e o botão no smoke; só depois expandir o catálogo de nós. Luau continua depois da Aipo (DR-06). O schema v2 e a migração de grafos v1 estão registrados no DR-35.
+
+**Verificação de 2026-10-29:** os 6 testes de `source_ir`, os 15 testes de `ir_graph` (incluindo função auxiliar e global/local em execução), os 21 testes públicos de grafo (incluindo `flow.while`, `each` sem índice, `break` fora de laço e migração v1→v2), 4 testes de compilação de funções/globais/locais em `petunia_graph`, os 14 testes de modelo (incluindo a migração) e o teste de `script.to_graph` no editor, que agora converte função auxiliar e recusa lista como valor. A suíte total soma **446 testes**. O teste de ida e volta compara o texto canônico depois de Aipo → IR → grafo → Aipo → IR; ainda **não** cobre o corpo de conformidade inteiro da Aipo. O menu Qt **não** foi exercitado no smoke.
+
+**Fora desta etapa (declarado):** converter qualquer Aipo, IR neutro para Luau, e interface. A edição contínua existe no recorte suportado via `graph.from_code`; fora dele, diagnóstico. Não há promessa de que um script fora do subconjunto abra como nós.
+
+**Reabrir se:** o subconjunto não cobrir os projetos reais; nesse caso, ampliar com casos de teste, não com conversão silenciosa.
+
+---
+
+## DR-35 — Schema de grafo v2 e migração · DECIDIDA (2026-10-28)
+
+**Pedido:** “complete completamente a implementacao, incluindo o schema v2 sem parar.”
+
+**Decisão:**
+
+1. **Subir `SCHEMA_VERSION` de 1 para 2.** O schema v2 acrescenta `flow.while`, `flow.loop`, `flow.break`, `flow.continue` e a opção `with_index` em `flow.each`. `flow.each` sem a opção mantém o comportamento v1: posição/chave e item/valor.
+2. **Ler v1 e migrar ao abrir.** `GraphDocument::parse` aceita `schema_version: 1`, troca a versão para 2 e entrega o documento pronto. Como o formato de nós e fios não mudou, a migração não reescreve nós nem ligações; os padrões preservam o comportamento antigo. Grafo v3 ou mais novo é recusado com mensagem para atualizar o editor; versão 0 ou desconhecida é recusada como inválida.
+3. **Compilar os novos nós.** `while` gera `while condição { ... }`; `loop` gera `loop { ... }`; `break`/`continue` só são aceitos dentro de `flow.repeat`, `flow.each`, `flow.while` ou `flow.loop`; `flow.each` com `with_index=false` gera `each item` e não expõe `index` (ligar esse pino é erro `EACH_INDEX_UNAVAILABLE`).
+4. **Editor sem migração manual.** Grafos v1 existentes continuam abrindo; ao salvar, saem em v2. O layout `.layout.json` continua na versão 1, porque posições e grupos não mudaram.
+5. **Fora desta etapa:** campos/índices/listas/dicionários como valor e edição contínua das duas vistas. Eles continuam recusados com diagnóstico, sem conversão aproximada. Funções auxiliares e globais passaram a ser suportados na etapa seguinte do DR-34.
+
+**Verificação:** `version_one_is_migrated_to_two_when_read` no modelo; `version_one_graphs_are_migrated_to_version_two`, `a_while_node_repeats_until_its_condition_is_false`, `each_can_hide_the_index_from_the_body` e `a_break_outside_a_loop_is_refused` na suíte pública de grafo; testes de `while`, `loop` com `break`/`continue` e `each` de uma/duas variáveis em `ir_graph`; ida e volta de `loop`/`each` em `source_ir`.
+
+**Fora desta etapa (declarado):** schema v3, migração de layout, edição contínua e qualquer promessa de que um script fora do subconjunto abra como nós.
 
 ---
 

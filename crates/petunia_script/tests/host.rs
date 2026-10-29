@@ -35,6 +35,24 @@ fn world_with(script: &str) -> (World, u64) {
     (world, id)
 }
 
+fn add_object(world: &mut World, script: &str) -> u64 {
+    let mut dispatcher = Dispatcher::with_builtin().expect("dispatcher");
+    let created = dispatcher
+        .execute(
+            world,
+            &CommandRecord::new(
+                "world.create",
+                json!({ "rows": {
+                    "Name": { "text": script },
+                    "Transform": { "position": { "x": 0.0, "y": 0.0, "z": 0.0 } },
+                    "Script": { "file": script, "enabled": true }
+                }}),
+            ),
+        )
+        .expect("create");
+    created["entity"].as_u64().expect("entity id")
+}
+
 fn x_of(host: &ScriptHost, id: u64) -> f64 {
     let world = host.world();
     let handle = world.handle_of(PersistentId(id)).expect("entity");
@@ -258,6 +276,31 @@ fn on_start(entity) {
     assert!(lines.contains(&"achadas 2".to_string()), "{lines:?}");
     assert!(lines.contains(&"existe false".to_string()), "{lines:?}");
     assert_eq!(host.commands_run(), 2);
+}
+
+#[test]
+fn objects_with_the_same_script_keep_separate_state() {
+    let (mut world, first) = world_with("counter");
+    let second = add_object(&mut world, "counter");
+    let mut host = ScriptHost::new(world).expect("host");
+    host.load(
+        "counter",
+        r#"
+var elapsed = 0.0
+
+fn on_update(entity, dt) {
+    elapsed = elapsed + dt
+    transform.set_position(entity, elapsed, 0.0, 0.0)
+}
+"#,
+    )
+    .expect("compiles");
+    host.update(0.5);
+    assert!((x_of(&host, first) - 0.5).abs() < 1e-6);
+    assert!((x_of(&host, second) - 0.5).abs() < 1e-6);
+    host.update(0.5);
+    assert!((x_of(&host, first) - 1.0).abs() < 1e-6);
+    assert!((x_of(&host, second) - 1.0).abs() < 1e-6);
 }
 
 #[test]

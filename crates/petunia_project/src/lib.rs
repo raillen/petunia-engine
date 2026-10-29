@@ -28,7 +28,7 @@ pub use diagnostics::{Diagnostic, Report, Severity};
 pub use error::ProjectError;
 pub use io::{MAX_MANIFEST_BYTES, MAX_SCENE_BYTES, atomic_write, read_limited, resolve_inside};
 pub use manifest::{FORMAT_VERSION, MANIFEST_FILE, ProjectManifest};
-pub use play::{EYE_HEIGHT, ensure_player, has_player};
+pub use play::{EYE_HEIGHT, PlayerStart, ensure_player, has_player, player_start};
 pub use sample::create_sample_project;
 pub use save::save_scene;
 pub use scene::{SceneEntity, SceneFile, scene_from_world};

@@ -2,8 +2,9 @@
 //! them, runs their handlers against the world, and describes the API they see as data.
 //!
 //! - [`compile`] gives diagnostics with line and column (editor squiggles, Project Doctor).
-//! - [`ScriptHost`] runs scripts: one VM per file, capabilities deny by default, an instruction
-//!   budget per call, a faulty object's script switched off instead of spamming the console.
+//! - [`ScriptHost`] runs scripts: one VM per object-script attachment (the compiled module is
+//!   shared), capabilities deny by default, an instruction budget per call, a faulty object's
+//!   script switched off instead of spamming the console.
 //! - [`api`] is the single table behind the compiler surface, the natives and the editor help.
 //! - [`simulate`] tries a script on a copy of the world (the editor's "Run").
 //!
@@ -17,8 +18,10 @@ mod convert;
 mod doctor;
 mod graph;
 mod host;
+pub mod ir_graph;
 mod natives;
 mod physics_api;
+pub mod source_ir;
 
 pub use api::{API, ApiFunction, GAME_CAPABILITIES, HANDLERS, KEYWORDS, api_json, script_surface};
 pub use compile::{Compiled, MAX_SCRIPT_BYTES, ScriptDiagnostic, ScriptSeverity, compile};

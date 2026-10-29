@@ -499,7 +499,7 @@ fn search_ignores_accents_and_filters_by_what_is_wanted() {
     assert!(
         titles("", Want::Event)
             .iter()
-            .all(|t| t == "Ao começar" || t == "A cada quadro")
+            .all(|t| t == "Ao começar" || t == "A cada quadro" || t == "Função")
     );
     // For a list input only nodes that give a list.
     let for_list = titles("", Want::Value(DataType::List));

@@ -14,7 +14,10 @@ use petunia_graph::{
     spec_json,
 };
 use petunia_project::{atomic_write, read_limited, resolve_inside};
-use petunia_script::{GRAPH_SUFFIX, SCRIPTS_DIRECTORY, graph_catalog, graph_max_bytes};
+use petunia_script::{
+    GRAPH_SUFFIX, SCRIPT_EXTENSION, SCRIPTS_DIRECTORY, ScriptDiagnostic, graph_catalog,
+    graph_max_bytes, ir_graph::to_graph, source_ir::parse_source,
+};
 use serde_json::{Value as Json, json};
 
 use crate::failure::Failure;
@@ -30,7 +33,7 @@ const MAX_FOUND: usize = 60;
 
 /// The graph being edited and its undo history.
 pub struct OpenGraph {
-    name: String,
+    pub(crate) name: String,
     document: GraphDocument,
     layout: GraphLayout,
     /// A layout file that could not be read, kept so the view can say why the boxes were computed.
@@ -53,6 +56,27 @@ fn io_failure(action: &str, error: &dyn std::fmt::Display) -> Failure {
         "GRAPH_IO",
         &format!("{action}: {error}"),
         "Confira se a pasta do projeto pode ser escrita e se há espaço no disco.",
+    )
+}
+
+fn conversion_failure(diagnostic: &ScriptDiagnostic) -> Failure {
+    Failure::new(
+        &diagnostic.code,
+        &format!("linha {}: {}", diagnostic.line, diagnostic.message),
+        "O script não foi alterado. Ajuste o trecho indicado ou use o código como está.",
+    )
+}
+
+fn first_conversion_failure(diagnostics: &[ScriptDiagnostic]) -> Failure {
+    diagnostics.first().map_or_else(
+        || {
+            Failure::new(
+                "IR_GRAPH_EMPTY",
+                "o conversor não devolveu um diagnóstico nem um grafo",
+                "Isso é um defeito da engine; registre o problema.",
+            )
+        },
+        conversion_failure,
     )
 }
 
@@ -193,6 +217,82 @@ impl EditorSession {
         self.graph_view()
     }
 
+    /// `script.to_graph`: creates a graph from the supported Aipo subset. The destination must be
+    /// new; the source script is never modified. `text` lets unsaved editor text stand in for the
+    /// file, so the graph matches what the person is looking at.
+    pub fn graph_from_script(
+        &mut self,
+        script: &str,
+        graph: &str,
+        text: Option<&str>,
+    ) -> Result<Json, Failure> {
+        let path = self.graph_path(graph)?;
+        let aipo = path.with_file_name(format!("{graph}.aipo"));
+        if path.exists() || aipo.exists() {
+            return Err(Failure::new(
+                "GRAPH_EXISTS",
+                &format!("já existe um script ou grafo chamado `{graph}`"),
+                "Escolha outro nome para o novo grafo.",
+            ));
+        }
+        let source = match text {
+            Some(text) => text.to_string(),
+            None => self.read_script_file(script)?,
+        };
+        let program = parse_source(&format!("{script}.{SCRIPT_EXTENSION}"), &source)
+            .map_err(|diagnostics| first_conversion_failure(&diagnostics))?;
+        let document =
+            to_graph(&program).map_err(|diagnostics| first_conversion_failure(&diagnostics))?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| io_failure("criar a pasta de scripts", &error))?;
+        }
+        atomic_write(&path, document.to_text().as_bytes())
+            .map_err(|error| io_failure("gravar o grafo", &error))?;
+        self.graph = Some(OpenGraph {
+            name: graph.to_string(),
+            document,
+            layout: GraphLayout::new(),
+            layout_problem: None,
+            past: Vec::new(),
+            future: Vec::new(),
+            backed_up: true,
+        });
+        self.record(
+            "graph",
+            &format!("novo {graph} a partir de {script}"),
+            true,
+            "",
+        );
+        self.refresh_script_diagnostics();
+        self.graph_view()
+    }
+
+    /// `graph.from_code`: replaces the open graph with one built from Aipo text in the supported
+    /// subset (DR-34). The graph's old layout is dropped, because node ids change.
+    pub fn graph_from_code(&mut self, text: &str) -> Result<Json, Failure> {
+        let name = self.graph.as_ref().ok_or_else(no_graph)?.name.clone();
+        let code = if let Some(position) = text.find("\n\nfn ") {
+            &text[position + 2..]
+        } else {
+            text
+        };
+        let program = parse_source(&format!("{name}.{SCRIPT_EXTENSION}"), code)
+            .map_err(|diagnostics| first_conversion_failure(&diagnostics))?;
+        let document =
+            to_graph(&program).map_err(|diagnostics| first_conversion_failure(&diagnostics))?;
+        let graph = self.graph.as_mut().ok_or_else(no_graph)?;
+        graph.past.push(graph.document.clone());
+        graph.future.clear();
+        graph.document = document;
+        graph.layout = GraphLayout::new();
+        graph.layout_problem = None;
+        graph.backed_up = true;
+        self.record("graph", &format!("aplicar código a {name}"), true, "");
+        self.refresh_script_diagnostics();
+        self.graph_view()
+    }
+
     /// `graph.open`: reads a graph file. A file that cannot be read says why and changes nothing.
     pub fn graph_open(&mut self, name: &str) -> Result<Json, Failure> {
         let path = self.graph_path(name)?;
@@ -254,23 +354,73 @@ impl EditorSession {
     /// `graph.set_layout`: moves one box. Positions are not logic, so this saves its own file and
     /// is not a step in the undo history.
     pub fn graph_set_layout(&mut self, node: u32, x: f64, y: f64) -> Result<Json, Failure> {
+        self.graph_set_layouts(&[(node, x, y)])?;
+        Ok(json!({ "node": node, "x": x, "y": y }))
+    }
+
+    /// `graph.set_layouts`: moves several boxes with one write (a group drag).
+    pub fn graph_set_layouts(&mut self, places: &[(u32, f64, f64)]) -> Result<Json, Failure> {
+        if places.is_empty() {
+            return Err(Failure::bad_request("nenhuma caixa para mover"));
+        }
         let path = {
             let name = self.graph.as_ref().ok_or_else(no_graph)?.name.clone();
             self.layout_path(&name)?
         };
         let graph = self.open_graph_mut()?;
-        if graph.document.node(node).is_none() {
-            return Err(Failure::bad_request(&format!(
-                "o grafo não tem o nó {node}"
-            )));
+        let mut layout = graph.layout.clone();
+        for (node, x, y) in places {
+            if graph.document.node(*node).is_none() {
+                return Err(Failure::bad_request(&format!(
+                    "o grafo não tem o nó {node}"
+                )));
+            }
+            layout
+                .place(*node, *x, *y)
+                .map_err(|error| graph_failure(&error))?;
+        }
+        write_layout(&path, &layout)?;
+        graph.layout = layout;
+        Ok(json!({ "moved": places.len() }))
+    }
+
+    /// `graph.group`: a visual frame around nodes, saved beside the graph like the positions.
+    pub fn graph_group(&mut self, label: &str, nodes: &[u32]) -> Result<Json, Failure> {
+        let path = {
+            let name = self.graph.as_ref().ok_or_else(no_graph)?.name.clone();
+            self.layout_path(&name)?
+        };
+        let graph = self.open_graph_mut()?;
+        for node in nodes {
+            if graph.document.node(*node).is_none() {
+                return Err(Failure::bad_request(&format!(
+                    "o grafo não tem o nó {node}"
+                )));
+            }
         }
         let mut layout = graph.layout.clone();
-        layout
-            .place(node, x, y)
+        let id = layout
+            .group(label, nodes)
             .map_err(|error| graph_failure(&error))?;
         write_layout(&path, &layout)?;
         graph.layout = layout;
-        Ok(json!({ "node": node, "x": x, "y": y }))
+        Ok(json!({ "group": id }))
+    }
+
+    /// `graph.ungroup`: removes the frame; the nodes stay where they are.
+    pub fn graph_ungroup(&mut self, group: u32) -> Result<Json, Failure> {
+        let path = {
+            let name = self.graph.as_ref().ok_or_else(no_graph)?.name.clone();
+            self.layout_path(&name)?
+        };
+        let graph = self.open_graph_mut()?;
+        let mut layout = graph.layout.clone();
+        let removed = layout.ungroup(group);
+        if removed {
+            write_layout(&path, &layout)?;
+            graph.layout = layout;
+        }
+        Ok(json!({ "removed": removed }))
     }
 
     /// Applies an edit to a copy; on success the copy becomes the graph, the old one goes into the
@@ -722,6 +872,28 @@ mod tests {
             "positions live beside the graph, not inside it"
         );
 
+        // Groups are layout, not logic: one frame holds boxes, and moving it is a layout write.
+        let grouped = call(
+            &mut session,
+            json!({ "op": "graph.group", "label": "Gira", "nodes": [event, turn] }),
+        );
+        assert_eq!(grouped["group"], 1, "{grouped}");
+        let picture = call(&mut session, json!({ "op": "graph.view" }))["canvas"].clone();
+        assert_eq!(picture["groups"][0]["label"], "Gira", "{picture}");
+        assert_eq!(
+            picture["groups"][0]["nodes"]
+                .as_array()
+                .expect("nodes")
+                .len(),
+            2
+        );
+        call(&mut session, json!({ "op": "graph.ungroup", "group": 1 }));
+        let picture = call(&mut session, json!({ "op": "graph.view" }))["canvas"].clone();
+        assert!(
+            picture["groups"].as_array().expect("groups").is_empty(),
+            "{picture}"
+        );
+
         // The graph plays: attach it to a drawn object and turn it for a second.
         let spinner = call(
             &mut session,
@@ -775,6 +947,76 @@ mod tests {
     }
 
     #[test]
+    fn a_supported_script_becomes_a_new_graph_and_an_unsupported_one_is_refused() {
+        let (mut session, root) = project("script_to_graph");
+        call(
+            &mut session,
+            json!({
+                "op": "script.write",
+                "name": "anda",
+                "text": "fn on_update(entity, dt) {\n    var speed = 2.0\n    transform.move_x(entity, speed * dt)\n}\n"
+            }),
+        );
+        let view = call(
+            &mut session,
+            json!({ "op": "script.to_graph", "name": "anda", "graph": "anda_grafo" }),
+        );
+        assert_eq!(view["name"], "anda_grafo");
+        assert!(root.join("scripts/anda_grafo.graph.json").is_file());
+        let code = call(&mut session, json!({ "op": "graph.code" }));
+        assert_eq!(code["ok"], true, "{code}");
+        let text = code["text"].as_str().expect("text");
+        assert!(text.contains("graph_state_set"), "{code}");
+        assert!(text.contains("on_update/speed"), "{code}");
+        assert!(text.contains("transform.move_x(entity"), "{code}");
+
+        call(
+            &mut session,
+            json!({
+                "op": "script.write",
+                "name": "auxiliar",
+                "text": "fn mover(entity) {\n    transform.move_x(entity, 1.0)\n}\nfn on_update(entity, dt) {\n    mover(entity)\n}\n"
+            }),
+        );
+        let view = call(
+            &mut session,
+            json!({ "op": "script.to_graph", "name": "auxiliar", "graph": "auxiliar_grafo" }),
+        );
+        assert_eq!(view["name"], "auxiliar_grafo");
+        assert!(root.join("scripts/auxiliar_grafo.graph.json").is_file());
+        let code = call(&mut session, json!({ "op": "graph.code" }));
+        let text = code["text"].as_str().expect("text");
+        assert!(text.contains("fn mover(entity)"), "{code}");
+        assert!(text.contains("mover(entity)"), "{code}");
+
+        call(
+            &mut session,
+            json!({
+                "op": "script.write",
+                "name": "lista",
+                "text": "fn on_update(entity, dt) {\n    var items = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]\n}\n"
+            }),
+        );
+        assert_eq!(
+            error_code(
+                &mut session,
+                json!({ "op": "script.to_graph", "name": "lista", "graph": "lista_grafo" })
+            ),
+            "IR_GRAPH_UNSUPPORTED"
+        );
+        assert!(!root.join("scripts/lista_grafo.graph.json").exists());
+
+        assert_eq!(
+            error_code(
+                &mut session,
+                json!({ "op": "script.to_graph", "name": "anda", "graph": "anda" })
+            ),
+            "GRAPH_EXISTS"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn a_hostile_graph_file_is_refused_and_the_open_graph_stays() {
         let (mut session, root) = project("grafo_hostil");
         call(&mut session, json!({ "op": "graph.new", "name": "bom" }));
@@ -815,6 +1057,33 @@ mod tests {
             ),
             "GRAPH_NOT_OPEN"
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn code_can_be_applied_back_to_the_graph() {
+        let (mut session, root) = project("from_code");
+        call(
+            &mut session,
+            json!({
+                "op": "script.write",
+                "name": "anda",
+                "text": "fn on_update(entity, dt) {\n    var speed = 2.0\n    transform.move_x(entity, speed * dt)\n}\n"
+            }),
+        );
+        call(
+            &mut session,
+            json!({ "op": "script.to_graph", "name": "anda", "graph": "anda_grafo" }),
+        );
+        let code = call(&mut session, json!({ "op": "graph.code" }));
+        let text = code["text"].as_str().expect("text");
+        let view = call(
+            &mut session,
+            json!({ "op": "graph.from_code", "text": text }),
+        );
+        assert_eq!(view["name"], "anda_grafo");
+        let code_again = call(&mut session, json!({ "op": "graph.code" }));
+        assert_eq!(code_again["ok"], true, "{code_again}");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

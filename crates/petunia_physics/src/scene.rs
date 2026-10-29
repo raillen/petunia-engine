@@ -90,13 +90,19 @@ pub fn describe(world: &World, solids: &BTreeMap<u64, SolidShape>) -> SceneDescr
     // Solid by themselves: drawn objects without a collider of their own.
     let mut automatic = Vec::new();
     for (entity, solid) in solids {
-        if owners.contains_key(entity) {
-            continue;
-        }
         let Ok(handle) = world.handle_of(PersistentId(*entity)) else {
             continue;
         };
         let walker = world.has_row(handle, "Character");
+        let has_solid_collider = scene
+            .colliders
+            .iter()
+            .any(|collider| collider.owner == *entity && !collider.trigger);
+        // A trigger is enough to opt a marker out of the automatic solid. A character with only
+        // triggers still needs its walking capsule, so it is the exception.
+        if owners.contains_key(entity) && !(walker && !has_solid_collider) {
+            continue;
+        }
         let dynamic = matches!(
             world.get(handle, "RigidBody", "kind"),
             Ok(Value::Text(kind)) if kind == "dynamic"
@@ -182,10 +188,13 @@ pub fn describe(world: &World, solids: &BTreeMap<u64, SolidShape>) -> SceneDescr
                 body.kind = BodyKind::Kinematic;
             }
             Some(body) if body.kind == BodyKind::Dynamic => {
+                // A character is moved by the controller, not by gravity and contacts. A dynamic
+                // row is a setup mistake that used to leave the character out; correcting it is
+                // better than a player that silently does not move.
+                body.kind = BodyKind::Kinematic;
                 scene.problems.push(format!(
-                    "personagem #{id}: o corpo é dinâmico; o personagem precisa de um corpo cinemático"
+                    "personagem #{id}: o corpo era dinâmico; usei cinemático"
                 ));
-                continue;
             }
             Some(_) => {}
             None => {

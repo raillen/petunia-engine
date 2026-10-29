@@ -63,7 +63,8 @@ QString columnTitle(const QString& table, const QString& column) {
 }
 
 bool isReadOnlyColumn(const QString& table, const QString& column) {
-    return table == QLatin1String("Collider") && column == QLatin1String("owner");
+    return column == QLatin1String("owner")
+        && (table == QLatin1String("Collider") || table == QLatin1String("Script"));
 }
 
 // The text in the label column for a column of a table. The engine names columns in English

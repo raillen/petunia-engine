@@ -435,6 +435,190 @@ mod tests {
     }
 
     #[test]
+    fn a_drawn_character_without_a_collider_is_solid_and_walks() {
+        let root = std::env::temp_dir().join(format!(
+            "petunia_editor_test_auto_character_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let mut session = EditorSession::new().expect("session");
+        call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "auto" }),
+        );
+        let hero = call(
+            &mut session,
+            json!({ "op": "command.execute", "command": "world.create", "payload": { "rows": {
+                "Name": { "text": "Jogador" },
+                "Transform": { "position": { "x": 0.0, "y": 1.0, "z": 0.0 } },
+                "Brush": { "shape": "cylinder", "size": { "x": 0.6, "y": 1.8, "z": 0.6 } },
+                "Character": { "player": true }
+            } } }),
+        )["entity"]
+            .as_u64()
+            .expect("hero");
+        let started = call(&mut session, json!({ "op": "play.start" }));
+        assert_eq!(started["has_player"], true, "{started}");
+        assert!(
+            started["problems"].as_array().expect("list").is_empty(),
+            "{started}"
+        );
+        for _ in 0..90 {
+            call(
+                &mut session,
+                json!({ "op": "play.tick", "seconds": 1.0 / 60.0 }),
+            );
+        }
+        let resting = session
+            .frame()
+            .expect("frame")
+            .items
+            .into_iter()
+            .find(|item| item.entity == hero)
+            .map(|item| item.transform.position)
+            .expect("hero is drawn");
+        assert!(
+            resting.y > 0.5 && resting.y < 1.5,
+            "the automatic capsule keeps the hero on the floor: {resting:?}"
+        );
+        for _ in 0..60 {
+            call(
+                &mut session,
+                json!({ "op": "play.tick", "seconds": 1.0 / 60.0, "forward": 1.0 }),
+            );
+        }
+        let walked = session
+            .frame()
+            .expect("frame")
+            .items
+            .into_iter()
+            .find(|item| item.entity == hero)
+            .map(|item| item.transform.position)
+            .expect("hero is drawn");
+        assert!(
+            walked.z < resting.z - 1.0,
+            "the hero walks: {resting:?} -> {walked:?}"
+        );
+        call(&mut session, json!({ "op": "play.stop" }));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_character_with_a_dynamic_body_is_corrected_to_kinematic() {
+        let root = std::env::temp_dir().join(format!(
+            "petunia_editor_test_dynamic_character_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let mut session = EditorSession::new().expect("session");
+        call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "dynamic" }),
+        );
+        let hero = call(
+            &mut session,
+            json!({ "op": "command.execute", "command": "world.create", "payload": { "rows": {
+                "Name": { "text": "Jogador" },
+                "Transform": { "position": { "x": 0.0, "y": 1.0, "z": 0.0 } },
+                "Brush": { "shape": "cylinder", "size": { "x": 0.6, "y": 1.8, "z": 0.6 } },
+                "Character": { "player": true },
+                "RigidBody": { "kind": "dynamic" }
+            } } }),
+        )["entity"]
+            .as_u64()
+            .expect("hero");
+        let started = call(&mut session, json!({ "op": "play.start" }));
+        assert_eq!(started["has_player"], true, "{started}");
+        assert!(
+            started["problems"]
+                .as_array()
+                .expect("list")
+                .iter()
+                .any(|problem| problem
+                    .as_str()
+                    .is_some_and(|text| text.contains("usei cinemático"))),
+            "the correction is reported: {started}"
+        );
+        for _ in 0..90 {
+            call(
+                &mut session,
+                json!({ "op": "play.tick", "seconds": 1.0 / 60.0 }),
+            );
+        }
+        let position = session
+            .frame()
+            .expect("frame")
+            .items
+            .into_iter()
+            .find(|item| item.entity == hero)
+            .map(|item| item.transform.position)
+            .expect("hero is drawn");
+        assert!(
+            position.y > 0.5 && position.y < 1.5,
+            "the corrected character stands: {position:?}"
+        );
+        call(&mut session, json!({ "op": "play.stop" }));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_character_with_only_a_trigger_collider_gets_the_walking_capsule() {
+        let root = std::env::temp_dir().join(format!(
+            "petunia_editor_test_trigger_character_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let mut session = EditorSession::new().expect("session");
+        call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "trigger" }),
+        );
+        let hero = call(
+            &mut session,
+            json!({ "op": "command.execute", "command": "world.create", "payload": { "rows": {
+                "Name": { "text": "Jogador" },
+                "Transform": { "position": { "x": 0.0, "y": 1.0, "z": 0.0 } },
+                "Brush": { "shape": "cylinder", "size": { "x": 0.6, "y": 1.8, "z": 0.6 } },
+                "Character": { "player": true }
+            } } }),
+        )["entity"]
+            .as_u64()
+            .expect("hero");
+        call(
+            &mut session,
+            json!({ "op": "command.execute", "command": "world.create", "payload": { "rows": {
+                "Collider": { "owner": hero, "name": "gatilho", "shape": "sphere", "radius": 1.0, "trigger": true }
+            } } }),
+        );
+        let started = call(&mut session, json!({ "op": "play.start" }));
+        assert_eq!(started["has_player"], true, "{started}");
+        assert!(
+            started["problems"].as_array().expect("list").is_empty(),
+            "{started}"
+        );
+        for _ in 0..90 {
+            call(
+                &mut session,
+                json!({ "op": "play.tick", "seconds": 1.0 / 60.0 }),
+            );
+        }
+        let position = session
+            .frame()
+            .expect("frame")
+            .items
+            .into_iter()
+            .find(|item| item.entity == hero)
+            .map(|item| item.transform.position)
+            .expect("hero is drawn");
+        assert!(
+            position.y > 0.5 && position.y < 1.5,
+            "the automatic capsule stands: {position:?}"
+        );
+        call(&mut session, json!({ "op": "play.stop" }));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn the_sample_room_is_walkable_without_any_setup() {
         let root =
             std::env::temp_dir().join(format!("petunia_editor_test_walk_{}", std::process::id()));

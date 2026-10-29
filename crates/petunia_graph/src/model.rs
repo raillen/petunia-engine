@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 pub const MAX_FILE_BYTES: usize = 1 << 20;
 pub const MAX_NODES: usize = 512;
 pub const MAX_EDGES: usize = 2048;
@@ -95,8 +95,9 @@ impl GraphDocument {
                 MAX_FILE_BYTES / 1024
             ));
         }
-        let document: GraphDocument = serde_json::from_str(text)
+        let mut document: GraphDocument = serde_json::from_str(text)
             .map_err(|error| GraphError(format!("o arquivo do grafo não é válido: {error}")))?;
+        document.migrate()?;
         document.check_shape()?;
         Ok(document)
     }
@@ -119,6 +120,25 @@ impl GraphDocument {
 
     pub fn node(&self, id: u32) -> Option<&GraphNode> {
         self.nodes.iter().find(|node| node.id == id)
+    }
+
+    /// Brings an older saved graph up to the current schema. Version 1 and version 2 have the
+    /// same document shape; version 2 adds loop nodes and the `with_index` setting of `Para cada`,
+    /// whose absence means the version 1 behavior (index and item).
+    fn migrate(&mut self) -> Result<(), GraphError> {
+        match self.schema_version {
+            1 => {
+                self.schema_version = SCHEMA_VERSION;
+                Ok(())
+            }
+            2 => Ok(()),
+            version if version > SCHEMA_VERSION => refuse(format!(
+                "este grafo é da versão {version}, mais nova que a deste Petunia ({SCHEMA_VERSION}); atualize o editor"
+            )),
+            version => refuse(format!(
+                "este grafo é da versão {version}, que não é mais lida (versão atual: {SCHEMA_VERSION})"
+            )),
+        }
     }
 
     /// Limits and structure that do not need the catalog.
@@ -267,6 +287,17 @@ mod tests {
         let mut document = sample();
         document.nodes.push(document.nodes[0].clone());
         assert!(document.check_shape().is_err());
+    }
+
+    #[test]
+    fn version_one_is_migrated_to_two_when_read() {
+        let text = r#"{"schema_version":1,"nodes":[{"id":1,"kind":"flow.each"}],"edges":[]}"#;
+        let document = GraphDocument::parse(text).expect("version 1 reads");
+        assert_eq!(document.schema_version, SCHEMA_VERSION);
+        assert_eq!(document.nodes[0].kind, "flow.each");
+        assert!(document.to_text().contains("\"schema_version\": 2"));
+        let again = GraphDocument::parse(&document.to_text()).expect("version 2 reads");
+        assert_eq!(again, document);
     }
 
     #[test]

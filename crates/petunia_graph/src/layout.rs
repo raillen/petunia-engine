@@ -27,6 +27,17 @@ pub struct LayoutNode {
     pub y: f64,
 }
 
+/// A visual group: a label and the nodes it holds. The frame is computed from the member boxes,
+/// so moving a member never leaves the frame behind; the group itself has no coordinates.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LayoutGroup {
+    pub id: u32,
+    pub label: String,
+    #[serde(default)]
+    pub nodes: Vec<u32>,
+}
+
 /// The saved layout: a position per node id. Field order is the order of the saved file.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -34,6 +45,8 @@ pub struct GraphLayout {
     pub schema_version: u32,
     #[serde(default)]
     pub nodes: BTreeMap<u32, LayoutNode>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<LayoutGroup>,
 }
 
 impl Default for GraphLayout {
@@ -47,6 +60,7 @@ impl GraphLayout {
         Self {
             schema_version: LAYOUT_SCHEMA_VERSION,
             nodes: BTreeMap::new(),
+            groups: Vec::new(),
         }
     }
 
@@ -94,6 +108,37 @@ impl GraphLayout {
                 ));
             }
         }
+        if self.groups.len() > MAX_NODES {
+            return refuse(format!(
+                "o layout tem {} grupos; o limite é {MAX_NODES}",
+                self.groups.len()
+            ));
+        }
+        let mut ids = std::collections::BTreeSet::new();
+        let mut grouped = std::collections::BTreeSet::new();
+        for group in &self.groups {
+            if !ids.insert(group.id) {
+                return refuse(format!("dois grupos têm o mesmo número ({})", group.id));
+            }
+            let label = group.label.trim();
+            if label.is_empty() || label.len() > 64 {
+                return refuse(format!(
+                    "o grupo {} precisa de um nome de 1 a 64 letras",
+                    group.id
+                ));
+            }
+            if group.nodes.len() > MAX_NODES {
+                return refuse(format!(
+                    "o grupo {} tem nós demais; o limite é {MAX_NODES}",
+                    group.id
+                ));
+            }
+            for node in &group.nodes {
+                if !grouped.insert(*node) {
+                    return refuse(format!("o nó {node} está em mais de um grupo"));
+                }
+            }
+        }
         Ok(())
     }
 
@@ -113,9 +158,59 @@ impl GraphLayout {
         Ok(())
     }
 
+    /// Creates a group around `nodes` and returns its id. The caller checks the nodes exist.
+    pub fn group(&mut self, label: &str, nodes: &[u32]) -> Result<u32, GraphError> {
+        let label = label.trim();
+        if label.is_empty() || label.len() > 64 {
+            return refuse("o grupo precisa de um nome de 1 a 64 letras".to_string());
+        }
+        let mut chosen: Vec<u32> = nodes.to_vec();
+        chosen.sort_unstable();
+        chosen.dedup();
+        if chosen.is_empty() {
+            return refuse("escolha pelo menos um nó para agrupar".to_string());
+        }
+        for node in &chosen {
+            if self.groups.iter().any(|group| group.nodes.contains(node)) {
+                return refuse(format!("o nó {node} já está em outro grupo"));
+            }
+        }
+        let id = self
+            .groups
+            .iter()
+            .map(|group| group.id)
+            .max()
+            .map_or(1, |highest| highest.saturating_add(1));
+        self.groups.push(LayoutGroup {
+            id,
+            label: label.to_string(),
+            nodes: chosen,
+        });
+        Ok(id)
+    }
+
+    /// Removes a group; the nodes stay where they are.
+    pub fn ungroup(&mut self, id: u32) -> bool {
+        let before = self.groups.len();
+        self.groups.retain(|group| group.id != id);
+        self.groups.len() != before
+    }
+
+    pub fn group_of(&self, node: u32) -> Option<u32> {
+        self.groups
+            .iter()
+            .find(|group| group.nodes.contains(&node))
+            .map(|group| group.id)
+    }
+
     /// Drops the positions of nodes the graph no longer has, so the file does not grow forever.
+    /// Groups lose departed members and disappear when they become empty.
     pub fn prune(&mut self, document: &GraphDocument) {
         self.nodes.retain(|id, _| document.node(*id).is_some());
+        for group in &mut self.groups {
+            group.nodes.retain(|id| document.node(*id).is_some());
+        }
+        self.groups.retain(|group| !group.nodes.is_empty());
     }
 }
 
@@ -152,6 +247,25 @@ mod tests {
         let mut layout = GraphLayout::new();
         assert!(layout.place(1, f64::NAN, 0.0).is_err());
         assert!(layout.place(1, 0.0, MAX_COORDINATE * 2.0).is_err());
+    }
+
+    #[test]
+    fn groups_are_validated_and_survive_a_round_trip() {
+        let mut layout = GraphLayout::new();
+        layout.place(1, 0.0, 0.0).expect("place");
+        layout.place(2, 10.0, 0.0).expect("place");
+        let id = layout.group("Porta", &[2, 1]).expect("group");
+        assert_eq!(id, 1);
+        assert_eq!(layout.group_of(1), Some(1));
+        assert!(
+            layout.group("Outro", &[1]).is_err(),
+            "a node cannot be in two groups"
+        );
+        assert!(layout.group("", &[]).is_err());
+        let text = layout.to_text();
+        assert_eq!(GraphLayout::parse(&text).expect("reads"), layout);
+        assert!(layout.ungroup(1));
+        assert_eq!(layout.group_of(1), None);
     }
 
     #[test]

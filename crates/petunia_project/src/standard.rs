@@ -25,9 +25,11 @@ pub const BODY_KINDS: [&str; 3] = ["static", "dynamic", "kinematic"];
 ///   faces themselves, in the object's own coordinates (meters, before `Transform`), and `color`
 ///   paints every face. A brush becomes a mesh with "Tornar editável"; booleans, inset, loop cut,
 ///   bevel and the other modeling operations replace `geometry`, one undo step each.
-/// - `Script`: attaches a script to an object: `file` is the name of a file in the project's
-///   `scripts/` folder, without the `.aipo` extension; `enabled` switches it off without removing it.
-///   The Script Host calls its `on_start`, `on_update` and `on_event` handlers.
+/// - `Script`: one script attached to an object. `file` is the name of a file in the project's
+///   `scripts/` folder, without the extension; `enabled` switches it off without removing it;
+///   `order` decides the order among several scripts. A legacy row on the object has `owner` 0;
+///   newer attachments are child entities with `owner` = the object's persistent id. The Script
+///   Host calls `on_start`, `on_update`, `on_event` and the collision handlers of each attachment.
 /// - `Floor`: a floor of a building ("andar") for the editor: `elevation` of its ground and
 ///   `height` to the next one, in meters. Saved with the scene like any other row.
 /// - `Sculpt`: a sculpted volume (caves, rocks). `base` is `solid` (a box of rock of `size`,
@@ -101,8 +103,10 @@ pub fn register_standard_tables(world: &mut World) -> Result<(), WorldError> {
     )?;
     world.define_table(
         TableSpec::new("Script")
+            .column("owner", ValueKind::Int, Value::Int(0))
             .column("file", ValueKind::Text, Value::Text(String::new()))
-            .column("enabled", ValueKind::Bool, Value::Bool(true)),
+            .column("enabled", ValueKind::Bool, Value::Bool(true))
+            .column("order", ValueKind::Int, Value::Int(0)),
     )?;
     world.define_table(
         TableSpec::new("Floor")

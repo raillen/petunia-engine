@@ -230,7 +230,7 @@ impl<'a> Outliner<'a> {
                             "choices": options.iter().map(|(value, label)| json!({ "value": value, "label": label })).collect::<Vec<_>>(),
                         })
                     }
-                    SettingChoices::Text => json!({
+                    SettingChoices::Text | SettingChoices::TextOptional => json!({
                         "name": setting.name,
                         "label": setting.label,
                         "value": given.unwrap_or(""),
@@ -346,7 +346,10 @@ impl<'a> Outliner<'a> {
                     .or_else(|| options.first())
                     .map(|(_, label)| label.clone()),
                 (SettingChoices::Text, Some(value)) => Some(format!("'{value}'")),
-                (SettingChoices::Text, None) => None,
+                (SettingChoices::TextOptional, Some(value)) if !value.trim().is_empty() => {
+                    Some(format!("'{value}'"))
+                }
+                (SettingChoices::Text | SettingChoices::TextOptional, _) => None,
             };
             if let Some(shown) = shown {
                 text.push(' ');
@@ -457,6 +460,15 @@ impl<'a> Outliner<'a> {
             }
         }
         let text = match (spec.class, spec.kind.as_str()) {
+            (NodeClass::Event, "flow.function") => {
+                let name = node.params.get("name").and_then(Json::as_str).unwrap_or("");
+                let params = node
+                    .params
+                    .get("params")
+                    .and_then(Json::as_str)
+                    .unwrap_or("");
+                format!("FUNÇÃO {name}({params})")
+            }
             (NodeClass::Event, _) => format!("QUANDO {}", spec.title),
             (NodeClass::Flow, "flow.if") => format!(
                 "SE {}",
@@ -477,11 +489,17 @@ impl<'a> Outliner<'a> {
                     .map_or("falta", |text| text.trim_start_matches("Segundos: "))
             ),
             (NodeClass::Flow, "flow.each") => format!(
-                "PARA CADA ITEM EM {}",
+                "PARA CADA ITEM EM {}{settings_text}",
+                shown.first().map_or("falta", |text| text
+                    .trim_start_matches("Lista ou dicionário: "))
+            ),
+            (NodeClass::Flow, "flow.while") => format!(
+                "ENQUANTO {}",
                 shown
                     .first()
-                    .map_or("falta", |text| text.trim_start_matches("Lista: "))
+                    .map_or("falta", |text| text.trim_start_matches("Condição: "))
             ),
+            (NodeClass::Flow, "flow.loop") => "REPETIR SEM PARAR".to_string(),
             _ if shown.is_empty() => format!("{}{settings_text}", spec.title),
             _ => format!("{}{settings_text} — {}", spec.title, shown.join("; ")),
         };

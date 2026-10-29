@@ -8,7 +8,8 @@ use petunia_project::{
     ProjectManifest, Report, Severity, create_sample_project, load_project, save_scene,
 };
 use petunia_render::{
-    FlyCamera, MeshCache, RenderFrame, extract_frame_cached, pick_entity, ray_through, start_camera,
+    FlyCamera, MeshCache, RenderFrame, extract_frame_cached, pick_entity, ray_through,
+    start_camera, start_camera_at,
 };
 use petunia_world::{PersistentId, Value, World};
 use serde_json::{Map, Value as Json, json};
@@ -17,7 +18,7 @@ use crate::brush_ops::{FaceDrag, FaceHit};
 use crate::failure::Failure;
 use crate::floors::AboveFloor;
 use crate::gizmo::{Drag, Handle, Orientation, Snap, Tool};
-use crate::mesh_tool::ComponentSelection;
+use crate::mesh_tool::{ComponentSelection, MeshComponentMode};
 use crate::sculpt_tool::SculptState;
 use crate::tools::{DEFAULT_FLOOR_HEIGHT, FreeMode, PivotMode, SnapTarget};
 
@@ -108,6 +109,10 @@ pub struct EditorSession {
     pub(crate) sculpt: SculptState,
     /// Faces, edges and vertices chosen on an editable mesh (`mesh.select`).
     pub(crate) components: Option<ComponentSelection>,
+    /// Whether the mesh edit handles (all vertices, for example) are shown.
+    pub(crate) mesh_edit_mode: bool,
+    /// What a click chooses while editing a mesh.
+    pub(crate) mesh_component_mode: MeshComponentMode,
     /// Triangles of editable meshes, reused while they do not change (the tools extract the
     /// scene many times per mouse move).
     pub(crate) mesh_cache: RefCell<MeshCache>,
@@ -134,6 +139,13 @@ pub(crate) fn vec3_of(world: &World, id: u64, table: &str, column: &str) -> Opti
     match world.get(handle, table, column) {
         Ok(Value::Vec3(vector)) => Some(*vector),
         _ => None,
+    }
+}
+
+fn camera_at_start(world: &World) -> FlyCamera {
+    match petunia_project::player_start(world) {
+        Some(start) => start_camera_at(start.eye, start.yaw_degrees),
+        None => start_camera(world),
     }
 }
 
@@ -178,6 +190,8 @@ impl EditorSession {
             outline: crate::tools::OutlineStyle::default(),
             sculpt: SculptState::new(),
             components: None,
+            mesh_edit_mode: false,
+            mesh_component_mode: MeshComponentMode::Face,
             mesh_cache: RefCell::new(MeshCache::new()),
             play: None,
             graph: None,
@@ -240,7 +254,7 @@ impl EditorSession {
             );
             return Err(failure);
         };
-        self.camera = start_camera(&loaded.world);
+        self.camera = camera_at_start(&loaded.world);
         let name = loaded.manifest.name.clone();
         self.reset_live_edit();
         self.project = Some(OpenProject {
@@ -305,6 +319,7 @@ impl EditorSession {
         self.hovered_face = None;
         self.sculpt.reset_transient();
         self.components = None;
+        self.mesh_edit_mode = false;
     }
 
     // ---- commands ------------------------------------------------------------------------
@@ -593,6 +608,7 @@ impl EditorSession {
         // copy: one batch, one undo step.
         let mut strokes = self.copy_strokes_records(id, 0);
         strokes.extend(self.copy_collider_records(id, 0));
+        strokes.extend(self.copy_script_records(id, 0));
         if strokes.is_empty() {
             return self.create_and_select(&record);
         }
@@ -627,6 +643,7 @@ impl EditorSession {
             .map(|stroke| CommandRecord::new("world.remove", json!({ "entity": stroke })))
             .collect();
         records.extend(self.remove_collider_records(id));
+        records.extend(self.remove_script_records(id));
         records.push(CommandRecord::new("world.remove", json!({ "entity": id })));
         let record = if records.len() == 1 {
             records.remove(0)
@@ -677,7 +694,7 @@ impl EditorSession {
 
     /// Back to the player start (or the origin).
     pub fn camera_reset(&mut self) -> Result<(), Failure> {
-        self.camera = start_camera(self.world()?);
+        self.camera = camera_at_start(self.world()?);
         Ok(())
     }
 
@@ -793,6 +810,17 @@ impl EditorSession {
                 }));
                 continue;
             }
+            // A second or later script attachment is a child entity; list it under the object by
+            // the file name it runs.
+            if let Some(owner) = crate::scripts::script_owner_of(world, identity.0) {
+                entities.push(json!({
+                    "id": identity.0,
+                    "name": crate::scripts::script_file_of(world, identity.0).unwrap_or_default(),
+                    "tables": tables,
+                    "owner": owner,
+                }));
+                continue;
+            }
             entities.push(json!({
                 "id": identity.0,
                 "name": display_name(world, identity.0),
@@ -813,6 +841,7 @@ impl EditorSession {
             "object_count": world.entity_count().saturating_sub(
                 world.entities_with_table("SculptStroke").map_or(0, |strokes| strokes.len())
                     + world.entities_with_table("Collider").map_or(0, |colliders| colliders.len())
+                    + crate::scripts::script_attachment_count(world)
             ),
             "truncated": truncated,
             "selection": self.selection,

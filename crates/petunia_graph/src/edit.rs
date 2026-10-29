@@ -82,7 +82,10 @@ pub fn add_node(
             "o grafo já tem {MAX_NODES} nós; divida a lógica em dois grafos"
         ));
     }
-    if spec.class == NodeClass::Event && document.nodes.iter().any(|node| node.kind == kind) {
+    if spec.class == NodeClass::Event
+        && !matches!(spec.lowering, Lowering::Function)
+        && document.nodes.iter().any(|node| node.kind == kind)
+    {
         return refuse(format!(
             "o evento '{}' já está neste grafo; cada evento só pode aparecer uma vez",
             spec.title
@@ -321,6 +324,9 @@ pub fn set_param(
                 SettingChoices::Text => value
                     .as_str()
                     .is_some_and(|text| !text.trim().is_empty() && text.len() <= MAX_NAME_BYTES),
+                SettingChoices::TextOptional => value
+                    .as_str()
+                    .is_some_and(|text| text.len() <= MAX_NAME_BYTES),
             };
             if !valid {
                 return refuse(format!("'{value}' não serve para '{}'", setting.label));

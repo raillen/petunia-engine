@@ -8,7 +8,7 @@
 #   radial menu, duplicate, create a box, walk with the arrow keys, look around with the right button,
 #   go up a floor (creates the floors) and build a box there, come back down, create a cave and
 #   carve it with the sculpting tool, dig a tunnel with the path tool, save, open the history tab,
-#   open the Código workspace (F4), create a script, type it (auto-indent) and save it,
+#   open the Código workspace (tab), create a script, type it (auto-indent) and save it,
 #   open the Lógica workspace (F7), create a node graph, add an event and an action from the palettes,
 #   wire an input to the event's dt and look at the generated code,
 #   look at the same graph as boxes and wires (Caixas e fios), drag a box and check that only
@@ -30,6 +30,8 @@ output="${1:-/tmp/petunia-shot/smoke.png}"
 workdir="$(mktemp -d /tmp/petunia-smoke.XXXXXX)"
 display="${PETUNIA_EDITOR_DISPLAY:-:97}"
 mkdir -p "$(dirname "$output")"
+rm -f "$output" "$output.viewport.png" "$output.canvas.png" "$output.playing.png" \
+      "$output.scene.json" "$output.script.aipo" "$output.graph.json" "$output.layout.json"
 
 cleanup() {
     [[ -n "${editor_pid:-}" ]] && kill "$editor_pid" 2>/dev/null || true
@@ -80,8 +82,8 @@ xdotool mousemove 660 360 click 1;               sleep 0.5
 xdotool mousemove 740 420 click 1;               sleep 0.5
 xdotool key Return;                              sleep 0.8
 xdotool key v;                                   sleep 0.3   # back to select
-xdotool mousemove 990 431 click 1;               sleep 0.5   # select crate #9 at its new position
-xdotool key Tab;                                 sleep 0.6   # enter Edit Mode (converts crate to editable mesh)
+xdotool mousemove 100 408 click 1;               sleep 0.5   # select the "Caixa" on the ground in the hierarchy
+xdotool mousemove 335 51 click 1;                sleep 0.8   # the Edição mode button (converts the selected box to a mesh)
 xdotool key 1;                                   sleep 0.4   # switch to vertex mode
 xdotool mousemove 990 431 click 1;               sleep 0.4   # pick component
 xdotool key 2;                                   sleep 0.4   # switch to edge mode
@@ -91,7 +93,7 @@ xdotool mousemove 990 431 click 1;               sleep 0.4   # pick component
 xdotool key Tab;                                 sleep 0.6   # exit Edit Mode (remains a mesh)
 xdotool key ctrl+s;                              sleep 0.6   # save the scene
 xdotool mousemove 385 649 click 1;               sleep 0.4   # open the history tab
-xdotool key F4;                                  sleep 1.2   # the Código workspace opens
+xdotool mousemove 570 17 click 1;                sleep 1.4   # the Código workspace tab
 xdotool mousemove 186 53 click 1;                sleep 1.0   # + (new script) in the Scripts list
 xdotool type --delay 40 smoke; xdotool key Return; sleep 1.0
 xdotool key ctrl+a; xdotool key Delete;          sleep 0.3
@@ -116,8 +118,8 @@ xdotool key Return;                              sleep 1.0   # the first source:
 xdotool mousemove 1153 51 click 1;               sleep 0.8   # Ver como código
 xdotool mousemove 925 51 click 1;                sleep 0.8   # Caixas e fios: the same graph as boxes
 import -window root "$output.canvas.png"                     # one picture of the canvas
-xdotool mousemove 600 330 mousedown 1;                       # drag the event box
-for y in 320 310 300 292; do xdotool mousemove 640 "$y"; sleep 0.15; done
+xdotool mousemove 600 390 mousedown 1;                       # drag the event box
+for y in 380 370 360 350; do xdotool mousemove 640 "$y"; sleep 0.15; done
 xdotool mouseup 1;                               sleep 0.8
 xdotool mousemove 1350 51 click 1;               sleep 0.8   # Ligar ao objeto: the graph now belongs to the selected object
 xdotool key F6;                                  sleep 1.6   # Jogar with the canvas open: marked boxes
@@ -189,10 +191,11 @@ if os.path.exists(layout_path) and os.path.exists(graph_path):
     moved_box = moved_box and all("x" not in n and "y" not in n for n in graph["nodes"])
 print("verificação: caixa arrastada no canvas mudou só scripts/gira.layout.json ->", "ok" if moved_box else "FALHOU")
 converted_to_mesh = any(
-    e["rows"].get("Name", {}).get("text") == "Caixa" and "Mesh" in e["rows"] and "Brush" not in e["rows"]
+    e["rows"].get("Name", {}).get("text") in ("Caixa", "Caixa grande")
+    and "Mesh" in e["rows"] and "Brush" not in e["rows"]
     for e in scene["entities"]
 )
-print("verificação: modo de edição (Tab) converteu caixa para malha editável ->", "ok" if converted_to_mesh else "FALHOU")
+print("verificação: modo de edição converteu caixa para malha editável ->", "ok" if converted_to_mesh else "FALHOU")
 hero_free = not any(e["rows"].get("Name", {}).get("text") == "Jogador" for e in scene["entities"]) and not any("Character" in e["rows"] for e in scene["entities"])
 print("verificação: Jogar (F6) e parar (Esc) não deixaram o herói de reserva na cena salva ->", "ok" if hero_free else "FALHOU")
 sys.exit(0 if (moved and added and on_cursor and built_up and carved and dug and scripted and graph_ok and moved_box and converted_to_mesh and hero_free) else 1)

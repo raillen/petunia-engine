@@ -60,6 +60,45 @@ fn entity(request: &Json) -> Result<u64, Failure> {
         .ok_or_else(|| Failure::bad_request("falta o campo `entity` (id inteiro)"))
 }
 
+fn node_list(request: &Json) -> Result<Vec<u32>, Failure> {
+    let nodes = request
+        .get("nodes")
+        .and_then(Json::as_array)
+        .ok_or_else(|| Failure::bad_request("falta a lista `nodes`"))?;
+    let mut result = Vec::with_capacity(nodes.len());
+    for node in nodes {
+        let id = node
+            .as_u64()
+            .and_then(|id| u32::try_from(id).ok())
+            .ok_or_else(|| Failure::bad_request("cada item de `nodes` precisa ser um número"))?;
+        result.push(id);
+    }
+    Ok(result)
+}
+
+fn layout_list(request: &Json) -> Result<Vec<(u32, f64, f64)>, Failure> {
+    let nodes = request
+        .get("nodes")
+        .and_then(Json::as_array)
+        .ok_or_else(|| Failure::bad_request("falta a lista `nodes`"))?;
+    let mut result = Vec::with_capacity(nodes.len());
+    for node in nodes {
+        let object = node
+            .as_object()
+            .ok_or_else(|| Failure::bad_request("cada posição precisa de `node`, `x` e `y`"))?;
+        let object = Json::Object(object.clone());
+        let id = object
+            .get("node")
+            .and_then(Json::as_u64)
+            .and_then(|id| u32::try_from(id).ok())
+            .ok_or_else(|| Failure::bad_request("cada posição precisa de `node` inteiro"))?;
+        let x = number(&object, "x")? as f64;
+        let y = number(&object, "y")? as f64;
+        result.push((id, x, y));
+    }
+    Ok(result)
+}
+
 impl EditorSession {
     /// The one entry point for a GUI, a test or an agent: a JSON request in, a JSON response out.
     ///
@@ -104,6 +143,7 @@ impl EditorSession {
             "project.save" => self.save(),
 
             "script.list" => self.script_list(),
+            "programming.list" => self.programming_list(),
             "script.read" => self.script_read(text(request, "name")?),
             "script.new" => self.script_new(text(request, "name")?),
             "script.write" => self.script_write(text(request, "name")?, text(request, "text")?),
@@ -119,10 +159,28 @@ impl EditorSession {
             ),
             "script.api" => Ok(self.script_api()),
             "script.attach" => self.script_attach(text(request, "name")?),
+            "script.rename" => self.script_rename(
+                text(request, "name")?,
+                text(request, "new")?,
+                request.get("kind").and_then(Json::as_str),
+            ),
+            "script.delete" => self.script_delete(
+                text(request, "name")?,
+                request.get("kind").and_then(Json::as_str),
+                request
+                    .get("force")
+                    .and_then(Json::as_bool)
+                    .unwrap_or(false),
+            ),
 
             "prefab.list" => Ok(self.prefab_list()),
             "prefab.spawn" => self.prefab_spawn(text(request, "id")?),
 
+            "script.to_graph" => self.graph_from_script(
+                text(request, "name")?,
+                text(request, "graph")?,
+                request.get("text").and_then(Json::as_str),
+            ),
             "graph.list" => self.graph_list(),
             "graph.new" => self.graph_new(text(request, "name")?),
             "graph.open" => self.graph_open(text(request, "name")?),
@@ -156,11 +214,15 @@ impl EditorSession {
             ),
             "graph.sources" => self.graph_sources(&Self::graph_request_pin(request, "for")?),
             "graph.code" => self.graph_code(),
+            "graph.from_code" => self.graph_from_code(text(request, "text")?),
             "graph.set_layout" => self.graph_set_layout(
                 Self::graph_request_node(request, "node")?,
                 number(request, "x")? as f64,
                 number(request, "y")? as f64,
             ),
+            "graph.set_layouts" => self.graph_set_layouts(&layout_list(request)?),
+            "graph.group" => self.graph_group(text(request, "label")?, &node_list(request)?),
+            "graph.ungroup" => self.graph_ungroup(Self::graph_request_node(request, "group")?),
 
             "editor.snapshot" => Ok(self.snapshot()),
             "entity.describe" => self.describe(entity(request)?),

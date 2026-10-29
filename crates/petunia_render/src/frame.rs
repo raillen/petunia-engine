@@ -304,7 +304,18 @@ fn extract_lighting(world: &World, camera: Vec3) -> Lighting {
     lighting
 }
 
-/// Camera placed at the first `PlayerStart`, or at the origin when there is none.
+/// Camera placed at an explicit eye position and facing. The engine picks the start with
+/// `petunia_project::player_start`; this avoids depending on the project format here.
+pub fn start_camera_at(eye: Vec3, yaw_degrees: f32) -> FlyCamera {
+    FlyCamera::new(Camera {
+        position: eye,
+        yaw_degrees,
+        ..Camera::default()
+    })
+}
+
+/// Camera placed at the first `PlayerStart`, or at the origin when there is none. Prefer
+/// [`start_camera_at`] with `petunia_project::player_start` in production.
 pub fn start_camera(world: &World) -> FlyCamera {
     let mut camera = Camera::default();
     if let Some(handle) = world

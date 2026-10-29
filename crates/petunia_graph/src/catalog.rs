@@ -76,6 +76,8 @@ pub enum PinDefault {
     Required,
     /// Left empty, it means the object the event is about (the `entity` of the handler).
     ThisObject,
+    /// May stay empty; the node decides what an empty value means.
+    Optional,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -101,6 +103,8 @@ pub enum SettingChoices {
     OneOf(Vec<(String, String)>),
     /// Free text (a variable name).
     Text,
+    /// Free text that may be empty (a function's parameter list).
+    TextOptional,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -123,7 +127,26 @@ pub enum Lowering {
     If,
     Repeat,
     Each,
+    While,
+    Loop,
+    Break,
+    Continue,
     Wait,
+    Field,
+    Index,
+    List,
+    Dict,
+    Function,
+    Call,
+    CallValue,
+    Param,
+    Return,
+    Global,
+    GlobalGet,
+    GlobalSet,
+    LocalGet,
+    LocalSet,
+    LocalDeclare,
     Compare,
     Logic,
     Not,
@@ -238,6 +261,61 @@ fn text_setting(name: &str, label: &str) -> SettingSpec {
         label: label.to_string(),
         choices: SettingChoices::Text,
     }
+}
+
+fn optional_text_setting(name: &str, label: &str) -> SettingSpec {
+    SettingSpec {
+        name: name.to_string(),
+        label: label.to_string(),
+        choices: SettingChoices::TextOptional,
+    }
+}
+
+fn optional_data_in(name: &str, label: &str, data_type: DataType) -> PinSpec {
+    let mut pin = data_in(name, label, data_type);
+    pin.default = PinDefault::Optional;
+    pin
+}
+
+fn item_inputs(count: usize) -> Vec<PinSpec> {
+    (1..=count)
+        .map(|index| {
+            optional_data_in(
+                &format!("item{index}"),
+                &format!("Item {index}"),
+                DataType::Any,
+            )
+        })
+        .collect()
+}
+
+fn dict_inputs(count: usize) -> Vec<PinSpec> {
+    let mut pins = Vec::new();
+    for index in 1..=count {
+        pins.push(optional_data_in(
+            &format!("key{index}"),
+            &format!("Chave {index}"),
+            DataType::Any,
+        ));
+        pins.push(optional_data_in(
+            &format!("value{index}"),
+            &format!("Valor {index}"),
+            DataType::Any,
+        ));
+    }
+    pins
+}
+
+fn call_inputs() -> Vec<PinSpec> {
+    (1..=8)
+        .map(|index| {
+            data_in(
+                &format!("arg{index}"),
+                &format!("Argumento {index}"),
+                DataType::Any,
+            )
+        })
+        .collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -506,18 +584,277 @@ fn fixed_nodes() -> Vec<NodeSpec> {
             "flow.each",
             "Para cada item",
             "Fluxo",
-            "Roda o corpo uma vez para cada item de uma lista.",
+            "Roda o corpo uma vez para cada item de uma lista ou dicionário. Com posição, a primeira variável é o índice (lista) ou a chave (dicionário) e a segunda é o item (lista) ou o valor (dicionário).",
             NodeClass::Flow,
             vec![
                 exec_in(),
-                data_in("list", "Lista", DataType::List),
+                data_in("list", "Lista ou dicionário", DataType::Any),
                 exec_out("body", "Para cada"),
                 exec_out("done", "Depois da lista"),
-                data_out("item", "Item", DataType::Any),
-                data_out("index", "Posição", DataType::Int),
+                data_out("item", "Item ou chave", DataType::Any),
+                data_out("index", "Posição ou chave", DataType::Any),
+            ],
+            vec![choice_setting(
+                "with_index",
+                "Variáveis",
+                &[("true", "Com posição/chave"), ("false", "Só o item/chave")],
+            )],
+            Lowering::Each,
+        ),
+        fixed(
+            "flow.while",
+            "Enquanto",
+            "Fluxo",
+            "Repete o corpo enquanto a condição for verdadeira.",
+            NodeClass::Flow,
+            vec![
+                exec_in(),
+                data_in("condition", "Condição", DataType::Bool),
+                exec_out("body", "A cada volta"),
+                exec_out("done", "Depois de repetir"),
             ],
             Vec::new(),
-            Lowering::Each,
+            Lowering::While,
+        ),
+        fixed(
+            "flow.loop",
+            "Repetir sem parar",
+            "Fluxo",
+            "Repete o corpo até um nó 'Parar o laço' ser alcançado.",
+            NodeClass::Flow,
+            vec![
+                exec_in(),
+                exec_out("body", "A cada volta"),
+                exec_out("done", "Depois de parar"),
+            ],
+            Vec::new(),
+            Lowering::Loop,
+        ),
+        fixed(
+            "flow.break",
+            "Parar o laço",
+            "Fluxo",
+            "Sai do laço mais próximo.",
+            NodeClass::Flow,
+            vec![exec_in()],
+            Vec::new(),
+            Lowering::Break,
+        ),
+        fixed(
+            "flow.continue",
+            "Pular para a próxima volta",
+            "Fluxo",
+            "Vai direto para a próxima volta do laço mais próximo.",
+            NodeClass::Flow,
+            vec![exec_in()],
+            Vec::new(),
+            Lowering::Continue,
+        ),
+        fixed(
+            "flow.function",
+            "Função",
+            "Funções",
+            "Uma função do script, com os parâmetros que ela recebe. O que vem depois roda quando a função é chamada.",
+            NodeClass::Event,
+            vec![exec_out("then", "Fazer")],
+            vec![
+                text_setting("name", "Nome"),
+                optional_text_setting("params", "Parâmetros (separados por vírgula)"),
+            ],
+            Lowering::Function,
+        ),
+        fixed(
+            "flow.call",
+            "Chamar função",
+            "Funções",
+            "Chama uma função do script e segue depois que ela termina.",
+            NodeClass::Action,
+            std::iter::once(exec_in())
+                .chain(call_inputs())
+                .chain(std::iter::once(exec_out("then", "Depois")))
+                .collect(),
+            vec![text_setting("name", "Função")],
+            Lowering::Call,
+        ),
+        fixed(
+            "flow.call_value",
+            "Valor de função",
+            "Funções",
+            "Chama uma função do script e usa o resultado dela como valor.",
+            NodeClass::Value,
+            call_inputs()
+                .into_iter()
+                .chain(std::iter::once(data_out(
+                    "result",
+                    "Resultado",
+                    DataType::Any,
+                )))
+                .collect(),
+            vec![text_setting("name", "Função")],
+            Lowering::CallValue,
+        ),
+        fixed(
+            "flow.param",
+            "Parâmetro",
+            "Funções",
+            "O valor de um parâmetro da função atual.",
+            NodeClass::Value,
+            vec![data_out("value", "Valor", DataType::Any)],
+            vec![text_setting("name", "Parâmetro")],
+            Lowering::Param,
+        ),
+        fixed(
+            "flow.return",
+            "Devolver",
+            "Funções",
+            "Termina a função, opcionalmente devolvendo um valor.",
+            NodeClass::Flow,
+            vec![exec_in(), optional_data_in("value", "Valor", DataType::Any)],
+            Vec::new(),
+            Lowering::Return,
+        ),
+        fixed(
+            "flow.global",
+            "Global",
+            "Variáveis",
+            "Uma variável do módulo, compartilhada por todos os objetos e funções do script.",
+            NodeClass::Action,
+            vec![data_in("value", "Valor inicial", DataType::Any)],
+            vec![
+                text_setting("name", "Nome"),
+                choice_setting(
+                    "mode",
+                    "Tipo",
+                    &[("let", "Não muda"), ("var", "Pode mudar")],
+                ),
+            ],
+            Lowering::Global,
+        ),
+        fixed(
+            "global.get",
+            "Ler global",
+            "Variáveis",
+            "Lê uma variável do módulo.",
+            NodeClass::Value,
+            vec![data_out("value", "Valor", DataType::Any)],
+            vec![text_setting("name", "Nome")],
+            Lowering::GlobalGet,
+        ),
+        fixed(
+            "global.set",
+            "Gravar global",
+            "Variáveis",
+            "Grava uma variável do módulo que foi declarada com 'Pode mudar'.",
+            NodeClass::Action,
+            vec![
+                exec_in(),
+                data_in("value", "Valor", DataType::Any),
+                exec_out("then", "Depois"),
+            ],
+            vec![text_setting("name", "Nome")],
+            Lowering::GlobalSet,
+        ),
+        fixed(
+            "local.get",
+            "Ler variável local",
+            "Variáveis",
+            "Lê uma variável que existe só durante esta chamada de função.",
+            NodeClass::Value,
+            vec![data_out("value", "Valor", DataType::Any)],
+            vec![text_setting("name", "Nome")],
+            Lowering::LocalGet,
+        ),
+        fixed(
+            "local.set",
+            "Gravar variável local",
+            "Variáveis",
+            "Grava uma variável local que já foi declarada nesta função.",
+            NodeClass::Action,
+            vec![
+                exec_in(),
+                data_in("value", "Valor", DataType::Any),
+                exec_out("then", "Depois"),
+            ],
+            vec![text_setting("name", "Nome")],
+            Lowering::LocalSet,
+        ),
+        fixed(
+            "local.declare",
+            "Declarar variável local",
+            "Variáveis",
+            "Cria uma variável que existe só durante esta chamada de função.",
+            NodeClass::Action,
+            vec![
+                exec_in(),
+                data_in("value", "Valor", DataType::Any),
+                exec_out("then", "Depois"),
+            ],
+            vec![
+                text_setting("name", "Nome"),
+                choice_setting(
+                    "mode",
+                    "Tipo",
+                    &[("let", "Não muda"), ("var", "Pode mudar")],
+                ),
+            ],
+            Lowering::LocalDeclare,
+        ),
+        fixed(
+            "op.field",
+            "Campo",
+            "Valores",
+            "Lê um campo de um objeto, dicionário ou lista.",
+            NodeClass::Value,
+            vec![
+                data_in("target", "Objeto", DataType::Any),
+                data_out("result", "Valor", DataType::Any),
+            ],
+            vec![text_setting("name", "Campo")],
+            Lowering::Field,
+        ),
+        fixed(
+            "op.index",
+            "Índice",
+            "Valores",
+            "Lê um item de uma lista ou dicionário pela posição ou chave.",
+            NodeClass::Value,
+            vec![
+                data_in("target", "Lista", DataType::Any),
+                data_in("index", "Posição ou chave", DataType::Any),
+                data_out("result", "Valor", DataType::Any),
+            ],
+            Vec::new(),
+            Lowering::Index,
+        ),
+        fixed(
+            "op.list",
+            "Lista",
+            "Valores",
+            "Monta uma lista com os itens ligados, na ordem.",
+            NodeClass::Value,
+            item_inputs(16)
+                .into_iter()
+                .chain(std::iter::once(data_out("result", "Lista", DataType::Any)))
+                .collect(),
+            Vec::new(),
+            Lowering::List,
+        ),
+        fixed(
+            "op.dict",
+            "Dicionário",
+            "Valores",
+            "Monta um dicionário com os pares chave/valor ligados.",
+            NodeClass::Value,
+            dict_inputs(8)
+                .into_iter()
+                .chain(std::iter::once(data_out(
+                    "result",
+                    "Dicionário",
+                    DataType::Any,
+                )))
+                .collect(),
+            Vec::new(),
+            Lowering::Dict,
         ),
         fixed(
             "flow.wait",

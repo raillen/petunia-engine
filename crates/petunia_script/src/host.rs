@@ -7,6 +7,7 @@ use std::cell::{Ref, RefCell, RefMut};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use aipo_bytecode::BytecodeModule;
 use aipo_host::{Capability, CapabilitySet};
@@ -53,11 +54,6 @@ pub struct ScriptFault {
     pub function: String,
     pub code: String,
     pub message: String,
-}
-
-struct LoadedScript {
-    engine: AipoEngine,
-    module: BytecodeModule,
 }
 
 /// What [`ScriptHost::load_directory`] found.
@@ -167,9 +163,10 @@ fn install_api(engine: &mut AipoEngine) {
 pub struct ScriptHost {
     state: GameCell,
     surface: PreludeSurface,
-    scripts: BTreeMap<String, LoadedScript>,
-    started: BTreeSet<u64>,
-    disabled: BTreeSet<u64>,
+    scripts: BTreeMap<String, Arc<BytecodeModule>>,
+    engines: BTreeMap<(u64, String), AipoEngine>,
+    started: BTreeSet<(u64, String)>,
+    disabled: BTreeSet<(u64, String)>,
     faults: Vec<ScriptFault>,
     limits: ScriptLimits,
     /// Whether graphs are compiled with the marks play mode reads (N5).
@@ -193,6 +190,7 @@ impl ScriptHost {
             }))),
             surface: script_surface(),
             scripts: BTreeMap::new(),
+            engines: BTreeMap::new(),
             started: BTreeSet::new(),
             disabled: BTreeSet::new(),
             faults: Vec::new(),
@@ -363,8 +361,14 @@ impl ScriptHost {
 
     /// Gives the world back (the scripts are dropped first, so nothing else holds it).
     pub fn into_world(self) -> World {
-        let Self { state, scripts, .. } = self;
+        let Self {
+            state,
+            scripts,
+            engines,
+            ..
+        } = self;
         drop(scripts);
+        drop(engines);
         match Rc::try_unwrap(state.0) {
             Ok(cell) => cell.into_inner().world,
             Err(shared) => shared.borrow().world.clone(),
@@ -413,27 +417,15 @@ impl ScriptHost {
         let Some(module) = compiled.module else {
             return Err(compiled.diagnostics);
         };
-        let mut engine = self
-            .build_engine()
-            .map_err(|message| vec![ScriptDiagnostic::general("SCRIPT_HOST", message)])?;
-        engine.register_module_declarations(&module);
-        engine.reset_instruction_count();
-        if let Err(error) = engine.run(&module) {
-            let mut diagnostics = compiled.diagnostics;
-            let (code, message) = describe(&error, self.limits.instructions_per_call);
-            diagnostics.push(ScriptDiagnostic::general(
-                &code,
-                format!("ao carregar: {message}"),
-            ));
-            return Err(diagnostics);
-        }
-        self.scripts
-            .insert(name.to_string(), LoadedScript { engine, module });
+        // The top level runs when the script is first used by an object, not here: with one VM per
+        // attachment, running it at load would execute it once more than the object needs.
+        self.scripts.insert(name.to_string(), Arc::new(module));
+        self.engines.retain(|(_, file), _| file != name);
         self.faults.retain(|fault| fault.script != name);
         let attached = self.attached();
         for (entity, file) in attached {
             if file == name {
-                self.disabled.remove(&entity);
+                self.disabled.remove(&(entity, file));
             }
         }
         Ok(compiled.diagnostics)
@@ -551,15 +543,16 @@ impl ScriptHost {
         report
     }
 
-    /// Objects that have a script, as `(entity, script name)`, in id order. A script that is
-    /// switched off in the `Script` row is left out.
+    /// Objects that have a script, as `(entity, script name)`, in execution order: object id,
+    /// then the attachment's `order`, then the file name. An attachment can live on the object's
+    /// own `Script` row (legacy, owner 0) or on a child entity with `owner = object id`.
     pub fn attached(&self) -> Vec<(u64, String)> {
         use petunia_world::Value as WorldValue;
         let state = self.state.0.borrow();
         let Ok(handles) = state.world.entities_with_table("Script") else {
             return Vec::new();
         };
-        let mut attached: Vec<(u64, String)> = handles
+        let mut attached: Vec<(u64, i64, String, u64)> = handles
             .into_iter()
             .filter_map(|handle| {
                 let id = state.world.persistent_id(handle).ok()?.0;
@@ -570,40 +563,77 @@ impl ScriptHost {
                 let Ok(WorldValue::Text(file)) = state.world.get(handle, "Script", "file") else {
                     return None;
                 };
-                (enabled && !file.is_empty()).then(|| (id, file.clone()))
+                let owner = match state.world.get(handle, "Script", "owner") {
+                    Ok(WorldValue::Int(owner)) if *owner > 0 => *owner as u64,
+                    _ => id,
+                };
+                let order = match state.world.get(handle, "Script", "order") {
+                    Ok(WorldValue::Int(order)) => *order,
+                    _ => 0,
+                };
+                // A child attachment whose object was removed directly (a script calling
+                // world.remove) must not keep running.
+                if state.world.handle_of(PersistentId(owner)).is_err() {
+                    return None;
+                }
+                (enabled && !file.is_empty()).then(|| (owner, order, file.clone(), id))
             })
             .collect();
-        attached.sort();
+        attached.sort_by(|left, right| {
+            left.0
+                .cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+                .then_with(|| left.2.cmp(&right.2))
+                .then_with(|| left.3.cmp(&right.3))
+        });
         attached
+            .into_iter()
+            .map(|(owner, _, file, _)| (owner, file))
+            .collect()
     }
 
     /// Calls `function` of a script. `Ok(None)` when the script does not define it.
     fn call(
         &mut self,
+        entity: u64,
         script: &str,
         function: &str,
         arguments: &[Value],
     ) -> Result<Option<Value>, (String, String)> {
         let limit = self.limits.instructions_per_call;
-        let Some(loaded) = self.scripts.get_mut(script) else {
+        let Some(module) = self.scripts.get(script).cloned() else {
             return Err((
                 "SCRIPT_NOT_LOADED".to_string(),
                 format!("o script `{script}` não está carregado"),
             ));
         };
-        let Some(callee) = loaded.engine.vm().get_global(function).cloned() else {
+        let key = (entity, script.to_string());
+        if !self.engines.contains_key(&key) {
+            let mut engine = self
+                .build_engine()
+                .map_err(|message| ("SCRIPT_HOST".to_string(), message))?;
+            engine.register_module_declarations(&module);
+            engine.reset_instruction_count();
+            if let Err(error) = engine.run(&module) {
+                return Err(describe(&error, limit));
+            }
+            self.engines.insert(key.clone(), engine);
+        }
+        let Some(loaded) = self.engines.get_mut(&key) else {
+            return Err((
+                "SCRIPT_HOST".to_string(),
+                "o estado do script desapareceu".to_string(),
+            ));
+        };
+        let Some(callee) = loaded.vm().get_global(function).cloned() else {
             return Ok(None);
         };
         if !matches!(callee, Value::Function { .. } | Value::Closure(_)) {
             return Ok(None);
         }
-        loaded.engine.set_instruction_budget(Some(limit));
-        loaded.engine.reset_instruction_count();
-        match loaded
-            .engine
-            .vm_mut()
-            .invoke(&loaded.module, callee, arguments)
-        {
+        loaded.set_instruction_budget(Some(limit));
+        loaded.reset_instruction_count();
+        match loaded.vm_mut().invoke(&module, callee, arguments) {
             // A handler that ends in an unhandled `Failure` did not do its job: say so, instead of
             // letting it pass for success.
             Ok(Value::Failure(failure)) => Err((
@@ -623,7 +653,7 @@ impl ScriptHost {
         code: String,
         message: String,
     ) {
-        self.disabled.insert(entity);
+        self.disabled.insert((entity, script.to_string()));
         self.state.0.borrow_mut().push_log(
             LogLevel::Error,
             format!("{script}.{function}: {message} (o script do objeto {entity} foi desligado)"),
@@ -640,7 +670,7 @@ impl ScriptHost {
     fn call_handler(&mut self, entity: u64, script: &str, function: &str, extra: &[Value]) {
         let mut arguments = vec![Value::Int(entity as i64)];
         arguments.extend_from_slice(extra);
-        if let Err((code, message)) = self.call(script, function, &arguments) {
+        if let Err((code, message)) = self.call(entity, script, function, &arguments) {
             self.record_fault(entity, script, function, code, message);
         }
     }
@@ -662,29 +692,32 @@ impl ScriptHost {
             }
         }
         for (entity, script) in self.attached() {
-            if self.disabled.contains(&entity) {
+            if self.disabled.contains(&(entity, script.clone())) {
                 continue;
             }
-            if self.started.insert(entity) {
+            if self.started.insert((entity, script.clone())) {
                 self.call_handler(entity, &script, "on_start", &[]);
-                if self.disabled.contains(&entity) {
+                if self.disabled.contains(&(entity, script.clone())) {
                     continue;
                 }
             }
             self.call_handler(entity, &script, "on_update", &[Value::Float(dt)]);
         }
         let events = std::mem::take(&mut self.state.0.borrow_mut().events);
-        let attached: BTreeMap<u64, String> = self.attached().into_iter().collect();
+        let mut attached: BTreeMap<u64, Vec<String>> = BTreeMap::new();
+        for (entity, script) in self.attached() {
+            attached.entry(entity).or_default().push(script);
+        }
         for event in events {
-            if self.disabled.contains(&event.entity) {
-                continue;
-            }
-            if let Some(script) = attached.get(&event.entity).cloned() {
+            for script in attached.get(&event.entity).cloned().unwrap_or_default() {
+                if self.disabled.contains(&(event.entity, script.clone())) {
+                    continue;
+                }
                 self.call_handler(
                     event.entity,
                     &script,
                     "on_event",
-                    &[Value::string(event.name)],
+                    &[Value::string(event.name.clone())],
                 );
             }
         }
@@ -702,7 +735,10 @@ impl ScriptHost {
         if contacts.is_empty() {
             return;
         }
-        let attached: BTreeMap<u64, String> = self.attached().into_iter().collect();
+        let mut attached: BTreeMap<u64, Vec<String>> = BTreeMap::new();
+        for (entity, script) in self.attached() {
+            attached.entry(entity).or_default().push(script);
+        }
         for contact in contacts {
             let handler = match contact.phase {
                 petunia_physics::ContactPhase::Started => "on_collision",
@@ -712,10 +748,13 @@ impl ScriptHost {
                 (&contact.first, &contact.second),
                 (&contact.second, &contact.first),
             ] {
-                if mine.owner == theirs.owner || self.disabled.contains(&mine.owner) {
+                if mine.owner == theirs.owner {
                     continue;
                 }
-                if let Some(script) = attached.get(&mine.owner).cloned() {
+                for script in attached.get(&mine.owner).cloned().unwrap_or_default() {
+                    if self.disabled.contains(&(mine.owner, script.clone())) {
+                        continue;
+                    }
                     self.call_handler(
                         mine.owner,
                         &script,
@@ -733,15 +772,10 @@ impl ScriptHost {
 
     /// Sends an event to one object from the host (a key, a trigger).
     pub fn send_event(&mut self, entity: u64, name: &str) {
-        if self.disabled.contains(&entity) {
-            return;
-        }
-        let script = self
-            .attached()
-            .into_iter()
-            .find(|(id, _)| *id == entity)
-            .map(|(_, script)| script);
-        if let Some(script) = script {
+        for (owner, script) in self.attached() {
+            if owner != entity || self.disabled.contains(&(entity, script.clone())) {
+                continue;
+            }
             self.call_handler(entity, &script, "on_event", &[Value::string(name)]);
         }
     }
