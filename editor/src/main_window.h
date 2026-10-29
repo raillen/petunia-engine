@@ -150,6 +150,9 @@ private:
     QAction* caveHolesAction_ = nullptr;
     QAction* caveBooleanAction_ = nullptr;
     QAction* caveStampAction_ = nullptr;
+    // Operações > heightmap: the terrain patch as a .pthm file.
+    QAction* exportHeightmapAction_ = nullptr;
+    QAction* importHeightmapAction_ = nullptr;
     // Criar > Luz: a bulb and a sun (DR-29).
     QAction* importModelAction_ = nullptr;
     QAction* pointLightAction_ = nullptr;

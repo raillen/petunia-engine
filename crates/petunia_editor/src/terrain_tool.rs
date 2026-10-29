@@ -9,11 +9,15 @@
 //! drawn by the overlay; a host may also dim the surface (X-ray) while a drag is active.
 
 use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 
 use petunia_commands::{BATCH_COMMAND, CommandRecord};
 use petunia_math::{Color, Vec3};
-use petunia_render::{OverlayItem, Ray};
-use petunia_terrain::{Brush, BrushShape, ChunkCoord, Falloff, Terrain, TerrainOperation};
+use petunia_render::{OverlayItem, Ray, extract_sculpt_volumes, volume_center_height};
+use petunia_terrain::{
+    Brush, BrushShape, ChunkCoord, Falloff, Heightmap, MAX_HEIGHTMAP_SIDE, Terrain,
+    TerrainOperation,
+};
 use petunia_world::{PersistentId, Value};
 use serde_json::{Value as Json, json};
 
@@ -26,8 +30,40 @@ const RING_COLOR: Color = Color::new(0.35, 0.85, 1.0, 1.0);
 /// A new dab is applied once the mouse has moved this fraction of the radius.
 const DAB_SPACING: f32 = 0.35;
 const MAX_RAY_DISTANCE: f32 = 800.0;
+/// Longest heightmap file read from disk: 4 Mi samples (16 MB) plus header and slack.
+const MAX_HEIGHTMAP_BYTES: u64 = 20 * 1024 * 1024;
 const MIN_RADIUS: f32 = 0.25;
 const MAX_RADIUS: f32 = 64.0;
+
+/// A heightmap file the editor accepts: only the engine's own type, so a wrong path cannot
+/// overwrite something unrelated.
+fn heightmap_path(path: &str) -> Result<PathBuf, Failure> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err(Failure::bad_request("falta o caminho do arquivo"));
+    }
+    let path = PathBuf::from(trimmed);
+    let is_heightmap = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value.eq_ignore_ascii_case("pthm"));
+    if !is_heightmap {
+        return Err(Failure::new(
+            "HEIGHTMAP_EXTENSION",
+            "o arquivo precisa terminar em .pthm",
+            "Escolha um arquivo .pthm: é o formato de heightmap do motor.",
+        ));
+    }
+    Ok(path)
+}
+
+fn heightmap_io_error(code: &str, path: &Path, error: std::io::Error) -> Failure {
+    Failure::new(
+        code,
+        &format!("não foi possível usar {}: {error}", path.display()),
+        "Confira a pasta, o nome do arquivo e a permissão de escrita.",
+    )
+}
 
 pub(crate) struct TerrainDrag {
     entity: u64,
@@ -216,10 +252,13 @@ impl EditorSession {
         json!({ "terrain_xray": enabled })
     }
 
-    /// Enables the horizontal cut plane. Without an explicit height it uses the brush cursor.
+    /// Enables the horizontal cut plane. Without an explicit height it aims at the middle of the
+    /// selected cave (so the plane crosses it), and otherwise at the brush cursor.
     pub fn set_terrain_section(&mut self, enabled: bool, height: Option<f32>) -> Json {
         self.terrain.section = enabled;
         if let Some(height) = height.filter(|value| value.is_finite()) {
+            self.terrain.section_height = height;
+        } else if let Some(height) = self.selected_cave_height() {
             self.terrain.section_height = height;
         } else if let Some((point, _)) = self.terrain.cursor {
             self.terrain.section_height = point.y;
@@ -228,6 +267,154 @@ impl EditorSession {
             "enabled": self.terrain.section,
             "height": self.terrain.section_height,
         })
+    }
+
+    /// Middle height of the selected cave, when the selection is one: the cut plane starts there.
+    pub(crate) fn selected_cave_height(&self) -> Option<f32> {
+        let selected = self.selection?;
+        let world = self.world().ok()?;
+        extract_sculpt_volumes(world)
+            .into_iter()
+            .find(|cave| cave.entity == selected)
+            .and_then(|cave| volume_center_height(&cave.transform, &cave.volume))
+    }
+
+    /// The terrain a heightmap acts on: the selection when it is one, else the first in the scene.
+    fn heightmap_terrain(&self) -> Result<u64, Failure> {
+        let world = self.world()?;
+        if let Some(selected) = self.selection
+            && let Ok(handle) = world.handle_of(PersistentId(selected))
+            && matches!(world.get(handle, "Terrain", "data"), Ok(Value::Terrain(_)))
+        {
+            return Ok(selected);
+        }
+        world
+            .entities_with_table("Terrain")
+            .unwrap_or_default()
+            .first()
+            .and_then(|handle| world.persistent_id(*handle).ok())
+            .map(|identity| identity.0)
+            .ok_or_else(|| {
+                Failure::new(
+                    "TERRAIN_NO_TERRAIN",
+                    "a cena não tem terreno",
+                    "Crie um em Criar > Terreno.",
+                )
+            })
+    }
+
+    fn terrain_value(&self, entity: u64) -> Result<Terrain, Failure> {
+        let world = self.world()?;
+        let handle = world.handle_of(PersistentId(entity))?;
+        match world.get(handle, "Terrain", "data") {
+            Ok(Value::Terrain(terrain)) => Ok(terrain.clone()),
+            _ => Err(Failure::new(
+                "TERRAIN_INVALID",
+                "a entidade não tem um terreno",
+                "Selecione um terreno criado com Criar > Terreno.",
+            )),
+        }
+    }
+
+    /// Writes a rectangle of the terrain as a `.pthm` heightmap file.
+    pub fn terrain_heightmap_export(
+        &mut self,
+        path: &str,
+        x: Option<f32>,
+        z: Option<f32>,
+        width: Option<usize>,
+        depth: Option<usize>,
+    ) -> Result<Json, Failure> {
+        let path = heightmap_path(path)?;
+        let entity = self.heightmap_terrain()?;
+        let terrain = self.terrain_value(entity)?;
+        let (start_x, start_z, whole_width, whole_depth) = match terrain.bounds() {
+            Some((minimum, maximum)) => (
+                minimum.x,
+                minimum.z,
+                ((maximum.x - minimum.x) / terrain.cell_size()).round() as usize + 1,
+                ((maximum.z - minimum.z) / terrain.cell_size()).round() as usize + 1,
+            ),
+            None => (0.0, 0.0, 1, 1),
+        };
+        let map = Heightmap::from_terrain(
+            &terrain,
+            x.unwrap_or(start_x),
+            z.unwrap_or(start_z),
+            width.unwrap_or(whole_width).clamp(1, MAX_HEIGHTMAP_SIDE),
+            depth.unwrap_or(whole_depth).clamp(1, MAX_HEIGHTMAP_SIDE),
+        )
+        .map_err(terrain_failure)?;
+        let bytes = map.encode();
+        std::fs::write(&path, &bytes)
+            .map_err(|error| heightmap_io_error("HEIGHTMAP_WRITE", &path, error))?;
+        Ok(json!({
+            "path": path.display().to_string(),
+            "width": map.width,
+            "depth": map.depth,
+            "cell_size": map.cell_size,
+            "samples": map.sample_count(),
+            "bytes": bytes.len(),
+        }))
+    }
+
+    /// Reads a `.pthm` file and stamps it onto the terrain at `x, z` (the first sample).
+    pub fn terrain_heightmap_import(
+        &mut self,
+        path: &str,
+        x: Option<f32>,
+        z: Option<f32>,
+        mode: Option<&str>,
+    ) -> Result<Json, Failure> {
+        let path = heightmap_path(path)?;
+        let entity = self.heightmap_terrain()?;
+        let size = std::fs::metadata(&path)
+            .map_err(|error| heightmap_io_error("HEIGHTMAP_READ", &path, error))?
+            .len();
+        if size > MAX_HEIGHTMAP_BYTES {
+            return Err(Failure::new(
+                "HEIGHTMAP_TOO_LARGE",
+                &format!("o arquivo tem {size} bytes; o máximo é {MAX_HEIGHTMAP_BYTES}"),
+                "Use um arquivo de até 4 milhões de amostras (2048 × 2048).",
+            ));
+        }
+        let bytes = std::fs::read(&path)
+            .map_err(|error| heightmap_io_error("HEIGHTMAP_READ", &path, error))?;
+        let map = Heightmap::decode(&bytes).map_err(|error| {
+            Failure::new(
+                "HEIGHTMAP_INVALID",
+                &error.to_string(),
+                "Exporte o heightmap por Operações > Exportar heightmap, ou confira o arquivo.",
+            )
+        })?;
+        let origin_x = x.unwrap_or(map.origin_x);
+        let origin_z = z.unwrap_or(map.origin_z);
+        let (center_x, center_z) = (
+            origin_x + (map.width as f32 - 1.0) * map.cell_size * 0.5,
+            origin_z + (map.depth as f32 - 1.0) * map.cell_size * 0.5,
+        );
+        let mode = mode.unwrap_or("replace");
+        let result = self.execute(&CommandRecord::new(
+            "terrain.stamp",
+            json!({
+                "entity": entity,
+                "x": center_x,
+                "z": center_z,
+                "width": map.width,
+                "depth": map.depth,
+                "heights": map.heights,
+                "mode": mode,
+            }),
+        ))?;
+        self.selection = Some(entity);
+        Ok(json!({
+            "entity": entity,
+            "path": path.display().to_string(),
+            "width": map.width,
+            "depth": map.depth,
+            "mode": mode,
+            "changed": result.get("changed").cloned().unwrap_or(Json::Null),
+        }))
     }
 
     pub fn terrain_begin(&mut self, pointer: Pointer) -> Result<Json, Failure> {

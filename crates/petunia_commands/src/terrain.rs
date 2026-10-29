@@ -9,8 +9,9 @@ use petunia_schema::{
     CommandSpec, Cost, FailureSpec, ParamKind, ParamSpec, QuerySpec, Reversibility, Status,
 };
 use petunia_terrain::{
-    Brush, BrushShape, ChunkCoord, Falloff, FractalSettings, MAX_BRUSH_SAMPLES, Stamp, StampMode,
-    Terrain, TerrainChunk, TerrainError, TerrainGeneration, TerrainHole, TerrainOperation,
+    Brush, BrushShape, ChunkCoord, Falloff, FractalSettings, Heightmap, MAX_BRUSH_SAMPLES,
+    MAX_HEIGHTMAP_SIDE, Stamp, StampMode, Terrain, TerrainChunk, TerrainError, TerrainGeneration,
+    TerrainHole, TerrainOperation,
 };
 use petunia_world::{PersistentId, Value, World};
 use serde::Deserialize;
@@ -42,6 +43,42 @@ pub(crate) fn queries() -> Vec<QuerySpec> {
             example: r#"{"entity": 4, "x": 10.5, "z": -3.0}"#.to_string(),
         },
         QuerySpec {
+            id: "terrain.heights".to_string(),
+            summary: "Uma grade de alturas do terreno, em linha, para exportar um heightmap."
+                .to_string(),
+            params: vec![
+                ParamSpec::required("entity", ParamKind::Entity, "Terreno."),
+                ParamSpec::optional(
+                    "x",
+                    ParamKind::Float,
+                    "x da primeira amostra em metros (padrão: início do terreno).",
+                ),
+                ParamSpec::optional(
+                    "z",
+                    ParamKind::Float,
+                    "z da primeira amostra em metros (padrão: início do terreno).",
+                ),
+                ParamSpec::optional(
+                    "width",
+                    ParamKind::Int,
+                    "Amostras em x (1 a 2048; padrão: a largura do terreno).",
+                ),
+                ParamSpec::optional(
+                    "depth",
+                    ParamKind::Int,
+                    "Amostras em z (1 a 2048; padrão: a profundidade do terreno).",
+                ),
+            ],
+            returns: ParamKind::Any,
+            failures: vec![FailureSpec::new(
+                "TERRAIN_INVALID",
+                "Ajuste a área pedida (largura, profundidade, origem).",
+            )],
+            permission: "world.read".to_string(),
+            status: Status::Provisional,
+            example: r#"{"entity": 4, "x": 0, "z": 0, "width": 64, "depth": 64}"#.to_string(),
+        },
+        QuerySpec {
             id: "terrain.info".to_string(),
             summary: "Resumo do terreno: célula, blocos, amostras e limites.".to_string(),
             params: vec![ParamSpec::required("entity", ParamKind::Entity, "Terreno.")],
@@ -71,6 +108,51 @@ pub(crate) fn run_query(world: &World, query: &str, payload: &Json) -> Result<Js
                 "normal": normal.map(|normal| json!({
                     "x": normal.x, "y": normal.y, "z": normal.z
                 })),
+            }))
+        }
+        "terrain.heights" => {
+            let entity = payload.get("entity").and_then(Json::as_u64).unwrap_or(0);
+            let terrain = read_terrain(world, entity)?;
+            let (start_x, start_z, whole_width, whole_depth) = match terrain.bounds() {
+                Some((minimum, maximum)) => (
+                    minimum.x,
+                    minimum.z,
+                    ((maximum.x - minimum.x) / terrain.cell_size()).round() as i64 + 1,
+                    ((maximum.z - minimum.z) / terrain.cell_size()).round() as i64 + 1,
+                ),
+                None => (0.0, 0.0, 1, 1),
+            };
+            let x = payload
+                .get("x")
+                .and_then(Json::as_f64)
+                .map(|value| value as f32)
+                .unwrap_or(start_x);
+            let z = payload
+                .get("z")
+                .and_then(Json::as_f64)
+                .map(|value| value as f32)
+                .unwrap_or(start_z);
+            let width = payload
+                .get("width")
+                .and_then(Json::as_u64)
+                .map(|value| value as usize)
+                .unwrap_or(usize::try_from(whole_width).unwrap_or(1))
+                .clamp(1, MAX_HEIGHTMAP_SIDE);
+            let depth = payload
+                .get("depth")
+                .and_then(Json::as_u64)
+                .map(|value| value as usize)
+                .unwrap_or(usize::try_from(whole_depth).unwrap_or(1))
+                .clamp(1, MAX_HEIGHTMAP_SIDE);
+            let map = Heightmap::from_terrain(&terrain, x, z, width, depth)
+                .map_err(|error| terrain_error("terrain.heights", error))?;
+            Ok(json!({
+                "cell_size": map.cell_size,
+                "origin_x": map.origin_x,
+                "origin_z": map.origin_z,
+                "width": map.width,
+                "depth": map.depth,
+                "heights": map.heights,
             }))
         }
         "terrain.info" => {
@@ -2368,6 +2450,51 @@ mod tests {
         .expect("info");
         assert_eq!(info["chunk_count"], 1);
         assert_eq!(info["sample_count"], 256);
+    }
+
+    #[test]
+    fn the_heights_query_reads_a_grid_that_can_be_stamped_back() {
+        let mut world = world();
+        let mut dispatcher = dispatcher();
+        let made = run(&mut world, &mut dispatcher, "terrain.create", json!({}));
+        let entity = made["entity"].as_u64().expect("entity");
+        run(
+            &mut world,
+            &mut dispatcher,
+            "terrain.generate",
+            json!({ "entity": entity, "min_x": 0, "min_z": 0, "max_x": 0, "max_z": 0, "seed": 7 }),
+        );
+        // The whole terrain by default, and a smaller patch when asked.
+        let all = run_query(
+            &world,
+            &QueryRecord::new("terrain.heights", json!({ "entity": entity })),
+        )
+        .expect("heights");
+        // A 16-cell chunk spans 17 samples (the border cells are shared with the neighbour).
+        assert_eq!(all["width"], 17);
+        assert_eq!(all["depth"], 17);
+        assert_eq!(all["heights"].as_array().map(Vec::len), Some(289));
+        let patch = run_query(
+            &world,
+            &QueryRecord::new(
+                "terrain.heights",
+                json!({ "entity": entity, "width": 2, "depth": 3 }),
+            ),
+        )
+        .expect("patch");
+        assert_eq!(patch["width"], 2);
+        assert_eq!(patch["depth"], 3);
+        assert_eq!(patch["heights"].as_array().map(Vec::len), Some(6));
+        // A grid too wide for the format is clamped, never an error.
+        let clamped = run_query(
+            &world,
+            &QueryRecord::new(
+                "terrain.heights",
+                json!({ "entity": entity, "width": 9000, "depth": 1 }),
+            ),
+        )
+        .expect("clamped");
+        assert_eq!(clamped["width"], MAX_HEIGHTMAP_SIDE);
     }
 
     #[test]

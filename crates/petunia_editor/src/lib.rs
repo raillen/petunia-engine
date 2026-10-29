@@ -821,4 +821,166 @@ mod tests {
         assert!((again["result"]["height"].as_f64().unwrap_or(0.0) - 1.5).abs() < 1.0e-6);
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    #[test]
+    fn a_heightmap_exported_and_imported_puts_the_same_heights_back() {
+        let root = scratch_dir("terrain_heightmap");
+        let mut session = EditorSession::new().expect("session");
+        call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "Heightmap" }),
+        );
+        let made = call(
+            &mut session,
+            json!({ "op": "create.terrain", "cell_size": 1.0, "chunk_cells": 8 }),
+        );
+        let terrain = made["result"]["entity"].as_u64().expect("terreno");
+        call(
+            &mut session,
+            json!({
+                "op": "terrain.generate", "entity": terrain,
+                "min_x": -1, "min_z": -1, "max_x": 0, "max_z": 0,
+                "seed": 5, "amplitude": 6.0
+            }),
+        );
+        let before: Vec<f64> = call(
+            &mut session,
+            json!({ "op": "query.run", "query": "terrain.heights",
+                    "payload": { "entity": terrain, "x": 0.0, "z": 0.0, "width": 4, "depth": 4 } }),
+        )["result"]["heights"]
+            .as_array()
+            .expect("alturas")
+            .iter()
+            .map(|value| value.as_f64().unwrap_or(0.0))
+            .collect();
+        assert!(
+            before.iter().any(|height| height.abs() > 0.01),
+            "o terreno gerado tem relevo"
+        );
+
+        let file = root.join("patch.pthm");
+        let exported = call(
+            &mut session,
+            json!({ "op": "terrain.heightmap_export", "path": file.display().to_string(),
+                    "x": 0.0, "z": 0.0, "width": 4, "depth": 4 }),
+        );
+        assert_eq!(exported["result"]["width"], 4, "{exported}");
+        assert_eq!(exported["result"]["samples"], 16);
+        assert!(std::fs::metadata(&file).map(|meta| meta.len()).unwrap_or(0) > 28);
+
+        // Flatten the same area, then bring the file back: the heights return.
+        call(
+            &mut session,
+            json!({ "op": "terrain.heightmap_import", "path": file.display().to_string() }),
+        );
+        let flattened_by_hand = call(
+            &mut session,
+            json!({ "op": "command.execute", "command": "terrain.stamp",
+                    "payload": { "entity": terrain, "x": 1.5, "z": 1.5,
+                                 "width": 4, "depth": 4, "mode": "replace",
+                                 "heights": [0, 0, 0, 0, 0, 0, 0, 0,
+                                             0, 0, 0, 0, 0, 0, 0, 0] } }),
+        );
+        assert!(flattened_by_hand["error"].is_null(), "{flattened_by_hand}");
+        let flattened: Vec<f64> = call(
+            &mut session,
+            json!({ "op": "query.run", "query": "terrain.heights",
+                    "payload": { "entity": terrain, "x": 0.0, "z": 0.0, "width": 4, "depth": 4 } }),
+        )["result"]["heights"]
+            .as_array()
+            .expect("alturas")
+            .iter()
+            .map(|value| value.as_f64().unwrap_or(0.0))
+            .collect();
+        assert!(
+            flattened.iter().all(|height| height.abs() < 0.001),
+            "o terreno ficou plano: {flattened:?}"
+        );
+
+        let imported = call(
+            &mut session,
+            json!({ "op": "terrain.heightmap_import", "path": file.display().to_string() }),
+        );
+        assert_eq!(imported["result"]["width"], 4, "{imported}");
+        let after: Vec<f64> = call(
+            &mut session,
+            json!({ "op": "query.run", "query": "terrain.heights",
+                    "payload": { "entity": terrain, "x": 0.0, "z": 0.0, "width": 4, "depth": 4 } }),
+        )["result"]["heights"]
+            .as_array()
+            .expect("alturas")
+            .iter()
+            .map(|value| value.as_f64().unwrap_or(0.0))
+            .collect();
+        for (index, (original, restored)) in before.iter().zip(after.iter()).enumerate() {
+            assert!(
+                (original - restored).abs() < 0.001,
+                "a amostra {index} voltou {restored} em vez de {original}"
+            );
+        }
+
+        // The import is one step of history, like the stamp it uses.
+        call(&mut session, json!({ "op": "edit.undo" }));
+        let undone: Vec<f64> = call(
+            &mut session,
+            json!({ "op": "query.run", "query": "terrain.heights",
+                    "payload": { "entity": terrain, "x": 0.0, "z": 0.0, "width": 4, "depth": 4 } }),
+        )["result"]["heights"]
+            .as_array()
+            .expect("alturas")
+            .iter()
+            .map(|value| value.as_f64().unwrap_or(0.0))
+            .collect();
+        assert!(
+            undone.iter().all(|height| height.abs() < 0.001),
+            "o desfazer da importação volta ao chão plano: {undone:?}"
+        );
+
+        // A path that is not a heightmap file is refused before touching the disk.
+        let refused = call(
+            &mut session,
+            json!({ "op": "terrain.heightmap_export", "path": "/tmp/not-a-heightmap.txt" }),
+        );
+        assert_eq!(refused["error"]["code"], "HEIGHTMAP_EXTENSION", "{refused}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn enabling_the_cut_aims_at_the_selected_cave() {
+        let root = scratch_dir("terrain_section_cave");
+        let mut session = EditorSession::new().expect("session");
+        call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "Corte na caverna" }),
+        );
+        let made = call(&mut session, json!({ "op": "create.cave" }));
+        let cave = made["result"]["entity"].as_u64().expect("caverna");
+        // A cut far above the ground: the selected cave has to move it down to its own middle.
+        call(
+            &mut session,
+            json!({ "op": "terrain.section", "enabled": true, "height": 99.0 }),
+        );
+        call(
+            &mut session,
+            json!({ "op": "selection.set", "entity": cave }),
+        );
+        let again = call(
+            &mut session,
+            json!({ "op": "terrain.section", "enabled": true }),
+        );
+        let height = again["result"]["height"].as_f64().unwrap_or(-100.0);
+        assert!(
+            (height - 99.0).abs() > 1.0,
+            "a caverna selecionada mudou a altura (ficou {height})"
+        );
+        assert!(
+            (0.0..20.0).contains(&height),
+            "a altura caiu no meio da caverna: {height}"
+        );
+        assert_eq!(
+            session.frame().and_then(|frame| frame.section_height),
+            Some(height as f32)
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

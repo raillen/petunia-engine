@@ -38,6 +38,59 @@ pub struct SculptItem {
     pub chunks: Vec<ChunkMesh>,
 }
 
+/// The box a volume occupies, in the volume's own space: the solid base box plus every stroke
+/// with its radius. Used to aim things at the cave (the editor's cut plane height).
+pub fn volume_bounds(volume: &Volume) -> Option<(Vec3, Vec3)> {
+    let mut low = Vec3::splat(f32::INFINITY);
+    let mut high = Vec3::splat(f32::NEG_INFINITY);
+    let mut add = |point: Vec3| {
+        low = Vec3::new(low.x.min(point.x), low.y.min(point.y), low.z.min(point.z));
+        high = Vec3::new(
+            high.x.max(point.x),
+            high.y.max(point.y),
+            high.z.max(point.z),
+        );
+    };
+    if volume.base == Base::Solid {
+        let half = volume.size * 0.5;
+        add(half * -1.0);
+        add(half);
+    }
+    for stroke in &volume.strokes {
+        let radius = stroke.radius.max(0.0);
+        for end in [stroke.start, stroke.end] {
+            add(end - Vec3::splat(radius));
+            add(end + Vec3::splat(radius));
+        }
+    }
+    // Any bound is finite only if something was added.
+    (low.is_finite() && high.is_finite() && low.x <= high.x).then_some((low, high))
+}
+
+/// Middle height (world y) of a volume placed by `transform`; `None` when the volume is empty.
+pub fn volume_center_height(transform: &Transform, volume: &Volume) -> Option<f32> {
+    let (low, high) = volume_bounds(volume)?;
+    let model = crate::camera::model_matrix(transform);
+    let mut minimum = f32::INFINITY;
+    let mut maximum = f32::NEG_INFINITY;
+    for corner in 0..8 {
+        let pick = |bit: i32, low: f32, high: f32| {
+            if (corner >> bit) & 1 == 0 { low } else { high }
+        };
+        let local = Vec3::new(
+            pick(0, low.x, high.x),
+            pick(1, low.y, high.y),
+            pick(2, low.z, high.z),
+        );
+        let world = crate::camera::transform_point(&model, local);
+        if world.y.is_finite() {
+            minimum = minimum.min(world.y);
+            maximum = maximum.max(world.y);
+        }
+    }
+    (minimum <= maximum).then_some((minimum + maximum) * 0.5)
+}
+
 fn float(world: &World, handle: EntityHandle, table: &str, column: &str) -> Option<f32> {
     match world.get(handle, table, column) {
         Ok(Value::Float(value)) => Some(*value as f32),
@@ -334,6 +387,66 @@ mod tests {
                 volume,
             }])
             .remove(0)
+    }
+
+    fn cave(strokes: Vec<Stroke>) -> Volume {
+        Volume {
+            base: Base::Empty,
+            size: Vec3::new(16.0, 16.0, 16.0),
+            cell_size: 0.5,
+            strokes,
+            stamps: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn volume_bounds_cover_the_strokes_and_their_radius() {
+        let volume = cave(vec![Stroke::capsule(
+            StrokeMode::Add,
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 4.0, 0.0),
+            2.0,
+            0.5,
+        )]);
+        let (low, high) = volume_bounds(&volume).expect("bounds");
+        let lowest = low.y;
+        let highest = high.y;
+        assert!((lowest + 2.0).abs() < 1.0e-5, "{lowest}");
+        assert!((highest - 6.0).abs() < 1.0e-5, "{highest}");
+        assert!(high.x >= -2.0 && low.x <= 2.0);
+    }
+
+    #[test]
+    fn an_empty_volume_has_no_bounds_and_no_center() {
+        let volume = cave(Vec::new());
+        assert_eq!(volume_bounds(&volume), None);
+        assert_eq!(volume_center_height(&Transform::IDENTITY, &volume), None);
+    }
+
+    #[test]
+    fn the_center_height_follows_the_placement_and_the_scale() {
+        let volume = cave(vec![Stroke::capsule(
+            StrokeMode::Add,
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 4.0, 0.0),
+            2.0,
+            0.5,
+        )]);
+        // Local middle is y = 2; moved up by 10 it lands at 12.
+        let moved = Transform {
+            position: Vec3::new(0.0, 10.0, 0.0),
+            ..Transform::IDENTITY
+        };
+        let center = volume_center_height(&moved, &volume).expect("center");
+        assert!((center - 12.0).abs() < 1.0e-5, "{center}");
+        // Scaling y by two doubles the distance from the placement to the top and the bottom, so
+        // the middle stays where the stroke is: 2 * 2 = 4 above the origin.
+        let tall = Transform {
+            scale: Vec3::new(1.0, 2.0, 1.0),
+            ..Transform::IDENTITY
+        };
+        let center = volume_center_height(&tall, &volume).expect("center");
+        assert!((center - 4.0).abs() < 1.0e-5, "{center}");
     }
 
     #[test]

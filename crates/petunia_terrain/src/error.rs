@@ -11,6 +11,7 @@ pub enum TerrainError {
     TooManyChunks(usize),
     HeightOutsideLimit(f32),
     UnknownChunk,
+    HeightmapInvalid(&'static str),
 }
 
 impl fmt::Display for TerrainError {
@@ -43,6 +44,7 @@ impl fmt::Display for TerrainError {
                 "a altura {height} m passou do limite de ±10000 m"
             ),
             Self::UnknownChunk => formatter.write_str("o bloco não existe neste terreno"),
+            Self::HeightmapInvalid(reason) => write!(formatter, "heightmap inválido: {reason}"),
         }
     }
 }

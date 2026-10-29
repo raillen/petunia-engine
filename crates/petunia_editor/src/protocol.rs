@@ -227,6 +227,25 @@ impl EditorSession {
                     .and_then(Json::as_bool)
                     .unwrap_or(false),
             )),
+            "terrain.heightmap_export" => self.terrain_heightmap_export(
+                text(request, "path")?,
+                optional_number(request, "x"),
+                optional_number(request, "z"),
+                request
+                    .get("width")
+                    .and_then(Json::as_u64)
+                    .map(|value| value as usize),
+                request
+                    .get("depth")
+                    .and_then(Json::as_u64)
+                    .map(|value| value as usize),
+            ),
+            "terrain.heightmap_import" => self.terrain_heightmap_import(
+                text(request, "path")?,
+                optional_number(request, "x"),
+                optional_number(request, "z"),
+                request.get("mode").and_then(Json::as_str),
+            ),
             "surface.follow" => {
                 let mut payload = request.clone();
                 if let Some(object) = payload.as_object_mut() {

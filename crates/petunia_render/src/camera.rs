@@ -197,17 +197,18 @@ pub fn model_matrix(transform: &Transform) -> Mat4 {
     ]
 }
 
+/// Applies a matrix (column-major) to a point: rotation, scale and translation in one go.
+pub fn transform_point(matrix: &Mat4, point: Vec3) -> Vec3 {
+    Vec3::new(
+        matrix[0] * point.x + matrix[4] * point.y + matrix[8] * point.z + matrix[12],
+        matrix[1] * point.x + matrix[5] * point.y + matrix[9] * point.z + matrix[13],
+        matrix[2] * point.x + matrix[6] * point.y + matrix[10] * point.z + matrix[14],
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn transform_point(matrix: &Mat4, point: Vec3) -> Vec3 {
-        Vec3::new(
-            matrix[0] * point.x + matrix[4] * point.y + matrix[8] * point.z + matrix[12],
-            matrix[1] * point.x + matrix[5] * point.y + matrix[9] * point.z + matrix[13],
-            matrix[2] * point.x + matrix[6] * point.y + matrix[10] * point.z + matrix[14],
-        )
-    }
 
     #[test]
     fn orthographic_projection_maps_bounds_to_normalized_device_coordinates() {

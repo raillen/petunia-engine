@@ -16,6 +16,7 @@ mod brush;
 mod chunk;
 mod error;
 mod generate;
+mod heightmap;
 mod noise;
 mod terrain;
 
@@ -25,6 +26,10 @@ pub use chunk::{
 };
 pub use error::TerrainError;
 pub use generate::{TerrainGeneration, generate_chunk};
+pub use heightmap::{
+    HEIGHTMAP_HEADER_BYTES, HEIGHTMAP_MAGIC, HEIGHTMAP_VERSION, Heightmap, MAX_HEIGHTMAP_SAMPLES,
+    MAX_HEIGHTMAP_SIDE,
+};
 pub use noise::{FractalSettings, fractal, lattice_value, value_noise};
 pub use terrain::{MAX_BRUSH_SAMPLES, MAX_HOLES, Stamp, StampMode, Terrain, TerrainHole};
 

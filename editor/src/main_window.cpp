@@ -374,6 +374,11 @@ void MainWindow::buildActions() {
     caveStampAction_ = make(QStringLiteral("Carimbar malha na caverna…"),
                             QStringLiteral("Imprime a superfície de um objeto com malha na caverna selecionada: cavar ou pôr rocha atrás de cada face"));
     caveStampAction_->setProperty("iconName", QStringLiteral("paint_decal"));
+    exportHeightmapAction_ = make(QStringLiteral("Exportar heightmap…"),
+                                  QStringLiteral("Salva o terreno (ou a área escolhida) num arquivo .pthm, com as alturas em metros"));
+    exportHeightmapAction_->setProperty("iconName", QStringLiteral("save"));
+    importHeightmapAction_ = make(QStringLiteral("Importar heightmap…"),
+                                  QStringLiteral("Carimba um arquivo .pthm no terreno: um passo de desfazer"));
     importModelAction_ = make(QStringLiteral("Importar modelo 3D…"), QStringLiteral("Traz um modelo .glb ou .gltf como objetos editáveis (uma cópia fica em assets/)"));
     importModelAction_->setProperty("iconName", QStringLiteral("cube"));
     connect(importModelAction_, &QAction::triggered, this, &MainWindow::chooseImportModel);
@@ -692,6 +697,45 @@ void MainWindow::buildActions() {
                                      8000);
         }
     });
+    connect(exportHeightmapAction_, &QAction::triggered, this, [this] {
+        QString path = QFileDialog::getSaveFileName(this, QStringLiteral("Exportar heightmap"),
+                                                    QStringLiteral("terreno.pthm"),
+                                                    QStringLiteral("Heightmap do Petunia (*.pthm)"));
+        if (path.isEmpty()) {
+            return;
+        }
+        if (!path.endsWith(QStringLiteral(".pthm"), Qt::CaseInsensitive)) {
+            path += QStringLiteral(".pthm");
+        }
+        const Reply reply = perform(QStringLiteral("terrain.heightmap_export"), QJsonObject{{"path", path}}, false);
+        if (!reply.ok) {
+            statusBar()->showMessage(reply.explanation(), 10000);
+            return;
+        }
+        const QJsonObject result = reply.result.toObject();
+        statusBar()->showMessage(QStringLiteral("Heightmap exportado: %1 × %2 amostras em %3.")
+                                     .arg(result.value(QStringLiteral("width")).toInt())
+                                     .arg(result.value(QStringLiteral("depth")).toInt())
+                                     .arg(path),
+                                 10000);
+    });
+    connect(importHeightmapAction_, &QAction::triggered, this, [this] {
+        const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Importar heightmap"), QString(),
+                                                          QStringLiteral("Heightmap do Petunia (*.pthm)"));
+        if (path.isEmpty()) {
+            return;
+        }
+        const Reply reply = perform(QStringLiteral("terrain.heightmap_import"), QJsonObject{{"path", path}}, false);
+        if (!reply.ok) {
+            statusBar()->showMessage(reply.explanation(), 10000);
+            return;
+        }
+        const QJsonObject result = reply.result.toObject();
+        statusBar()->showMessage(QStringLiteral("Heightmap importado: %1 × %2 amostras. Ctrl+Z desfaz.")
+                                     .arg(result.value(QStringLiteral("width")).toInt())
+                                     .arg(result.value(QStringLiteral("depth")).toInt()),
+                                 10000);
+    });
     connect(generateTerrainAction_, &QAction::triggered, this, [this] {
         const quint32 seed = QRandomGenerator::global()->generate();
         const Reply made = perform(QStringLiteral("create.terrain"), QJsonObject{}, false);
@@ -812,6 +856,9 @@ void MainWindow::buildMenus() {
     operations->addAction(caveHolesAction_);
     operations->addAction(caveBooleanAction_);
     operations->addAction(caveStampAction_);
+    operations->addSeparator();
+    operations->addAction(exportHeightmapAction_);
+    operations->addAction(importHeightmapAction_);
     operations->addSeparator();
     QMenu* collision = operations->addMenu(QStringLiteral("Colisão"));
     collision->setIcon(PetuniaIcons::get(QStringLiteral("bounding_box")));
@@ -1808,7 +1855,7 @@ void MainWindow::onSnapshot() {
     for (QAction* action : shapeActions_) {
         action->setEnabled(project);
     }
-    for (QAction* action : {caveAction_, terrainAction_, generateTerrainAction_, caveHolesAction_, caveBooleanAction_, caveStampAction_, randomCaveAction_, importModelAction_, pointLightAction_, sunLightAction_, sculptLargerAction_, sculptSmallerAction_}) {
+    for (QAction* action : {caveAction_, terrainAction_, generateTerrainAction_, caveHolesAction_, caveBooleanAction_, caveStampAction_, exportHeightmapAction_, importHeightmapAction_, randomCaveAction_, importModelAction_, pointLightAction_, sunLightAction_, sculptLargerAction_, sculptSmallerAction_}) {
         action->setEnabled(project);
     }
     for (QAction* action : std::as_const(prefabActions_)) {
