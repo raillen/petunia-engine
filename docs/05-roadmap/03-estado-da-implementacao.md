@@ -20,7 +20,8 @@ Segundo slice, na branch `feat/sistemas-de-mundo`. Checklist vivo: [sistema de m
 |---|---|
 | **Terreno no projeto**: `ValueKind::Terrain`/`Value::Terrain`, JSON compacto, tabelas `Terrain` e `SurfaceFollow` | ida e volta da cena; 2 testes de valor hostil |
 | **8 comandos**: `terrain.create`, `generate`, `brush`, `paint`, `patch`, `holes`, `erode` e `surface.follow`, todos com desfazer próprio | **17 testes** de comando |
-| **2 consultas**: `terrain.height` (altura e normal) e `terrain.info` (blocos/amostras) | teste de consulta |
+| **3 consultas**: `terrain.height` (altura e normal), `terrain.info` (blocos/amostras) e `terrain.heights` (grade para exportar) | teste de consulta |
+| **Heightmap em arquivo**: formato `.pthm`, exportar e importar (um desfazer) e os dois itens em **Operações** | **12 testes** (8 do formato, 1 da consulta, 1 do editor, 2 de limites); **visto na janela**: exportação e importação de 49 × 49 amostras, reexportação byte a byte igual |
 | **Render**: malha por chunk, 8 camadas de cor, LOD 1/2/4 por distância, saias contra costuras e furos | **22 testes** de render; adaptador OpenGL com cor por vértice |
 | **Física**: heightfield do Rapier por chunk; trimesh nos chunks com furo | teste: bola repousa no heightfield; furo remove triângulos |
 | **Editor**: arrasto do pincel com prévia ao vivo, anel, `terrain.set`, `terrain.cancel` sem rastro e **um** desfazer | teste de arrasto completo |
@@ -43,7 +44,9 @@ Segundo slice, na branch `feat/sistemas-de-mundo`. Checklist vivo: [sistema de m
 
 **Limite conhecido (2026-10-29):** com o foco ainda na caixa **Corte**, a captura mostra só o contorno de foco, sem o ✓, embora o corte esteja ligado — pintura do tema, não estado; ao sair o foco o ✓ volta.
 
-**Falta:** sugestão automática da altura do corte a partir da caverna selecionada, rios/estradas (outro agent) e ajuste fino do corte.
+**Heightmap em arquivo e corte que mira a caverna (2026-10-29):** o formato `.pthm` (cabeçalho de 28 bytes + um `f32` por amostra em metros) saiu do crate `petunia_terrain` com validação antes de qualquer mapa existir; a consulta `terrain.heights` tira a grade e as operações `terrain.heightmap_export`/`terrain.heightmap_import` gravam e carimbam (a importação é **um** desfazer, por baixo de `terrain.stamp`). Na janela, **Operações > Exportar heightmap…** e **Importar heightmap…** com filtro `.pthm`. Sem altura digitada, o **corte agora mira o meio vertical da caverna selecionada** e só depois o cursor do pincel. **Visto na janela** no display virtual: exportação de 49 × 49 amostras (9632 bytes), importação do mesmo arquivo e reexportação **byte a byte igual**; o teste de fumaça seguiu `12/12`. **Gates:** `cargo test --workspace` **501 testes, 0 falhas**; clippy com `-D warnings` e fmt dos crates tocados ok.
+
+**Falta:** culling por chunk no terreno, biomas, rios/estradas (outro agent) e o limite do heightmap grande (2048 × 2048) ainda não exercitado.
 
 **Carimbo de malha na caverna (2026-10-28):** `sculpt.stamp_mesh` imprime a superfície de um objeto com malha no campo SDF da caverna selecionada, com a transformação do objeto assada no espaço da caverna. `add` põe rocha atrás de cada face, `carve` tira. Um desfazer. Limites: 4096 triângulos por carimbo, 8 carimbos por caverna, banda de 2 células. **Não é um sólido**: uma malha fechada vira casca (para volume, `sculpt.boolean`). Testes: 3 de distância ponto-triângulo + 1 de forma no crate, 1 de editor com desfazer; ação **Operações › Carimbar malha na caverna…** compila no Qt 6.4.2, **não olhada em imagem**.
 

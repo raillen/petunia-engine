@@ -9,11 +9,11 @@ Este documento é a lista viva do que foi implementado e do que falta no sistema
 | Sistema | Implementado | Falta | % |
 |---|---|---:|---:|
 | Terreno (dados) | `petunia_terrain`: chunks, amostras, materiais, furos, consultas, limites | — | 90% |
-| Terreno (geração) | fBm determinístico próprio; parâmetros validados | Biomas, importar/exportar heightmap | 70% |
+| Terreno (geração) | fBm determinístico próprio; parâmetros validados; **heightmap em arquivo** (`terrain.heights`, importar/exportar `.pthm`) | Biomas | 88% |
 | Terreno (edição) | Brushes 3D, 4 falloffs, 6 operações, erosão térmica e hidráulica, espelhamento x/z, *stamp* de heightmap e de malha 3D | Brushes plano/caminho, máscaras | 92% |
 | Terreno (render) | Malha por chunk, cores por camada (8), LOD 1/2/4, saias, furos, plano de corte | Materiais por textura, culling por chunk, verificação visual | 80% |
 | Terreno (física) | Heightfield no Rapier; trimesh nos chunks com furo | Terreno com transformação não-identidade | 80% |
-| Terreno (editor) | Pincel `terrain.begin/drag/end/cancel/set/preview`, anel, prévia ao vivo, um desfazer; menu **Criar > Terreno**, ferramenta **T**, barra de opções, **Gerar terreno**, **Raio X** em arame, **Corte** com **altura digitável** e teste de fumaça repetível | Sugestão automática da altura (caverna selecionada); verificação visual do LOD | 94% |
+| Terreno (editor) | Pincel `terrain.begin/drag/end/cancel/set/preview`, anel, prévia ao vivo, um desfazer; menu **Criar > Terreno**, ferramenta **T**, barra de opções, **Gerar terreno**, **Raio X** em arame, **Corte** com **altura digitável** (sugerida pela caverna selecionada), **Exportar/Importar heightmap** e teste de fumaça repetível | Verificação visual do LOD | 97% |
 | Cavernas (SDF) | `petunia_sculpt` (chunks 16³, surface nets, 5 modos, caminho, gerador, fundir, facetada) + espelhamento X, preencher, oco, ruído, **booleanos** (`sculpt.boolean`) e **carimbo de malha** (`sculpt.stamp_mesh`) | Malha sólida (o carimbo imprime a superfície) | 98% |
 | Caverna ↔ terreno | Furos explícitos (`terrain.holes`), furos automáticos dos túneis (`terrain.holes_from_caves`), render sem as células, física trimesh | Costura visual, ajuste fino do raio do furo | 85% |
 | `surface_follow` | Tabela `SurfaceFollow`, comando `surface.follow`, `surface.set` inverso, preferência, re-projeção, alinhamento à normal e **um desfazer** junto de `generate/brush/paint/erode/hydraulic/stamp` e do arrasto | UI dedicada (o inspetor genérico já edita a tabela) | 95% |
@@ -24,6 +24,21 @@ Este documento é a lista viva do que foi implementado e do que falta no sistema
 | Água (render) | — (outro agent) | Flow map, Gerstner 4–8, refração, espuma | 0% |
 
 ## Implementado
+
+### 2026-10-29 — heightmap em arquivo e o corte que mira a caverna
+
+| Item | Evidência |
+|---|---|
+| **Formato `.pthm`** no crate: 28 bytes de cabeçalho (`PTHM`, versão, largura, profundidade, tamanho da célula, origem) e um `f32` por amostra, em metros | **8 testes de crate**: ida e volta exata, origem e célula, arquivo de outro programa, versão errada, arquivo cortado ou com bytes sobrando, tamanhos absurdos, altura não finita e limites de construção |
+| **Exportação** da área do terreno (ou a largura/profundidade pedidas) para o arquivo | teste de comando (`terrain.heights`: 17 × 17 amostras no terreno inteiro, recorte 2 × 3, pedido de 9000 limitado a 2048); **visto na janela**: barra de estado "Heightmap exportado: 49 × 49 amostras" |
+| **Importação** com **um desfazer**, usando `terrain.stamp` por baixo | teste do editor: exporta, aplana, importa e as 16 amostras voltam iguais; desfazer volta ao chão plano |
+| **Consulta `terrain.heights`** (`entity`, `x`, `z`, `width`, `depth`) para tirar uma grade sem gravar arquivo | teste de comando (acima) |
+| Operações > **Exportar heightmap…** e **Importar heightmap…** com diálogo de arquivo `.pthm` | **visto em captura** no display virtual: o menu mostra os dois itens, e cada um escreve na barra de estado o resultado |
+| **Altura do corte sugere a caverna**: sem altura digitada, o plano vai para o meio vertical da caverna selecionada (casco e traços, com a transformação aplicada), e só depois para o cursor do pincel | teste de render: limites do volume e centro com deslocamento e com escala; teste do editor: corte em 99 m desce para o meio da caverna criada, e o quadro usa a mesma altura |
+
+**Ida e volta pela janela:** exportei `a.pthm` (9632 bytes: 49 × 49 amostras de 1 m, origem −16,−16, alturas de −6,46 a 1,15 m), importei o mesmo arquivo e exportei de novo para `b.pthm`: **os dois arquivos são byte a byte iguais** (`cmp`). O caminho janela → FFI → protocolo → arquivo está fechado; a diferença visual entre as duas capturas daquela rodada foi a câmera, movida por teclas minhas que caíram no viewport em vez do diálogo — não o terreno.
+
+**Limites do formato:** 2048 amostras por lado e 4 milhões no total (16 MB); altura fora de ±10000 m é recusada; amostras sem bloco valem 0 m; a importação só escreve onde já existe bloco. O caminho tem de terminar em `.pthm`, para um caminho errado não sobrescrever outro arquivo.
 
 ### 2026-10-29 — altura do corte na barra e a caverna vista por dentro
 
@@ -132,10 +147,11 @@ As três causas da instabilidade eram do harness e da janela, não de tempo de e
 
 | # | Item | Depende de | Critério de pronto |
 |---|---|---|---|
-| 1 | Altura do plano de corte escolhível na janela (hoje só a do cursor do terreno) | — | o corte atravessar uma caverna sem subir um monte |
-| 2 | Rios e estradas | outro agent | — |
+| 1 | **Culling por chunk** no terreno (hoje todo bloco do mundo entra no quadro) | plano de corte de visão com a proporção do viewport | o quadro deixa de montar/desenhar os blocos fora da vista |
+| 2 | Biomas na geração | heightmap em arquivo (feito) | uma semente escolher um bioma e ele aparecer na cor e na forma |
+| 3 | Rios e estradas | spline/varredura | — |
 
-Itens concluídos nesta rodada: **teste de fumaça estável** (12/12 em quatro execuções) e **arame no raio X** (captura no display virtual).
+Itens concluídos nesta rodada: **altura do corte sugerida pela caverna**, **heightmap em arquivo** (`terrain.heights`, exportar e importar com um desfazer) e **teste de fumaça 12/12**.
 
 ## Não verificado (honesto)
 
@@ -152,6 +168,8 @@ Itens concluídos nesta rodada: **teste de fumaça estável** (12/12 em quatro e
 | Erosão em terreno grande | **não medida**; o teste usa 8×8 |
 | Carimbo de malha na caverna | **sem lugar sólido**: imprime a superfície numa banda (2 células); uma malha fechada vira casca, não volume; limite de 4096 triângulos e 8 carimbos por caverna; **não olhado em imagem** |
 | Terreno com `Transform` deslocado | **não suportado**; os dados são do mundo e o collider assume origem |
+| Heightmap grande | **não medido**: o teste usa 4 × 4 amostras e a janela, 49 × 49; o limite de 2048 × 2048 não foi exportado nem importado de verdade |
+| Importar heightmap por cima de cavernas | **não testado**: o carimbo muda alturas e deixa os furos como estão |
 
 ## Fora desta fase (declarado)
 

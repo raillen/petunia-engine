@@ -62,6 +62,19 @@ O brush vive no **espaço do mundo**, então não depende da câmera. No modo de
 | Plano de corte | Secção horizontal opcional revela o interior sem alterar a superfície. A altura vem de `terrain.section`: **a barra do terreno tem o campo `y … m`** (digitar + Enter) e, sem altura digitada, o plano usa a do cursor do pincel. Verificado em captura: com 5,50 m o teto da caverna some e o céu entra |
 | Máscara de profundidade | Mostra por onde o pincel está passando |
 
+### Heightmap em arquivo (`.pthm`)
+
+Um intervalo do terreno sai e volta como arquivo, sem depender de ferramenta externa:
+
+| Peça | Onde | O que faz |
+|---|---|---|
+| Formato | `petunia_terrain::heightmap` | 28 bytes de cabeçalho (`PTHM`, versão 1, largura, profundidade, tamanho da célula, origem x e z) e um `f32` por amostra, em metros, linha a linha |
+| Exportar | consulta `terrain.heights`, operação `terrain.heightmap_export` | Lê a grade do terreno (área inteira por padrão) e grava o arquivo |
+| Importar | operação `terrain.heightmap_import` | Lê o arquivo, valida e carimba com `terrain.stamp`: **um** passo de desfazer |
+| Na janela | Operações > **Exportar heightmap…** / **Importar heightmap…** | Diálogo com o filtro `.pthm`; a barra de estado diz quantas amostras |
+
+Limites: 2048 amostras por lado e 4 milhões no total (16 MB), altura dentro de ±10000 m, origem alinhada à grade do terreno (a mesma amostra no mesmo lugar na volta), amostras sem bloco valem 0 m e a importação só escreve onde já existe bloco. O caminho tem de terminar em `.pthm`.
+
 ### Objetos que acompanham a superfície (`surface_follow`)
 
 | Coluna | Tipo | Efeito |
@@ -87,7 +100,7 @@ O padrão é configurável no menu de configurações da engine. Corpos dinâmic
 | Furo | Abre para caverna/rio | Alta |
 | Rampa | Rampa entre dois pontos | Média |
 | Altura exata | Valor numérico (sem mouse) | Acessibilidade |
-| Importar/exportar heightmap | RAW/PNG | Média |
+| Importar/exportar heightmap | **Feito** em formato próprio `.pthm` (ver abaixo); RAW/PNG de terceiros ficam para depois | Feito |
 | Espelhar | Edição simétrica | Média |
 | Camadas (splatmap) | Pintar grama/terra/pedra/lama | Alta |
 | Textura automática | Por inclinação/altura | Média |
