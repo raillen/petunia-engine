@@ -13,7 +13,7 @@ Este documento é a lista viva do que foi implementado e do que falta no sistema
 | Terreno (edição) | Brushes 3D, 4 falloffs, 6 operações, erosão térmica e hidráulica, espelhamento x/z, *stamp* de heightmap e de malha 3D | Brushes plano/caminho, máscaras | 92% |
 | Terreno (render) | Malha por chunk, cores por camada (8), LOD 1/2/4, saias, furos, plano de corte | Materiais por textura, culling por chunk, verificação visual | 80% |
 | Terreno (física) | Heightfield no Rapier; trimesh nos chunks com furo | Terreno com transformação não-identidade | 80% |
-| Terreno (editor) | Pincel `terrain.begin/drag/end/cancel/set/preview`, anel, prévia ao vivo, um desfazer; menu **Criar > Terreno**, ferramenta **T**, barra de opções, **Gerar terreno**, **Raio X** em arame, **Corte** e teste de fumaça repetível | Ajuste fino do corte; verificação visual do LOD | 92% |
+| Terreno (editor) | Pincel `terrain.begin/drag/end/cancel/set/preview`, anel, prévia ao vivo, um desfazer; menu **Criar > Terreno**, ferramenta **T**, barra de opções, **Gerar terreno**, **Raio X** em arame, **Corte** com **altura digitável** e teste de fumaça repetível | Sugestão automática da altura (caverna selecionada); verificação visual do LOD | 94% |
 | Cavernas (SDF) | `petunia_sculpt` (chunks 16³, surface nets, 5 modos, caminho, gerador, fundir, facetada) + espelhamento X, preencher, oco, ruído, **booleanos** (`sculpt.boolean`) e **carimbo de malha** (`sculpt.stamp_mesh`) | Malha sólida (o carimbo imprime a superfície) | 98% |
 | Caverna ↔ terreno | Furos explícitos (`terrain.holes`), furos automáticos dos túneis (`terrain.holes_from_caves`), render sem as células, física trimesh | Costura visual, ajuste fino do raio do furo | 85% |
 | `surface_follow` | Tabela `SurfaceFollow`, comando `surface.follow`, `surface.set` inverso, preferência, re-projeção, alinhamento à normal e **um desfazer** junto de `generate/brush/paint/erode/hydraulic/stamp` e do arrasto | UI dedicada (o inspetor genérico já edita a tabela) | 95% |
@@ -24,6 +24,28 @@ Este documento é a lista viva do que foi implementado e do que falta no sistema
 | Água (render) | — (outro agent) | Flow map, Gerstner 4–8, refração, espuma | 0% |
 
 ## Implementado
+
+### 2026-10-29 — altura do corte na barra e a caverna vista por dentro
+
+| Item | Evidência |
+|---|---|
+| **Campo de altura do plano de corte** na barra do terreno (`y … m`), ao lado da caixa **Corte**: digitar a altura, confirmar com Enter, aplica `terrain.section` com `height` | compila no Qt 6.4.2; **visto em captura**: com 5,50 m o teto da caverna desaparece |
+| Altura digitada passa a mandar no plano; **sem digitar nada**, a caixa **Corte** mantém o comportamento antigo (altura do cursor do pincel) | código da janela; captura com 5,50 m e comparação com o corte no cursor |
+| O campo mostra a altura em vigor depois de cada comando (`section_height` no estado do terreno) | captura: o campo exibe `y 5,50 m` depois de digitar |
+
+Capturas no display virtual (janela 1880×1120; `Caverna aleatória` com 46 traços, terreno gerado, câmera na maior sala, em (2,6; 3,8; −17,0) olhando para o centro da caverna):
+
+| Cena | O que se vê |
+|---|---|
+| Interior **sem** os sinalizadores (`final/1-chamber.png`) | a rocha da caverna em volta, a sala e o gizmo do objeto; nada do mundo externo |
+| **Raio X + Corte em 5,50 m** (`final/2-xray-cut-550.png`) | o **teto some**, o céu entra pela abertura e as paredes de rocha continuam abaixo do plano: é a leitura que faltava |
+| **Raio X + Corte** na altura do cursor (0 m) | o mundo inteiro acima de 0 é descartado: sobram a grade e o arame do terreno, sem caverna |
+
+Arquivos: `/tmp/petunia-cave/final/`, mesma cena nos dois casos.
+
+**Achado — o que o raio X não faz por dentro:** com a câmera **dentro** da caverna o Raio X do terreno **não muda a imagem**. A superfície que tapa a vista é a **malha da caverna**, opaca e fora do raio X (que só age nos blocos `Shape::Terrain`); o terreno, visto de dentro do próprio sólido, não desenha as faces viradas para fora. A identificação foi feita **mudando a cor da caverna para magenta** na cena: as paredes em volta mudam de cor e o terreno não aparece. Para o raio X acrescentar algo é preciso olhar a caverna **de fora**, com o corte abrindo o terreno — que é o caso da captura do dia anterior.
+
+**Limite conhecido:** com o foco ainda na caixa **Corte**, a captura mostra o contorno de foco sem o ✓, embora o corte esteja ligado (o estado volta a aparecer quando o foco sai). É pintura do tema, não estado: o desenho da cena e o campo de altura batem com o estado do motor.
 
 ### 2026-10-28 — caverna vista por dentro: o que a captura mostra
 
@@ -39,7 +61,7 @@ Arquivos: `/tmp/petunia-shot-smoke/cave-inside.png` (interior) e `/tmp/petunia-s
 
 **Achado:** o plano de corte usa **sempre a altura do cursor do pincel de terreno** (`terrain.section` sem `height` cai no `terrain.cursor`, e a caixa **Corte** não manda altura). Não existe hoje, na janela, como escolher a altura do plano. Por isso o par “arame + corte” ainda **não** serve para olhar dentro de uma caverna: ou corta abaixo do piso dela (e ela desaparece) ou corta na altura de um monte (que não é onde a caverna está).
 
-Consequência para a fila: antes de prometer “ver o interior da caverna pelo corte”, a janela precisa de uma **altura de corte escolhível** (campo numérico ou arrastar o plano), com a caverna selecionada como sugestão de altura.
+Consequência para a fila: antes de prometer “ver o interior da caverna pelo corte”, a janela precisa de uma **altura de corte escolhível** (campo numérico ou arrastar o plano), com a caverna selecionada como sugestão de altura. **Resolvido em 2026-10-29** com o campo `y … m` na barra (seção acima).
 
 ### 2026-10-28 — raio X em arame e teste de fumaça repetível
 

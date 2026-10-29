@@ -812,6 +812,13 @@ mod tests {
             json!({ "op": "terrain.section", "enabled": false }),
         );
         assert_eq!(session.frame().and_then(|frame| frame.section_height), None);
+        // Turning the cut off keeps the height: the window's field shows it again on the next
+        // enable, and enabling without a cursor falls back to it instead of the ground.
+        let again = call(
+            &mut session,
+            json!({ "op": "terrain.section", "enabled": true }),
+        );
+        assert!((again["result"]["height"].as_f64().unwrap_or(0.0) - 1.5).abs() < 1.0e-6);
         let _ = std::fs::remove_dir_all(&root);
     }
 }

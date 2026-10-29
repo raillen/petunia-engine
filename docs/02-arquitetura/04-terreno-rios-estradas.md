@@ -59,7 +59,7 @@ O brush vive no **espaço do mundo**, então não depende da câmera. No modo de
 |---|---|
 | Prévia fantasma | Volume do brush translúcido + superfície resultante em cor de prévia; **nada é gravado até soltar/Enter** |
 | Raio X | Terreno translúcido (35 % de opacidade) **mais as arestas em arame**, desenhadas sem *culling*: a superfície continua legível e o que está dentro (túneis, plano de corte) aparece |
-| Plano de corte | Secção horizontal opcional revela o interior sem alterar a superfície. A altura vem de `terrain.section` (padrão: a do cursor do pincel); **a janela ainda não oferece um campo de altura**, então o plano corta onde o pincel está, não onde a caverna está |
+| Plano de corte | Secção horizontal opcional revela o interior sem alterar a superfície. A altura vem de `terrain.section`: **a barra do terreno tem o campo `y … m`** (digitar + Enter) e, sem altura digitada, o plano usa a do cursor do pincel. Verificado em captura: com 5,50 m o teto da caverna some e o céu entra |
 | Máscara de profundidade | Mostra por onde o pincel está passando |
 
 ### Objetos que acompanham a superfície (`surface_follow`)

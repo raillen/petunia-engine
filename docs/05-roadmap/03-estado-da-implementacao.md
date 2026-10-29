@@ -29,7 +29,7 @@ Segundo slice, na branch `feat/sistemas-de-mundo`. Checklist vivo: [sistema de m
 
 **Gates:** `cargo fmt --check` e `cargo clippy --workspace --all-targets -D warnings` ok; **462 testes, 0 falhas** (2 threads).
 
-**Janela Qt (2026-10-28):** menu **Criar > Terreno**, ferramenta **Esculpir terreno (T)**, barra de opções (operação, forma, falloff, raio, força, material, pintar, espelhar, raio X, corte), ação **Gerar terreno** e **raio X** em arame sobre superfície translúcida (35 %), visto em captura no display virtual. O editor compila no Qt 6.4.2.
+**Janela Qt (2026-10-28):** menu **Criar > Terreno**, ferramenta **Esculpir terreno (T)**, barra de opções (operação, forma, falloff, raio, força, material, pintar, espelhar, raio X, corte com **altura digitável**), ação **Gerar terreno** e **raio X** em arame sobre superfície translúcida (35 %), visto em captura no display virtual. O editor compila no Qt 6.4.2.
 
 **Teste de fumaça:** **estável**, `12/12` em **sete** execuções seguidas (2026-10-28). As falhas anteriores vinham do harness: display fixo `:97` colidindo com sobra de outra sessão, clique cego no `+` antes do workspace assentar e `xdotool search` casando com o *tooltip* do botão. O separador de `Alt+letra` também deixava o menu sem item ativo e o campo de busca da hierarquia não tinha caminho de teclado; ambos foram corrigidos na janela, não no teste. O `cargo fmt --all` também tenta formatar o projeto externo `aipo-lang` e falha por formatação dele; os crates desta workspace foram checados individualmente e passam.
 
@@ -37,9 +37,13 @@ Segundo slice, na branch `feat/sistemas-de-mundo`. Checklist vivo: [sistema de m
 
 **Ferramentas avançadas (2026-10-28):** `terrain.stamp` (heightmap) e `terrain.stamp_mesh` (malha 3D), erosão hidráulica determinística, furos automáticos dos túneis (`terrain.holes_from_caves`), `surface.set` + `surface.follow` automático com **um** desfazer, plano de corte no shader e na barra, espelhamento X, **preencher/oco/ruído**, **booleano de cavernas** (`sculpt.boolean`) e **carimbo de malha na caverna** (`sculpt.stamp_mesh`, tabela `SculptStamp`). **485 testes, 0 falhas** no workspace (medido em 2026-10-28).
 
-**Caverna por dentro (2026-10-28, display virtual):** a câmera dentro do volume mostra a rocha, a boca de um túnel e as salas — o interior renderiza. Com **Raio X + Corte** ligados, porém, a caverna **desaparece**: o plano de corte usa a altura do cursor do pincel de terreno (`terrain.section` sem `height`), que fica no piso, e descarta tudo acima dela. Não há campo para escolher a altura do plano. Fica na fila como item 1.
+**Caverna por dentro (2026-10-29, display virtual):** a barra do terreno ganhou o campo **`y … m`** ao lado da caixa **Corte**; digitar a altura e confirmar aplica `terrain.section` com `height`, e sem digitar nada vale o comportamento antigo (altura do cursor do pincel). **Visto em captura**: com o corte em 5,50 m o teto da caverna some, o céu entra pela abertura e as paredes de rocha continuam abaixo do plano; com o corte na altura do cursor (0 m) sobra só a grade e o arame do terreno. O campo mostra a altura em vigor (`section_height`).
 
-**Falta:** altura do plano de corte escolhível na janela, rios/estradas (outro agent) e ajuste fino do corte.
+**O que o raio X não faz por dentro (2026-10-29):** com a câmera dentro da caverna o Raio X do terreno não muda a imagem — a superfície que tapa a vista é a **malha da caverna**, opaca e fora do raio X (que só age nos blocos `Shape::Terrain`), e o terreno visto de dentro do próprio sólido não desenha as faces externas. Confirmado pintando a caverna de magenta na cena: as paredes mudam de cor, o terreno não aparece. O par raio X + corte rende olhando de fora; de dentro, o **corte** é o que resolve.
+
+**Limite conhecido (2026-10-29):** com o foco ainda na caixa **Corte**, a captura mostra só o contorno de foco, sem o ✓, embora o corte esteja ligado — pintura do tema, não estado; ao sair o foco o ✓ volta.
+
+**Falta:** sugestão automática da altura do corte a partir da caverna selecionada, rios/estradas (outro agent) e ajuste fino do corte.
 
 **Carimbo de malha na caverna (2026-10-28):** `sculpt.stamp_mesh` imprime a superfície de um objeto com malha no campo SDF da caverna selecionada, com a transformação do objeto assada no espaço da caverna. `add` põe rocha atrás de cada face, `carve` tira. Um desfazer. Limites: 4096 triângulos por carimbo, 8 carimbos por caverna, banda de 2 células. **Não é um sólido**: uma malha fechada vira casca (para volume, `sculpt.boolean`). Testes: 3 de distância ponto-triângulo + 1 de forma no crate, 1 de editor com desfazer; ação **Operações › Carimbar malha na caverna…** compila no Qt 6.4.2, **não olhada em imagem**.
 

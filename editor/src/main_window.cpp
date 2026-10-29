@@ -1504,11 +1504,38 @@ void MainWindow::buildTerrainBar() {
         perform(QStringLiteral("terrain.xray"), QJsonObject{{"enabled", on}}, false);
     });
     terrainSectionBox_ = new QCheckBox(QStringLiteral("Corte"));
-    terrainSectionBox_->setToolTip(QStringLiteral("Corta o mundo no altura do pincel para ver o interior da caverna"));
+    terrainSectionBox_->setToolTip(QStringLiteral(
+        "Corta o mundo na altura escolhida ao lado para ver o interior da caverna; "
+        "sem altura digitada, usa a altura do pincel"));
     terrainSectionBox_->setAccessibleName(QStringLiteral("Plano de corte do terreno"));
     terrainBar_->addWidget(terrainSectionBox_);
     connect(terrainSectionBox_, &QCheckBox::clicked, this, [this](bool on) {
-        perform(QStringLiteral("terrain.section"), QJsonObject{{"enabled", on}}, false);
+        if (!on) {
+            perform(QStringLiteral("terrain.section"), QJsonObject{{"enabled", false}}, false);
+            return;
+        }
+        QJsonObject payload{{"enabled", true}};
+        if (terrainSectionHeightEdited_) {
+            payload.insert(QStringLiteral("height"), terrainSectionHeight_->value());
+        }
+        perform(QStringLiteral("terrain.section"), payload, false);
+    });
+    terrainSectionHeight_ = new QDoubleSpinBox;
+    terrainSectionHeight_->setRange(-64.0, 512.0);
+    terrainSectionHeight_->setSingleStep(0.5);
+    terrainSectionHeight_->setDecimals(2);
+    terrainSectionHeight_->setPrefix(QStringLiteral("y "));
+    terrainSectionHeight_->setSuffix(QStringLiteral(" m"));
+    terrainSectionHeight_->setToolTip(QStringLiteral(
+        "Altura do plano de corte: tudo acima dela some. Digite a altura da caverna para olhar dentro dela"));
+    terrainSectionHeight_->setAccessibleName(QStringLiteral("Altura do plano de corte"));
+    terrainBar_->addWidget(terrainSectionHeight_);
+    connect(terrainSectionHeight_, &QDoubleSpinBox::editingFinished, this, [this] {
+        terrainSectionHeightEdited_ = true;
+        perform(QStringLiteral("terrain.section"),
+                QJsonObject{{"enabled", terrainSectionBox_->isChecked()},
+                            {"height", terrainSectionHeight_->value()}},
+                false);
     });
 
     if (auto* overflow = terrainBar_->findChild<QToolButton*>(QStringLiteral("qt_toolbar_ext_button"))) {
@@ -1541,6 +1568,7 @@ void MainWindow::syncTerrainBar(const QJsonObject& snapshot) {
     const QSignalBlocker k(terrainMirrorXBox_);
     const QSignalBlocker l(terrainMirrorZBox_);
     const QSignalBlocker m(terrainSectionBox_);
+    const QSignalBlocker n(terrainSectionHeight_);
     terrainOperation_->setCurrentIndex(
         qMax(0, terrainOperation_->findData(state.value(QStringLiteral("operation")).toString())));
     terrainShape_->setCurrentIndex(
@@ -1561,6 +1589,10 @@ void MainWindow::syncTerrainBar(const QJsonObject& snapshot) {
     terrainMirrorZBox_->setChecked(state.value(QStringLiteral("mirror_z")).toBool());
     terrainXrayBox_->setChecked(snapshot.value(QStringLiteral("terrain_xray")).toBool());
     terrainSectionBox_->setChecked(state.value(QStringLiteral("section")).toBool());
+    // Shows the height in force (the brush cursor one until someone types a different value).
+    if (!terrainSectionHeight_->hasFocus()) {
+        terrainSectionHeight_->setValue(state.value(QStringLiteral("section_height")).toDouble(0.0));
+    }
 }
 
 void MainWindow::buildDocks() {

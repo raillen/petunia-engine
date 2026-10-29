@@ -189,6 +189,9 @@ private:
     QCheckBox* terrainMirrorZBox_ = nullptr;
     QCheckBox* terrainXrayBox_ = nullptr;
     QCheckBox* terrainSectionBox_ = nullptr;
+    QDoubleSpinBox* terrainSectionHeight_ = nullptr;
+    // The person typed a cut height: from then on the field, not the brush cursor, decides it.
+    bool terrainSectionHeightEdited_ = false;
     QAction* hollowAction_ = nullptr;
     QAction* floorUpAction_ = nullptr;
     QAction* floorDownAction_ = nullptr;
