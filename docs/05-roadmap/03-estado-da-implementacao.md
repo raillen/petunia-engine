@@ -12,6 +12,49 @@ Três análises novas pedem a sua decisão: [paridade da interface](../02-arquit
 
 **Consolidação de 2026-10-27:** os PRs #2 a #7 foram mesclados na `main` (personagem e Jogar, luzes e GLB, grafo de nós N1–N5, prefabs). A `main` tinha **397 testes** antes destas correções; com elas, tem **402 testes, 0 falhas**, e o editor compila no Qt 6.4.2.
 
+## Etapa atual: sistema de mundos — integração e ferramentas (2026-10-28)
+
+Segundo slice, na branch `feat/sistemas-de-mundo`. Checklist vivo: [sistema de mundos](04-sistema-de-mundos.md).
+
+| O quê | Verificação |
+|---|---|
+| **Terreno no projeto**: `ValueKind::Terrain`/`Value::Terrain`, JSON compacto, tabelas `Terrain` e `SurfaceFollow` | ida e volta da cena; 2 testes de valor hostil |
+| **8 comandos**: `terrain.create`, `generate`, `brush`, `paint`, `patch`, `holes`, `erode` e `surface.follow`, todos com desfazer próprio | **17 testes** de comando |
+| **2 consultas**: `terrain.height` (altura e normal) e `terrain.info` (blocos/amostras) | teste de consulta |
+| **Render**: malha por chunk, 8 camadas de cor, LOD 1/2/4 por distância, saias contra costuras e furos | **22 testes** de render; adaptador OpenGL com cor por vértice |
+| **Física**: heightfield do Rapier por chunk; trimesh nos chunks com furo | teste: bola repousa no heightfield; furo remove triângulos |
+| **Editor**: arrasto do pincel com prévia ao vivo, anel, `terrain.set`, `terrain.cancel` sem rastro e **um** desfazer | teste de arrasto completo |
+| **`surface_follow`**: `offset`, `align_normal`, preferência para objetos novos e re-projeção por comando | 1 teste de comando + 1 de editor |
+| **Erosão térmica** determinística e **espelhamento** x/z do brush | testes de comando e de crate |
+
+**Gates:** `cargo fmt --check` e `cargo clippy --workspace --all-targets -D warnings` ok; **462 testes, 0 falhas** (2 threads).
+
+**Janela Qt (2026-10-28):** menu **Criar > Terreno**, ferramenta **Esculpir terreno (T)**, barra de opções (operação, forma, falloff, raio, força, material, pintar, espelhar, raio X), ação **Gerar terreno** e **raio X** translúcido. O editor compila no Qt 6.4.2.
+
+**Teste de fumaça:** **instável**. As melhores execuções deram **10 de 12**; nas seguintes o harness falhou já nos primeiros cliques (a janela sob Xvfb não recebeu foco/tempo). A criação/geração do terreno e o *stamp* estão cobertos por testes de protocolo; o caminho da janela não é confiável. Não declaro o teste verde. O `cargo fmt --all` também tenta formatar o projeto externo `aipo-lang` e falha por formatação dele; os crates desta workspace foram checados individualmente e passam.
+
+**Não verificado:** a aparência do terreno, o LOD sem costura e as cores em imagem; o arrasto da ferramenta de terreno pela janela (só pelos testes de protocolo); o personagem andando no heightfield pela janela; erosão em terreno grande.
+
+**Ferramentas avançadas (2026-10-28):** `terrain.stamp` (heightmap) e `terrain.stamp_mesh` (malha 3D), erosão hidráulica determinística, furos automáticos dos túneis (`terrain.holes_from_caves`), `surface.set` + `surface.follow` automático com **um** desfazer, plano de corte no shader e na barra, espelhamento X, **preencher/oco/ruído** e **booleano de cavernas** (`sculpt.boolean`). **477 testes, 0 falhas** no workspace.
+
+**Falta:** estabilizar o teste de fumaça, arame no raio X, *stamp* de malha 3D, *stamp* de malha em cavernas, e rios/estradas (outro agent).
+
+## Etapa atual: sistema de mundos — terreno (2026-10-27, DR-33)
+
+Primeiro slice do sistema de mundos, na branch `feat/sistemas-de-mundo`.
+
+| O quê | Verificação |
+|---|---|
+| Crate novo **`petunia_terrain`** (domínio puro, sem GPU): heightmap em chunks, sem arestas duplicadas; amostras pertencem a um único bloco | **25 testes** do crate |
+| **Brushes 3D** (esfera, caixa, cápsula, cilindro) no espaço do mundo, com falloff constante, linear, suave e gaussiano | testes de área, de borda e de rejeição de pincel inválido |
+| Operações **subir, baixar, suavizar, aplainar, ruído e terraço** | 6 testes (incluindo suavizar um pico e aplainar para um plano) |
+| **Geração determinística** por ruído próprio (valor/fBm, semente explícita) | 3 testes: mesma semente = mesmo terreno; altura confere; parâmetros inválidos recusados |
+| **Consultas**: altura bilinear, normal por diferenças centrais, limites e materiais por amostra | 4 testes (costura entre blocos, coordenadas negativas, normal para cima) |
+| **Desfazer**: captura e restauração por bloco e por região | 2 testes |
+| Limites: célula de 0,05 a 64 m, bloco de 1 a 256 células, 16 384 blocos, altura ±10 000 m, pincel até 4 milhões de amostras | testes de recusa e de *clamp* |
+
+**Falta neste slice:** integração nas tabelas do projeto (`Terrain`, `TerrainChunk`), comandos `terrain.*`, renderização (splatmap e LOD), malhagem do heightmap, colisão heightfield no Rapier, editor (pincéis e raio X), caverna↔terreno (furos e costura) e `surface_follow`.
+
 ## Etapa atual: integridade de dados (2026-10-27)
 
 | O quê | Verificação |

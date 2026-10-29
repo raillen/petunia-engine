@@ -1,4 +1,5 @@
 use petunia_math::{Color, PolygonMesh, Vec3};
+use petunia_terrain::{ChunkCoord, Terrain, TerrainChunk, TerrainHole};
 use serde::{Deserialize, Serialize};
 
 /// Largest integer that every language in the engine can represent exactly (2^53 - 1).
@@ -20,6 +21,8 @@ pub enum ValueKind {
     Color,
     /// An editable polygon mesh (see `petunia_math::PolygonMesh`).
     Mesh,
+    /// A chunked heightmap (see `petunia_terrain::Terrain`).
+    Terrain,
 }
 
 impl ValueKind {
@@ -32,6 +35,7 @@ impl ValueKind {
             Self::Vec3 => "vec3",
             Self::Color => "color",
             Self::Mesh => "mesh",
+            Self::Terrain => "terrain",
         }
     }
 }
@@ -46,6 +50,7 @@ pub enum Value {
     Vec3(Vec3),
     Color(Color),
     Mesh(PolygonMesh),
+    Terrain(Terrain),
 }
 
 impl Value {
@@ -58,6 +63,7 @@ impl Value {
             Self::Vec3(_) => ValueKind::Vec3,
             Self::Color(_) => ValueKind::Color,
             Self::Mesh(_) => ValueKind::Mesh,
+            Self::Terrain(_) => ValueKind::Terrain,
         }
     }
 
@@ -86,6 +92,7 @@ impl Value {
             Self::Vec3(vector) => finite(vector.is_finite()),
             Self::Color(color) => finite(color.is_finite()),
             Self::Mesh(mesh) => mesh.validate().map_err(|error| error.to_string()),
+            Self::Terrain(terrain) => terrain.validate().map_err(|error| error.to_string()),
         }
     }
 
@@ -111,6 +118,7 @@ impl Value {
             ValueKind::Mesh => {
                 Self::Mesh(PolygonMesh::from_text_json(json).map_err(|error| error.to_string())?)
             }
+            ValueKind::Terrain => Self::Terrain(terrain_from_json(json)?),
         };
         value.validate(max_text_bytes)?;
         Ok(value)
@@ -136,8 +144,161 @@ impl Value {
                 "a": f32_json(color.a),
             }),
             Self::Mesh(mesh) => mesh.to_text_json(),
+            Self::Terrain(terrain) => terrain_to_json(terrain),
         }
     }
+}
+
+fn terrain_to_json(terrain: &Terrain) -> serde_json::Value {
+    let chunks: Vec<serde_json::Value> = terrain
+        .chunks()
+        .map(|chunk| {
+            let coord = chunk.coord();
+            let heights: Vec<serde_json::Value> = chunk
+                .heights()
+                .iter()
+                .map(|height| f32_json(*height))
+                .collect();
+            let materials: Vec<serde_json::Value> = chunk
+                .materials()
+                .iter()
+                .map(|material| serde_json::Value::from(*material))
+                .collect();
+            serde_json::json!({
+                "x": coord.x,
+                "z": coord.z,
+                "heights": heights,
+                "materials": materials,
+            })
+        })
+        .collect();
+    let holes: Vec<serde_json::Value> = terrain
+        .holes()
+        .iter()
+        .map(|hole| {
+            serde_json::json!({
+                "x": f32_json(hole.x),
+                "z": f32_json(hole.z),
+                "radius": f32_json(hole.radius),
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "cell_size": f32_json(terrain.cell_size()),
+        "chunk_cells": terrain.chunk_cells(),
+        "chunks": chunks,
+        "holes": holes,
+    })
+}
+
+fn terrain_from_json(json: &serde_json::Value) -> Result<Terrain, String> {
+    let object = json
+        .as_object()
+        .ok_or_else(|| "esperava um objeto de terreno".to_string())?;
+    let cell_size = object
+        .get("cell_size")
+        .and_then(serde_json::Value::as_f64)
+        .ok_or_else(|| "o terreno precisa de `cell_size`".to_string())? as f32;
+    let chunk_cells = object
+        .get("chunk_cells")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| "o terreno precisa de `chunk_cells`".to_string())?;
+    let chunk_cells = usize::try_from(chunk_cells)
+        .map_err(|_| "`chunk_cells` não cabe na memória".to_string())?;
+    let chunks = object
+        .get("chunks")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "o terreno precisa de `chunks`".to_string())?;
+    let expected = chunk_cells
+        .checked_mul(chunk_cells)
+        .ok_or_else(|| "`chunk_cells` grande demais".to_string())?;
+    let mut terrain = Terrain::new(cell_size, chunk_cells).map_err(|error| error.to_string())?;
+    for chunk_json in chunks {
+        let chunk = chunk_json
+            .as_object()
+            .ok_or_else(|| "esperava um objeto de bloco".to_string())?;
+        let x = chunk
+            .get("x")
+            .and_then(serde_json::Value::as_i64)
+            .and_then(|value| i32::try_from(value).ok())
+            .ok_or_else(|| "o bloco precisa de `x` inteiro".to_string())?;
+        let z = chunk
+            .get("z")
+            .and_then(serde_json::Value::as_i64)
+            .and_then(|value| i32::try_from(value).ok())
+            .ok_or_else(|| "o bloco precisa de `z` inteiro".to_string())?;
+        let heights_json = chunk
+            .get("heights")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| "o bloco precisa de `heights`".to_string())?;
+        if heights_json.len() != expected {
+            return Err("`heights` não tem uma entrada por célula".to_string());
+        }
+        let mut heights = Vec::with_capacity(expected);
+        for height in heights_json {
+            heights.push(
+                height
+                    .as_f64()
+                    .ok_or_else(|| "cada altura precisa ser um número".to_string())?
+                    as f32,
+            );
+        }
+        let materials = match chunk.get("materials") {
+            None | Some(serde_json::Value::Null) => Vec::new(),
+            Some(serde_json::Value::Array(values)) => {
+                if values.len() != expected {
+                    return Err("`materials` não tem uma entrada por célula".to_string());
+                }
+                let mut materials = Vec::with_capacity(expected);
+                for material in values {
+                    let value = material
+                        .as_u64()
+                        .ok_or_else(|| "cada material precisa ser um inteiro".to_string())?;
+                    materials.push(
+                        u8::try_from(value)
+                            .map_err(|_| "o material precisa estar entre 0 e 255".to_string())?,
+                    );
+                }
+                materials
+            }
+            Some(_) => return Err("`materials` precisa ser uma lista".to_string()),
+        };
+        let chunk =
+            TerrainChunk::from_parts(ChunkCoord::new(x, z), chunk_cells, heights, materials)
+                .map_err(|error| error.to_string())?;
+        terrain
+            .insert_chunk(chunk)
+            .map_err(|error| error.to_string())?;
+    }
+    let holes = match object.get("holes") {
+        None | Some(serde_json::Value::Null) => Vec::new(),
+        Some(serde_json::Value::Array(values)) => {
+            let mut holes = Vec::with_capacity(values.len());
+            for value in values {
+                let hole = value
+                    .as_object()
+                    .ok_or_else(|| "cada furo precisa ser um objeto".to_string())?;
+                let number = |key: &str| -> Result<f32, String> {
+                    hole.get(key)
+                        .and_then(serde_json::Value::as_f64)
+                        .map(|value| value as f32)
+                        .ok_or_else(|| format!("o furo precisa de `{key}`"))
+                };
+                holes.push(TerrainHole {
+                    x: number("x")?,
+                    z: number("z")?,
+                    radius: number("radius")?,
+                });
+            }
+            holes
+        }
+        Some(_) => return Err("`holes` precisa ser uma lista".to_string()),
+    };
+    terrain
+        .set_holes(holes)
+        .map_err(|error| error.to_string())?;
+    terrain.validate().map_err(|error| error.to_string())?;
+    Ok(terrain)
 }
 
 /// An `f32` as JSON using the shortest decimal that reads back as the same `f32`: `0.62`, not
@@ -217,5 +378,57 @@ mod tests {
         );
         let broken = serde_json::json!({ "positions": ["0 0 0"], "faces": ["0 1 2"] });
         assert!(Value::from_json(ValueKind::Mesh, &broken, 16).is_err());
+    }
+}
+
+#[cfg(test)]
+mod terrain_tests {
+    use super::*;
+
+    fn sample_terrain() -> Terrain {
+        let mut terrain = Terrain::new(1.0, 4).unwrap();
+        terrain.set_sample(0, 0, 1.5).unwrap();
+        terrain.set_sample_material(0, 0, 2).unwrap();
+        terrain.set_sample(4, 4, -2.0).unwrap();
+        terrain
+            .set_holes(vec![TerrainHole {
+                x: 1.0,
+                z: 2.0,
+                radius: 0.75,
+            }])
+            .unwrap();
+        terrain
+    }
+
+    #[test]
+    fn terrain_round_trips_through_json() {
+        let terrain = sample_terrain();
+        let json = Value::Terrain(terrain.clone()).to_json();
+        let back = Value::from_json(ValueKind::Terrain, &json, 16);
+        assert_eq!(back, Ok(Value::Terrain(terrain)));
+    }
+
+    #[test]
+    fn hostile_terrain_json_is_refused() {
+        let short = serde_json::json!({
+            "cell_size": 1.0,
+            "chunk_cells": 4,
+            "chunks": [{ "x": 0, "z": 0, "heights": vec![0.0; 15] }],
+        });
+        assert!(Value::from_json(ValueKind::Terrain, &short, 16).is_err());
+
+        let not_numbers = serde_json::json!({
+            "cell_size": 1.0,
+            "chunk_cells": 4,
+            "chunks": [{ "x": 0, "z": 0, "heights": vec![serde_json::Value::Null; 16] }],
+        });
+        assert!(Value::from_json(ValueKind::Terrain, &not_numbers, 16).is_err());
+
+        let bad_cell = serde_json::json!({
+            "cell_size": 0.0,
+            "chunk_cells": 4,
+            "chunks": [],
+        });
+        assert!(Value::from_json(ValueKind::Terrain, &bad_cell, 16).is_err());
     }
 }

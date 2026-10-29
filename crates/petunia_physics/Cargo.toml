@@ -8,6 +8,7 @@ description = "Adapter around Rapier: rigid bodies, colliders, contacts and quer
 
 [dependencies]
 petunia_math.workspace = true
+petunia_terrain.workspace = true
 petunia_world.workspace = true
 rapier3d.workspace = true
 thiserror.workspace = true

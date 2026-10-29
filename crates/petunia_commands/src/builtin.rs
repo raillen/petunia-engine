@@ -32,10 +32,13 @@ pub(crate) fn commands() -> Vec<(CommandSpec, ApplyFn)> {
         (row_set_spec(), row_set as ApplyFn),
         (row_remove_spec(), row_remove as ApplyFn),
     ]
+    .into_iter()
+    .chain(crate::terrain::commands())
+    .collect()
 }
 
 pub(crate) fn query_specs() -> Vec<QuerySpec> {
-    vec![
+    let mut specs = vec![
         QuerySpec {
             id: "world.get".to_string(),
             summary: "Lê um valor, ou a linha inteira, de uma entidade.".to_string(),
@@ -79,7 +82,9 @@ pub(crate) fn query_specs() -> Vec<QuerySpec> {
             status: Status::Provisional,
             example: r#"{"table": "Brush"}"#.to_string(),
         },
-    ]
+    ];
+    specs.extend(crate::terrain::queries());
+    specs
 }
 
 // ---- payloads -------------------------------------------------------------------------------

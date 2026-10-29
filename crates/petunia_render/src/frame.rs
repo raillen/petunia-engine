@@ -19,6 +19,8 @@ pub enum Shape {
     Stairs,
     /// An editable polygon mesh (`Mesh` table): the item carries its own triangles.
     Mesh,
+    /// A terrain chunk (`Terrain` table): the item carries its own triangles and per-vertex colors.
+    Terrain,
 }
 
 impl Shape {
@@ -122,6 +124,9 @@ pub struct RenderFrame {
     pub grid_height: f32,
     pub clear_color: Color,
     pub lighting: Lighting,
+    /// Optional horizontal cut plane: geometry above this world height is discarded. Used by the
+    /// editor's X-ray/section view; `None` draws everything.
+    pub section_height: Option<f32>,
 }
 
 impl RenderFrame {
@@ -230,6 +235,40 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
             mesh_fingerprint: fingerprint,
         });
     }
+    for handle in world.entities_with_table("Terrain").unwrap_or_default() {
+        let Ok(Value::Terrain(terrain)) = world.get(handle, "Terrain", "data") else {
+            continue;
+        };
+        let entity = world.persistent_id(handle).map_or(0, |id| id.0);
+        let cells = terrain.chunk_cells().max(1);
+        let cell_size = terrain.cell_size();
+        for chunk in terrain.chunks() {
+            let coord = chunk.coord();
+            let center = Vec3::new(
+                (coord.x as f32 + 0.5) * cells as f32 * cell_size,
+                0.0,
+                (coord.z as f32 + 0.5) * cells as f32 * cell_size,
+            );
+            let distance = (center - camera.position).length();
+            let step = crate::terrain::lod_step(distance).min(cells);
+            let fingerprint = crate::terrain::chunk_fingerprint(terrain, coord, step);
+            let mesh = cache.cached(fingerprint, || {
+                crate::terrain::chunk_mesh(terrain, coord, step)
+            });
+            items.push(DrawItem {
+                entity,
+                selected: false,
+                hovered: false,
+                shape: Shape::Terrain,
+                size: Vec3::ONE,
+                detail: 0,
+                transform: Transform::default(),
+                color: Color::WHITE,
+                mesh: Some(mesh),
+                mesh_fingerprint: fingerprint,
+            });
+        }
+    }
     let lighting = extract_lighting(world, camera.position);
     RenderFrame {
         camera,
@@ -240,6 +279,7 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
         grid_height: 0.0,
         clear_color: Color::rgb(0.53, 0.70, 0.88),
         lighting,
+        section_height: None,
     }
 }
 
@@ -329,6 +369,10 @@ pub fn solid_shapes(world: &World) -> std::collections::BTreeMap<u64, petunia_ma
     let mut found = std::collections::BTreeMap::new();
     let frame = extract_frame(world, Camera::default());
     for item in &frame.items {
+        if item.shape == Shape::Terrain {
+            // Terrain gets a heightfield collider, not a triangle soup per chunk.
+            continue;
+        }
         let Ok(mesh) = crate::mesh::item_mesh(item) else {
             continue;
         };

@@ -31,6 +31,9 @@ pub struct MeshData {
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,
     pub indices: Vec<u32>,
+    /// Optional per-vertex colors (terrain layers). Empty for built-in shapes and editable
+    /// meshes, which use the item's uniform color.
+    pub colors: Vec<[f32; 3]>,
 }
 
 impl MeshData {
@@ -125,6 +128,18 @@ impl MeshCache {
             .clone()
     }
 
+    /// A mesh built by the caller, cached by fingerprint (terrain chunks, for example).
+    pub fn cached<F>(&mut self, fingerprint: u64, build: F) -> Arc<MeshData>
+    where
+        F: FnOnce() -> MeshData,
+    {
+        self.used.insert(fingerprint);
+        self.meshes
+            .entry(fingerprint)
+            .or_insert_with(|| Arc::new(build()))
+            .clone()
+    }
+
     /// Drops the meshes not used since the last sweep.
     pub fn sweep(&mut self) {
         let used = std::mem::take(&mut self.used);
@@ -144,8 +159,8 @@ impl MeshCache {
 /// The triangles an item draws: its own mesh for an editable mesh, else the shape's.
 pub fn item_mesh(item: &DrawItem) -> Result<Arc<MeshData>, MeshError> {
     match (&item.shape, &item.mesh) {
-        (Shape::Mesh, Some(mesh)) => Ok(mesh.clone()),
-        (Shape::Mesh, None) => Ok(Arc::new(MeshData::default())),
+        (Shape::Mesh | Shape::Terrain, Some(mesh)) => Ok(mesh.clone()),
+        (Shape::Mesh | Shape::Terrain, None) => Ok(Arc::new(MeshData::default())),
         _ => build_mesh(item.shape, item.size, item.detail).map(Arc::new),
     }
 }
@@ -171,8 +186,8 @@ pub fn build_mesh(shape: Shape, size: Vec3, detail: u32) -> Result<MeshData, Mes
         Shape::Cone => cone_mesh(half, segments),
         Shape::Sphere => sphere_mesh(half, segments),
         Shape::Stairs => stairs_mesh(half, detail.clamp(1, MAX_STEPS)),
-        // An editable mesh carries its own triangles ([`item_mesh`]); there is no shape to build.
-        Shape::Mesh => MeshData::default(),
+        // An editable mesh or a terrain chunk carries its own triangles ([`item_mesh`]).
+        Shape::Mesh | Shape::Terrain => MeshData::default(),
     })
 }
 

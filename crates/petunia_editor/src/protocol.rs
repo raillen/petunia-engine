@@ -188,6 +188,58 @@ impl EditorSession {
             "edit.duplicate" => self.duplicate(),
             "edit.delete" => self.delete_selection(),
             "create.brush" => self.create_brush(text(request, "shape")?),
+            "create.terrain" => self.create_terrain(
+                number_or(request, "cell_size", 1.0),
+                request
+                    .get("chunk_cells")
+                    .and_then(Json::as_u64)
+                    .unwrap_or(16)
+                    .clamp(1, 256) as usize,
+            ),
+            "terrain.generate" | "terrain.brush" | "terrain.paint" | "terrain.patch"
+            | "terrain.holes" => {
+                let mut payload = request.clone();
+                if let Some(object) = payload.as_object_mut() {
+                    object.remove("op");
+                }
+                self.execute(&CommandRecord::new(operation, payload))
+            }
+            "terrain.begin" => self.terrain_begin(pointer(request)?),
+            "terrain.drag" => self.terrain_drag(pointer(request)?),
+            "terrain.end" => self.terrain_end(),
+            "terrain.cancel" => Ok(self.terrain_cancel()),
+            "terrain.set" => self.terrain_set(request),
+            "terrain.preview" => Ok(self.terrain_json()),
+            "terrain.hover" => self.terrain_hover(pointer(request)?),
+            "terrain.section" => Ok(self.set_terrain_section(
+                request
+                    .get("enabled")
+                    .and_then(Json::as_bool)
+                    .unwrap_or(false),
+                request
+                    .get("height")
+                    .and_then(Json::as_f64)
+                    .map(|value| value as f32),
+            )),
+            "terrain.xray" => Ok(self.set_terrain_xray(
+                request
+                    .get("enabled")
+                    .and_then(Json::as_bool)
+                    .unwrap_or(false),
+            )),
+            "surface.follow" => {
+                let mut payload = request.clone();
+                if let Some(object) = payload.as_object_mut() {
+                    object.remove("op");
+                }
+                self.execute(&CommandRecord::new("surface.follow", payload))
+            }
+            "preferences.surface_follow" => Ok(self.set_surface_follow_default(
+                request
+                    .get("enabled")
+                    .and_then(Json::as_bool)
+                    .unwrap_or(false),
+            )),
             "create.cave" => self.create_cave(request.get("seed").and_then(Json::as_u64)),
             "sculpt.begin" => {
                 let invert = request
@@ -219,6 +271,49 @@ impl EditorSession {
                 )
             }
             "sculpt.consolidate" => self.sculpt_consolidate(),
+            "sculpt.boolean" => {
+                let target = request
+                    .get("target")
+                    .and_then(Json::as_u64)
+                    .ok_or_else(|| {
+                        Failure::bad_request("falta o campo `target` (id da caverna alvo)")
+                    })?;
+                let tool = request.get("tool").and_then(Json::as_u64).ok_or_else(|| {
+                    Failure::bad_request("falta o campo `tool` (id da caverna ferramenta)")
+                })?;
+                self.sculpt_boolean(
+                    target,
+                    tool,
+                    request
+                        .get("operation")
+                        .and_then(Json::as_str)
+                        .unwrap_or("union"),
+                    request
+                        .get("keep_target")
+                        .and_then(Json::as_bool)
+                        .unwrap_or(false),
+                    request
+                        .get("keep_tool")
+                        .and_then(Json::as_bool)
+                        .unwrap_or(false),
+                )
+            }
+            "sculpt.fill" => self.sculpt_fill(),
+            "sculpt.hollow" => self.sculpt_hollow(optional_number(request, "thickness")),
+            "sculpt.noise" => self.sculpt_noise(
+                request
+                    .get("count")
+                    .and_then(Json::as_u64)
+                    .map(|value| value.min(64) as u32),
+                request.get("seed").and_then(Json::as_u64),
+                optional_number(request, "radius"),
+            ),
+            "sculpt.mirror" => Ok(self.set_sculpt_mirror(
+                request
+                    .get("enabled")
+                    .and_then(Json::as_bool)
+                    .unwrap_or(false),
+            )),
             "sculpt.faceted" => {
                 let value = request.get("value").and_then(Json::as_bool).unwrap_or(true);
                 self.sculpt_faceted(value)

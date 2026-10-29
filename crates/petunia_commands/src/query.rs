@@ -42,6 +42,9 @@ pub fn run_query(world: &World, record: &QueryRecord) -> Result<Json, CommandErr
     match record.query.as_str() {
         "world.get" => query_get(world, &record.payload),
         "world.find" => query_find(world, &record.payload),
+        query if query.starts_with("terrain.") => {
+            crate::terrain::run_query(world, query, &record.payload)
+        }
         other => Err(CommandError::UnknownCommand {
             name: other.to_string(),
             suggestions: Vec::new(),

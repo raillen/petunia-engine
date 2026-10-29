@@ -19,14 +19,17 @@ use petunia_render::{
 const VERTEX_SHADER: &str = r#"#version 330 core
 layout(location = 0) in vec3 a_position;
 layout(location = 1) in vec3 a_normal;
+layout(location = 2) in vec3 a_color;
 uniform mat4 u_view_projection;
 uniform mat4 u_model;
 out vec3 v_normal;
 out vec3 v_world_position;
+out vec3 v_color;
 void main() {
     vec4 world = u_model * vec4(a_position, 1.0);
     v_world_position = world.xyz;
     v_normal = transpose(inverse(mat3(u_model))) * a_normal;
+    v_color = a_color;
     gl_Position = u_view_projection * world;
 }
 "#;
@@ -34,6 +37,8 @@ void main() {
 const FRAGMENT_SHADER: &str = r#"#version 330 core
 in vec3 v_normal;
 in vec3 v_world_position;
+in vec3 v_color;
+uniform int u_vertex_color;
 uniform vec4 u_color;
 uniform vec3 u_camera_position;
 uniform vec4 u_tint;
@@ -45,8 +50,13 @@ uniform vec3 u_sun_color;
 uniform int u_point_count;
 uniform vec4 u_point_position[8];
 uniform vec3 u_point_color[8];
+uniform int u_section_enabled;
+uniform float u_section_height;
 out vec4 out_color;
 void main() {
+    if (u_section_enabled != 0 && v_world_position.y > u_section_height) {
+        discard;
+    }
     vec3 normal = normalize(v_normal);
     if (u_faceted != 0) {
         // Low poly: one normal per triangle, from the slope of the surface on screen.
@@ -73,7 +83,8 @@ void main() {
             light += u_point_color[index] * falloff * falloff * facing;
         }
     }
-    vec3 lit = u_color.rgb * light;
+    vec3 albedo = (u_vertex_color != 0) ? v_color : u_color.rgb;
+    vec3 lit = albedo * light;
     float fog = clamp(length(v_world_position - u_camera_position) / 200.0, 0.0, 1.0);
     lit = mix(lit, vec3(0.53, 0.70, 0.88), fog * 0.6);
     lit = mix(lit, u_tint.rgb, u_tint.a);
@@ -132,6 +143,7 @@ struct Uniforms {
     view_projection: Option<glow::UniformLocation>,
     model: Option<glow::UniformLocation>,
     color: Option<glow::UniformLocation>,
+    vertex_color: Option<glow::UniformLocation>,
     camera_position: Option<glow::UniformLocation>,
     tint: Option<glow::UniformLocation>,
     faceted: Option<glow::UniformLocation>,
@@ -142,6 +154,8 @@ struct Uniforms {
     point_count: Option<glow::UniformLocation>,
     point_position: Option<glow::UniformLocation>,
     point_color: Option<glow::UniformLocation>,
+    section_enabled: Option<glow::UniformLocation>,
+    section_height: Option<glow::UniformLocation>,
 }
 
 /// Tint of the selected object and of the object under the mouse: color and amount.
@@ -202,6 +216,7 @@ struct GpuMesh {
     vertex_array: glow::VertexArray,
     vertex_buffer: glow::Buffer,
     index_buffer: glow::Buffer,
+    color_buffer: Option<glow::Buffer>,
     index_count: i32,
 }
 
@@ -250,6 +265,7 @@ impl GlRenderer {
                 view_projection: gl.get_uniform_location(program, "u_view_projection"),
                 model: gl.get_uniform_location(program, "u_model"),
                 color: gl.get_uniform_location(program, "u_color"),
+                vertex_color: gl.get_uniform_location(program, "u_vertex_color"),
                 camera_position: gl.get_uniform_location(program, "u_camera_position"),
                 tint: gl.get_uniform_location(program, "u_tint"),
                 faceted: gl.get_uniform_location(program, "u_faceted"),
@@ -260,6 +276,8 @@ impl GlRenderer {
                 point_count: gl.get_uniform_location(program, "u_point_count"),
                 point_position: gl.get_uniform_location(program, "u_point_position[0]"),
                 point_color: gl.get_uniform_location(program, "u_point_color[0]"),
+                section_enabled: gl.get_uniform_location(program, "u_section_enabled"),
+                section_height: gl.get_uniform_location(program, "u_section_height"),
             }
         };
         let grid_pass = create_grid_pass(&gl)?;
@@ -318,6 +336,20 @@ impl GlRenderer {
                 camera.z,
             );
             self.upload_lighting(&frame.lighting);
+            match frame.section_height {
+                Some(height) => {
+                    self.gl
+                        .uniform_1_i32(self.uniforms.section_enabled.as_ref(), 1);
+                    self.gl
+                        .uniform_1_f32(self.uniforms.section_height.as_ref(), height);
+                }
+                None => {
+                    self.gl
+                        .uniform_1_i32(self.uniforms.section_enabled.as_ref(), 0);
+                    self.gl
+                        .uniform_1_f32(self.uniforms.section_height.as_ref(), 0.0);
+                }
+            }
         }
 
         // Opaque first; translucent objects (ghosted floors) after, far to near, without
@@ -396,8 +428,16 @@ impl GlRenderer {
 
     /// Draws one object with the main program (bound by the caller), building its mesh once.
     fn draw_item(&mut self, item: &DrawItem) -> Result<(), RenderError> {
-        if item.shape == Shape::Mesh {
-            return self.draw_edit_mesh(item);
+        if item.shape == Shape::Mesh || item.shape == Shape::Terrain {
+            let terrain = item.shape == Shape::Terrain;
+            if terrain {
+                unsafe { self.gl.disable(glow::CULL_FACE) };
+            }
+            let result = self.draw_edit_mesh(item);
+            if terrain {
+                unsafe { self.gl.enable(glow::CULL_FACE) };
+            }
+            return result;
         }
         let key = MeshKey::of(item);
         if !self.meshes.contains_key(&key) {
@@ -502,6 +542,7 @@ impl GlRenderer {
                     positions: chunk.mesh.positions.clone(),
                     normals: chunk.mesh.normals.clone(),
                     indices: chunk.mesh.indices.clone(),
+                    colors: Vec::new(),
                 };
                 let uploaded = upload_mesh(&self.gl, &data)?;
                 self.sculpt_meshes.insert(chunk.id, uploaded);
@@ -607,8 +648,19 @@ impl GlRenderer {
                 color.a,
             );
             self.gl.bind_vertex_array(Some(mesh.vertex_array));
+            if mesh.color_buffer.is_some() {
+                self.gl.enable_vertex_attrib_array(2);
+                self.gl
+                    .uniform_1_i32(self.uniforms.vertex_color.as_ref(), 1);
+            } else {
+                self.gl.disable_vertex_attrib_array(2);
+                self.gl.vertex_attrib_3_f32(2, 1.0, 1.0, 1.0);
+                self.gl
+                    .uniform_1_i32(self.uniforms.vertex_color.as_ref(), 0);
+            }
             self.gl
                 .draw_elements(glow::TRIANGLES, mesh.index_count, glow::UNSIGNED_INT, 0);
+            self.gl.disable_vertex_attrib_array(2);
         }
     }
 
@@ -671,6 +723,9 @@ fn delete_mesh(gl: &glow::Context, mesh: &GpuMesh) {
         gl.delete_vertex_array(mesh.vertex_array);
         gl.delete_buffer(mesh.vertex_buffer);
         gl.delete_buffer(mesh.index_buffer);
+        if let Some(color_buffer) = mesh.color_buffer {
+            gl.delete_buffer(color_buffer);
+        }
     }
 }
 
@@ -902,11 +957,28 @@ fn upload_mesh(gl: &glow::Context, mesh: &MeshData) -> Result<GpuMesh, RenderErr
         gl.vertex_attrib_pointer_f32(0, 3, glow::FLOAT, false, stride, 0);
         gl.enable_vertex_attrib_array(1);
         gl.vertex_attrib_pointer_f32(1, 3, glow::FLOAT, false, stride, 12);
+        let color_buffer = if mesh.colors.len() == mesh.positions.len() && !mesh.colors.is_empty() {
+            let mut color_bytes = Vec::with_capacity(mesh.colors.len() * 12);
+            for color in &mesh.colors {
+                for value in color {
+                    color_bytes.extend_from_slice(&value.to_ne_bytes());
+                }
+            }
+            let buffer = gl.create_buffer().map_err(RenderError::Gl)?;
+            gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer));
+            gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, &color_bytes, glow::STATIC_DRAW);
+            gl.enable_vertex_attrib_array(2);
+            gl.vertex_attrib_pointer_f32(2, 3, glow::FLOAT, false, 0, 0);
+            Some(buffer)
+        } else {
+            None
+        };
         gl.bind_vertex_array(None);
         Ok(GpuMesh {
             vertex_array,
             vertex_buffer,
             index_buffer,
+            color_buffer,
             index_count: mesh.indices.len() as i32,
         })
     }

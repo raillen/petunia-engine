@@ -24,6 +24,7 @@
 #include <QHBoxLayout>
 #include <QFileDialog>
 #include <QInputDialog>
+#include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
 #include <QMenu>
@@ -87,6 +88,7 @@ MainWindow::MainWindow() : bridge_(std::make_unique<EngineBridge>()) {
     buildAppBar();
     buildToolPalette();
     buildSculptBar();
+    buildTerrainBar();
     buildDocks();
 
     cameraLabel_ = new QLabel(this);
@@ -282,7 +284,7 @@ void MainWindow::buildActions() {
         Qt::Key key;
         Qt::KeyboardModifier modifier = Qt::NoModifier;
     };
-    const ToolInfo tools[8] = {
+    const ToolInfo tools[9] = {
         {"select", "Selecionar e transformar", "Seleciona com um clique; o gizmo universal move, gira e escala (V)", "select", Qt::Key_V},
         {"move", "Mover", "Setas movem num eixo, quadrados num plano, o centro no plano da tela (G)", "move", Qt::Key_G},
         {"rotate", "Girar", "Anéis giram num eixo, o anel externo em volta da vista, o centro livre (R)", "rotate", Qt::Key_R},
@@ -291,9 +293,10 @@ void MainWindow::buildActions() {
         {"extrude", "Extrudar", "Pressione numa face e arraste: um brush novo cresce dela (E)", "tool_extrude", Qt::Key_E},
         {"sculpt", "Esculpir caverna", "Arraste sobre uma caverna; o modo está na barra de cima, Ctrl faz o oposto. [ e ] mudam o raio (B)", "paint_brush", Qt::Key_B},
         {"sculpt_path", "Túnel por caminho", "Clique pontos na rocha e confirme com Enter: um túnel suave passa por eles. Backspace tira o último ponto (Shift+B)", "paint_path", Qt::Key_B, Qt::ShiftModifier},
+        {"terrain", "Esculpir terreno", "Arraste sobre o terreno; as opções ficam na barra de cima. [ e ] mudam o raio (T)", "paint_brush", Qt::Key_T},
     };
     auto* toolGroup = new QActionGroup(this);
-    for (int index = 0; index < 8; ++index) {
+    for (int index = 0; index < 9; ++index) {
         toolActions_[index] = make(QString::fromUtf8(tools[index].label), QString::fromUtf8(tools[index].tip));
         toolActions_[index]->setCheckable(true);
         toolActions_[index]->setActionGroup(toolGroup);
@@ -356,6 +359,18 @@ void MainWindow::buildActions() {
     connect(playAction_, &QAction::triggered, this, &MainWindow::togglePlay);
     caveAction_ = make(QStringLiteral("Caverna"), QStringLiteral("Um bloco de rocha com um primeiro túnel; esculpa com a ferramenta Esculpir (B)"));
     caveAction_->setProperty("iconName", QStringLiteral("generate_volume"));
+    terrainAction_ = make(QStringLiteral("Terreno"), QStringLiteral("Um heightmap em blocos; esculpa com a ferramenta Terreno (T)"));
+    terrainAction_->setProperty("iconName", QStringLiteral("view_top"));
+    generateTerrainAction_ = make(QStringLiteral("Gerar terreno"),
+                                  QStringLiteral("Gera blocos de terreno ao redor da origem com uma semente nova"));
+    generateTerrainAction_->setProperty("iconName", QStringLiteral("generate_volume"));
+    generateTerrainAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_T));
+    caveHolesAction_ = make(QStringLiteral("Furos das cavernas"),
+                            QStringLiteral("Abre no terreno um furo em cada túnel de caverna que chega à superfície"));
+    caveHolesAction_->setProperty("iconName", QStringLiteral("generate_volume"));
+    caveBooleanAction_ = make(QStringLiteral("Booleano de cavernas…"),
+                              QStringLiteral("Une, subtrai ou intersecta duas cavernas e cria uma malha com o resultado"));
+    caveBooleanAction_->setProperty("iconName", QStringLiteral("boolean"));
     importModelAction_ = make(QStringLiteral("Importar modelo 3D…"), QStringLiteral("Traz um modelo .glb ou .gltf como objetos editáveis (uma cópia fica em assets/)"));
     importModelAction_->setProperty("iconName", QStringLiteral("cube"));
     connect(importModelAction_, &QAction::triggered, this, &MainWindow::chooseImportModel);
@@ -531,7 +546,135 @@ void MainWindow::buildActions() {
         perform(QStringLiteral("create.cave"), QJsonObject{});
         statusBar()->showMessage(QStringLiteral("Caverna criada. Escolha Esculpir (B) e arraste sobre ela; Ctrl adiciona rocha."), 8000);
     });
+    connect(terrainAction_, &QAction::triggered, this, [this] {
+        if (perform(QStringLiteral("create.terrain"), QJsonObject{}).ok) {
+            perform(QStringLiteral("tool.set"), QJsonObject{{"tool", QStringLiteral("terrain")}}, false);
+            statusBar()->showMessage(QStringLiteral("Terreno criado. Arraste com a ferramenta Terreno (T); as opções ficam na barra de cima."), 8000);
+        }
+    });
+    connect(caveBooleanAction_, &QAction::triggered, this, [this] {
+        const QJsonObject snapshot = bridge_->snapshot();
+        const QJsonValue selection = snapshot.value(QStringLiteral("selection"));
+        if (!selection.isDouble()) {
+            statusBar()->showMessage(QStringLiteral("Selecione a caverna alvo antes do booleano."), 6000);
+            return;
+        }
+        const double target = selection.toDouble();
+        QStringList labels;
+        QList<double> ids;
+        for (const QJsonValue& value : snapshot.value(QStringLiteral("entities")).toArray()) {
+            const QJsonObject entity = value.toObject();
+            const double id = entity.value(QStringLiteral("id")).toDouble();
+            QStringList tables;
+            for (const QJsonValue& table : entity.value(QStringLiteral("tables")).toArray()) {
+                tables.append(table.toString());
+            }
+            if (id == target || !tables.contains(QStringLiteral("Sculpt"))) {
+                continue;
+            }
+            labels.append(QStringLiteral("%1 (#%2)").arg(entity.value(QStringLiteral("name")).toString()).arg(qRound64(id)));
+            ids.append(id);
+        }
+        if (labels.isEmpty()) {
+            statusBar()->showMessage(QStringLiteral("Não há outra caverna para usar como ferramenta."), 6000);
+            return;
+        }
+        bool accepted = false;
+        const QString label = QInputDialog::getItem(this, QStringLiteral("Booleano de cavernas"),
+                                                    QStringLiteral("Outra caverna:"), labels, 0, false, &accepted);
+        if (!accepted) {
+            return;
+        }
+        const int index = labels.indexOf(label);
+        if (index < 0 || index >= ids.size()) {
+            return;
+        }
+        const QStringList operations = {QStringLiteral("União"), QStringLiteral("Subtrair"), QStringLiteral("Interseção")};
+        const QString operation = QInputDialog::getItem(this, QStringLiteral("Booleano de cavernas"),
+                                                        QStringLiteral("Operação:"), operations, 0, false, &accepted);
+        if (!accepted) {
+            return;
+        }
+        const QString name = operation == QStringLiteral("Subtrair") ? QStringLiteral("subtract")
+                             : operation == QStringLiteral("Interseção") ? QStringLiteral("intersect")
+                                                                         : QStringLiteral("union");
+        const Reply reply = perform(QStringLiteral("sculpt.boolean"), QJsonObject{
+            {"target", target}, {"tool", ids[index]}, {"operation", name},
+            {"keep_target", false}, {"keep_tool", false},
+        });
+        if (reply.ok) {
+            statusBar()->showMessage(QStringLiteral("Booleano criado: %1 faces. Ctrl+Z desfaz.")
+                                         .arg(reply.result.toObject().value(QStringLiteral("faces")).toInt()),
+                                     8000);
+        }
+    });
+    connect(caveHolesAction_, &QAction::triggered, this, [this] {
+        const auto run = [this](double entity) {
+            return perform(QStringLiteral("terrain.holes_from_caves"),
+                           QJsonObject{{"entity", entity}});
+        };
+        const QJsonObject snapshot = bridge_->snapshot();
+        const QJsonValue selection = snapshot.value(QStringLiteral("selection"));
+        Reply reply;
+        if (selection.isDouble()) {
+            reply = run(selection.toDouble());
+        }
+        if (!selection.isDouble() || !reply.ok) {
+            const Reply found = bridge_->call(QStringLiteral("query.run"), QJsonObject{
+                {"query", QStringLiteral("world.find")},
+                {"payload", QJsonObject{{"table", QStringLiteral("Terrain")}}},
+            });
+            if (found.ok && found.result.isArray() && !found.result.toArray().isEmpty()) {
+                reply = run(found.result.toArray().first().toDouble());
+            }
+        }
+        if (reply.ok) {
+            statusBar()->showMessage(QStringLiteral("%1 furo(s) abertos no terreno. Ctrl+Z desfaz.")
+                                         .arg(reply.result.toObject().value(QStringLiteral("holes")).toInt()),
+                                     8000);
+        }
+    });
+    connect(generateTerrainAction_, &QAction::triggered, this, [this] {
+        const quint32 seed = QRandomGenerator::global()->generate();
+        const Reply made = perform(QStringLiteral("create.terrain"), QJsonObject{}, false);
+        if (!made.ok) {
+            fprintf(stderr, "terrain.create failed: %s\n", made.code.toUtf8().constData());
+            return;
+        }
+        const double entity = made.result.toObject().value(QStringLiteral("entity")).toDouble();
+        fprintf(stderr, "terrain.create entity=%f result=%s\n", entity,
+                QJsonDocument(made.result.toObject()).toJson(QJsonDocument::Compact).constData());
+        const Reply reply = perform(QStringLiteral("terrain.generate"), QJsonObject{
+            {"entity", entity},
+            {"min_x", -1}, {"min_z", -1}, {"max_x", 1}, {"max_z", 1},
+            {"seed", static_cast<double>(seed)},
+            {"amplitude", 8.0},
+            {"base_height", 0.0},
+        }, false);
+        if (reply.ok) {
+            perform(QStringLiteral("tool.set"), QJsonObject{{"tool", QStringLiteral("terrain")}}, false);
+            statusBar()->showMessage(QStringLiteral("Terreno gerado (semente %1). Arraste para esculpir; Z desfaz.").arg(seed), 8000);
+        } else {
+            fprintf(stderr, "terrain.generate failed: %s / %s (entity=%f)\n",
+                    reply.code.toUtf8().constData(), reply.message.toUtf8().constData(), entity);
+            statusBar()->showMessage(reply.explanation(), 10000);
+        }
+    });
     auto changeRadius = [this](double factor) {
+        const QJsonObject snapshot = bridge_->snapshot();
+        if (snapshot.value(QStringLiteral("tool")).toString() == QLatin1String("terrain")) {
+            const double current = snapshot.value(QStringLiteral("terrain")).toObject()
+                                       .value(QStringLiteral("radius")).toDouble(2.0);
+            const Reply reply = perform(QStringLiteral("terrain.set"),
+                                        QJsonObject{{"radius", current * factor}}, false);
+            if (reply.ok) {
+                statusBar()->showMessage(QStringLiteral("Raio do terreno: %1 m")
+                                             .arg(QLocale().toString(reply.result.toObject()
+                                                                         .value(QStringLiteral("radius")).toDouble(), 'f', 2)),
+                                         4000);
+            }
+            return;
+        }
         const Reply reply = perform(QStringLiteral("sculpt.radius"), QJsonObject{{"meters", sculptRadius_ * factor}}, false);
         if (reply.ok) {
             statusBar()->showMessage(QStringLiteral("Raio de esculpir: %1 m")
@@ -599,6 +742,7 @@ void MainWindow::buildMenus() {
     }
     create->addSeparator();
     create->addAction(caveAction_);
+    create->addAction(terrainAction_);
     create->addAction(randomCaveAction_);
     create->addSeparator();
     create->addAction(importModelAction_);
@@ -606,6 +750,10 @@ void MainWindow::buildMenus() {
     create->addAction(sunLightAction_);
 
     QMenu* operations = menus_->addMenu(QStringLiteral("&Operações"));
+    operations->addAction(generateTerrainAction_);
+    operations->addAction(caveHolesAction_);
+    operations->addAction(caveBooleanAction_);
+    operations->addSeparator();
     QMenu* collision = operations->addMenu(QStringLiteral("Colisão"));
     collision->setIcon(PetuniaIcons::get(QStringLiteral("bounding_box")));
     const QList<QPair<QString, QString>> colliderShapes = {
@@ -1055,6 +1203,13 @@ void MainWindow::buildSculptBar() {
     });
     sculptBar_->addSeparator();
 
+    mirrorBox_ = new QCheckBox(QStringLiteral("Espelhar X"));
+    mirrorBox_->setToolTip(QStringLiteral("Cada traço também é aplicado espelhado no eixo x local da caverna"));
+    mirrorBox_->setAccessibleName(QStringLiteral("Espelhar os traços da caverna em X"));
+    sculptBar_->addWidget(mirrorBox_);
+    connect(mirrorBox_, &QCheckBox::clicked, this, [this](bool on) {
+        perform(QStringLiteral("sculpt.mirror"), QJsonObject{{"enabled", on}}, false);
+    });
     facetedBox_ = new QCheckBox(QStringLiteral("Facetada"));
     facetedBox_->setToolTip(QStringLiteral("Low poly: triângulos chapados em vez de superfície lisa, na caverna selecionada"));
     facetedBox_->setAccessibleName(QStringLiteral("Caverna facetada"));
@@ -1075,6 +1230,28 @@ void MainWindow::buildSculptBar() {
                                          .arg(seed),
                                      8000);
         }
+    });
+    fillButton_ = new QPushButton(QStringLiteral("Preencher"));
+    fillButton_->setToolTip(QStringLiteral("Enche a caverna selecionada com um traço grande de rocha"));
+    sculptBar_->addWidget(fillButton_);
+    connect(fillButton_, &QPushButton::clicked, this, [this] {
+        perform(QStringLiteral("sculpt.fill"), QJsonObject{});
+        statusBar()->showMessage(QStringLiteral("Caverna preenchida. Ctrl+Z desfaz."), 6000);
+    });
+    hollowButton_ = new QPushButton(QStringLiteral("Oco"));
+    hollowButton_->setToolTip(QStringLiteral("Escava um oco dentro da caverna, deixando uma casca"));
+    sculptBar_->addWidget(hollowButton_);
+    connect(hollowButton_, &QPushButton::clicked, this, [this] {
+        perform(QStringLiteral("sculpt.hollow"), QJsonObject{{"thickness", 1.0}});
+        statusBar()->showMessage(QStringLiteral("Caverna oca. Ctrl+Z desfaz."), 6000);
+    });
+    noiseButton_ = new QPushButton(QStringLiteral("Ruído"));
+    noiseButton_->setToolTip(QStringLiteral("Adiciona saliências e covas determinísticas na caverna"));
+    sculptBar_->addWidget(noiseButton_);
+    connect(noiseButton_, &QPushButton::clicked, this, [this] {
+        const quint32 seed = QRandomGenerator::global()->generate();
+        perform(QStringLiteral("sculpt.noise"), QJsonObject{{"count", 12}, {"seed", static_cast<double>(seed)}});
+        statusBar()->showMessage(QStringLiteral("Ruído aplicado (semente %1). Ctrl+Z desfaz.").arg(seed), 6000);
     });
     consolidateButton_ = new QPushButton(QStringLiteral("Fundir traços"));
     consolidateButton_->setToolTip(QStringLiteral("Junta os traços curtos de arrastos longos em poucos traços longos, sem mudar a forma"));
@@ -1119,6 +1296,7 @@ void MainWindow::syncSculptBar(const QJsonObject& snapshot) {
     const QSignalBlocker b(sculptRadiusBox_);
     const QSignalBlocker c(sculptForceBox_);
     const QSignalBlocker d(facetedBox_);
+    const QSignalBlocker mirror(mirrorBox_);
     sculptMode_->setCurrentIndex(qMax(0, sculptMode_->findData(sculpt.value(QStringLiteral("mode")).toString())));
     if (!sculptRadiusBox_->hasFocus()) {
         sculptRadiusBox_->setValue(sculpt.value(QStringLiteral("radius")).toDouble(1.5));
@@ -1129,7 +1307,11 @@ void MainWindow::syncSculptBar(const QJsonObject& snapshot) {
     const bool hasCave = !sculpt.value(QStringLiteral("cave")).isNull();
     facetedBox_->setEnabled(hasCave);
     facetedBox_->setChecked(sculpt.value(QStringLiteral("faceted")).toBool());
+    mirrorBox_->setChecked(sculpt.value(QStringLiteral("mirror_x")).toBool());
     generateButton_->setEnabled(hasCave);
+    fillButton_->setEnabled(hasCave);
+    hollowButton_->setEnabled(hasCave);
+    noiseButton_->setEnabled(hasCave);
     consolidateButton_->setEnabled(hasCave);
     strokesLabel_->setText(hasCave ? QStringLiteral("  Traços: %1 / %2")
                                          .arg(sculpt.value(QStringLiteral("strokes")).toInt())
@@ -1138,6 +1320,178 @@ void MainWindow::syncSculptBar(const QJsonObject& snapshot) {
     // The path tool has no mode: carving is its only job (Ctrl adds rock).
     sculptMode_->setEnabled(tool == QLatin1String("sculpt"));
     sculptForceBox_->setEnabled(tool == QLatin1String("sculpt"));
+}
+
+void MainWindow::buildTerrainBar() {
+    terrainBar_ = new QToolBar(QStringLiteral("Terreno"), this);
+    terrainBar_->setObjectName(QStringLiteral("PetuniaTerrainToolOptions"));
+    terrainBar_->setMovable(false);
+    terrainBar_->setFloatable(false);
+    terrainBar_->setAccessibleName(QStringLiteral("Opções de esculpir terreno"));
+    sceneLayout_->insertWidget(1, terrainBar_);
+    terrainBar_->hide();
+
+    auto addCombo = [this](const QString& label, const QList<QPair<QString, QString>>& entries) {
+        terrainBar_->addWidget(new QLabel(QStringLiteral(" ") + label + QStringLiteral(" ")));
+        auto* combo = new QComboBox;
+        combo->setAccessibleName(label);
+        for (const auto& [text, data] : entries) {
+            combo->addItem(text, data);
+        }
+        WheelGuard::protect(combo);
+        terrainBar_->addWidget(combo);
+        return combo;
+    };
+    terrainOperation_ = addCombo(QStringLiteral("Operação"),
+                                 {{QStringLiteral("Subir"), QStringLiteral("raise")},
+                                  {QStringLiteral("Baixar"), QStringLiteral("lower")},
+                                  {QStringLiteral("Suavizar"), QStringLiteral("smooth")},
+                                  {QStringLiteral("Aplainar"), QStringLiteral("flatten")},
+                                  {QStringLiteral("Ruído"), QStringLiteral("noise")},
+                                  {QStringLiteral("Terraço"), QStringLiteral("terrace")}});
+    terrainOperation_->setToolTip(QStringLiteral("O que o arrasto faz no terreno"));
+    connect(terrainOperation_, &QComboBox::activated, this, [this](int index) {
+        perform(QStringLiteral("terrain.set"),
+                QJsonObject{{"operation", terrainOperation_->itemData(index).toString()}}, false);
+    });
+
+    terrainShape_ = addCombo(QStringLiteral("Forma"),
+                             {{QStringLiteral("Esfera"), QStringLiteral("sphere")},
+                              {QStringLiteral("Caixa"), QStringLiteral("box")},
+                              {QStringLiteral("Cilindro"), QStringLiteral("cylinder")},
+                              {QStringLiteral("Cápsula"), QStringLiteral("capsule")}});
+    terrainShape_->setToolTip(QStringLiteral("Volume 3D do pincel (funciona de qualquer ângulo)"));
+    connect(terrainShape_, &QComboBox::activated, this, [this](int index) {
+        perform(QStringLiteral("terrain.set"),
+                QJsonObject{{"shape", terrainShape_->itemData(index).toString()}}, false);
+    });
+
+    terrainFalloff_ = addCombo(QStringLiteral("Queda"),
+                               {{QStringLiteral("Constante"), QStringLiteral("constant")},
+                                {QStringLiteral("Linear"), QStringLiteral("linear")},
+                                {QStringLiteral("Suave"), QStringLiteral("smooth")},
+                                {QStringLiteral("Gaussiana"), QStringLiteral("gaussian")}});
+    terrainFalloff_->setToolTip(QStringLiteral("Como a força cai do centro para a borda"));
+    connect(terrainFalloff_, &QComboBox::activated, this, [this](int index) {
+        perform(QStringLiteral("terrain.set"),
+                QJsonObject{{"falloff", terrainFalloff_->itemData(index).toString()}}, false);
+    });
+
+    terrainBar_->addWidget(new QLabel(QStringLiteral("  Raio ")));
+    terrainRadiusBox_ = new QDoubleSpinBox;
+    terrainRadiusBox_->setRange(0.25, 64.0);
+    terrainRadiusBox_->setSingleStep(0.25);
+    terrainRadiusBox_->setSuffix(QStringLiteral(" m"));
+    terrainRadiusBox_->setAccessibleName(QStringLiteral("Raio do pincel de terreno"));
+    terrainRadiusBox_->setToolTip(QStringLiteral("Tamanho do pincel; [ e ] também mudam"));
+    terrainBar_->addWidget(terrainRadiusBox_);
+    connect(terrainRadiusBox_, &QDoubleSpinBox::editingFinished, this, [this] {
+        perform(QStringLiteral("terrain.set"), QJsonObject{{"radius", terrainRadiusBox_->value()}}, false);
+    });
+
+    terrainBar_->addWidget(new QLabel(QStringLiteral("  Força ")));
+    terrainStrengthBox_ = new QDoubleSpinBox;
+    terrainStrengthBox_->setRange(0.0, 16.0);
+    terrainStrengthBox_->setSingleStep(0.25);
+    terrainStrengthBox_->setAccessibleName(QStringLiteral("Força do pincel de terreno"));
+    terrainStrengthBox_->setToolTip(QStringLiteral("Metros para subir/baixar/ruído; mistura 0–1 para suavizar, aplainar e terraço"));
+    terrainBar_->addWidget(terrainStrengthBox_);
+    connect(terrainStrengthBox_, &QDoubleSpinBox::editingFinished, this, [this] {
+        perform(QStringLiteral("terrain.set"), QJsonObject{{"strength", terrainStrengthBox_->value()}}, false);
+    });
+
+    terrainBar_->addWidget(new QLabel(QStringLiteral("  Material ")));
+    terrainMaterialBox_ = new QSpinBox;
+    terrainMaterialBox_->setRange(0, 7);
+    terrainMaterialBox_->setAccessibleName(QStringLiteral("Camada de material do terreno"));
+    terrainBar_->addWidget(terrainMaterialBox_);
+    terrainPaintBox_ = new QCheckBox(QStringLiteral("Pintar"));
+    terrainPaintBox_->setToolTip(QStringLiteral("Pinta a camada escolhida em vez de mudar a altura"));
+    terrainBar_->addWidget(terrainPaintBox_);
+    connect(terrainMaterialBox_, &QSpinBox::editingFinished, this, [this] {
+        perform(QStringLiteral("terrain.set"), QJsonObject{{"material", terrainMaterialBox_->value()}}, false);
+    });
+    connect(terrainPaintBox_, &QCheckBox::clicked, this, [this](bool on) {
+        perform(QStringLiteral("terrain.set"), QJsonObject{{"paint", on}}, false);
+    });
+
+    terrainBar_->addSeparator();
+    terrainMirrorXBox_ = new QCheckBox(QStringLiteral("Espelhar X"));
+    terrainMirrorZBox_ = new QCheckBox(QStringLiteral("Espelhar Z"));
+    terrainMirrorXBox_->setToolTip(QStringLiteral("Aplica o pincel também espelhado em x = 0"));
+    terrainMirrorZBox_->setToolTip(QStringLiteral("Aplica o pincel também espelhado em z = 0"));
+    terrainBar_->addWidget(terrainMirrorXBox_);
+    terrainBar_->addWidget(terrainMirrorZBox_);
+    connect(terrainMirrorXBox_, &QCheckBox::clicked, this, [this](bool on) {
+        perform(QStringLiteral("terrain.set"), QJsonObject{{"mirror_x", on}}, false);
+    });
+    connect(terrainMirrorZBox_, &QCheckBox::clicked, this, [this](bool on) {
+        perform(QStringLiteral("terrain.set"), QJsonObject{{"mirror_z", on}}, false);
+    });
+    terrainXrayBox_ = new QCheckBox(QStringLiteral("Raio X"));
+    terrainXrayBox_->setToolTip(QStringLiteral("Deixa o terreno translúcido para ver o pincel por dentro da caverna"));
+    terrainBar_->addWidget(terrainXrayBox_);
+    connect(terrainXrayBox_, &QCheckBox::clicked, this, [this](bool on) {
+        perform(QStringLiteral("terrain.xray"), QJsonObject{{"enabled", on}}, false);
+    });
+    terrainSectionBox_ = new QCheckBox(QStringLiteral("Corte"));
+    terrainSectionBox_->setToolTip(QStringLiteral("Corta o mundo no altura do pincel para ver o interior da caverna"));
+    terrainSectionBox_->setAccessibleName(QStringLiteral("Plano de corte do terreno"));
+    terrainBar_->addWidget(terrainSectionBox_);
+    connect(terrainSectionBox_, &QCheckBox::clicked, this, [this](bool on) {
+        perform(QStringLiteral("terrain.section"), QJsonObject{{"enabled", on}}, false);
+    });
+
+    if (auto* overflow = terrainBar_->findChild<QToolButton*>(QStringLiteral("qt_toolbar_ext_button"))) {
+        overflow->setToolTip(QStringLiteral("Mais opções de terreno"));
+        overflow->setAccessibleName(overflow->toolTip());
+        iconButtons_.append({overflow, QStringLiteral("more_horiz")});
+        overflow->setIcon(PetuniaIcons::get(QStringLiteral("more_horiz")));
+    }
+}
+
+void MainWindow::syncTerrainBar(const QJsonObject& snapshot) {
+    if (!terrainBar_) {
+        return;
+    }
+    const QString tool = snapshot.value(QStringLiteral("tool")).toString();
+    const bool terrain = snapshot.value(QStringLiteral("project")).isObject() &&
+                         tool == QLatin1String("terrain");
+    terrainBar_->setVisible(terrain);
+    const QJsonObject state = snapshot.value(QStringLiteral("terrain")).toObject();
+    const QSignalBlocker a(terrainOperation_);
+    const QSignalBlocker b(terrainShape_);
+    const QSignalBlocker c(terrainFalloff_);
+    const QSignalBlocker d(terrainRadiusBox_);
+    const QSignalBlocker e(terrainStrengthBox_);
+    const QSignalBlocker f(terrainMaterialBox_);
+    const QSignalBlocker g(terrainPaintBox_);
+    const QSignalBlocker h(terrainMirrorXBox_);
+    const QSignalBlocker i(terrainMirrorZBox_);
+    const QSignalBlocker j(terrainXrayBox_);
+    const QSignalBlocker k(terrainMirrorXBox_);
+    const QSignalBlocker l(terrainMirrorZBox_);
+    const QSignalBlocker m(terrainSectionBox_);
+    terrainOperation_->setCurrentIndex(
+        qMax(0, terrainOperation_->findData(state.value(QStringLiteral("operation")).toString())));
+    terrainShape_->setCurrentIndex(
+        qMax(0, terrainShape_->findData(state.value(QStringLiteral("shape")).toString())));
+    terrainFalloff_->setCurrentIndex(
+        qMax(0, terrainFalloff_->findData(state.value(QStringLiteral("falloff")).toString())));
+    if (!terrainRadiusBox_->hasFocus()) {
+        terrainRadiusBox_->setValue(state.value(QStringLiteral("radius")).toDouble(2.0));
+    }
+    if (!terrainStrengthBox_->hasFocus()) {
+        terrainStrengthBox_->setValue(state.value(QStringLiteral("strength")).toDouble(1.0));
+    }
+    if (!terrainMaterialBox_->hasFocus()) {
+        terrainMaterialBox_->setValue(state.value(QStringLiteral("material")).toInt(0));
+    }
+    terrainPaintBox_->setChecked(state.value(QStringLiteral("paint")).toBool());
+    terrainMirrorXBox_->setChecked(state.value(QStringLiteral("mirror_x")).toBool());
+    terrainMirrorZBox_->setChecked(state.value(QStringLiteral("mirror_z")).toBool());
+    terrainXrayBox_->setChecked(snapshot.value(QStringLiteral("terrain_xray")).toBool());
+    terrainSectionBox_->setChecked(state.value(QStringLiteral("section")).toBool());
 }
 
 void MainWindow::buildDocks() {
@@ -1353,7 +1707,7 @@ void MainWindow::onSnapshot() {
     for (QAction* action : shapeActions_) {
         action->setEnabled(project);
     }
-    for (QAction* action : {caveAction_, randomCaveAction_, importModelAction_, pointLightAction_, sunLightAction_, sculptLargerAction_, sculptSmallerAction_}) {
+    for (QAction* action : {caveAction_, terrainAction_, generateTerrainAction_, caveHolesAction_, caveBooleanAction_, randomCaveAction_, importModelAction_, pointLightAction_, sunLightAction_, sculptLargerAction_, sculptSmallerAction_}) {
         action->setEnabled(project);
     }
     for (QAction* action : std::as_const(prefabActions_)) {
@@ -1361,6 +1715,7 @@ void MainWindow::onSnapshot() {
     }
     sculptRadius_ = snapshot.value("sculpt").toObject().value(QStringLiteral("radius")).toDouble(sculptRadius_);
     syncSculptBar(snapshot);
+    syncTerrainBar(snapshot);
     resetCameraAction_->setEnabled(project);
     for (QAction* action : toolActions_) {
         action->setEnabled(project);

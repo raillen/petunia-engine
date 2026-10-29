@@ -47,6 +47,7 @@ São **24 decisões**. Estados possíveis:
 | **DR-30** | Sistema de nós (no lugar do Event Sheet) | **ACEITA** (2026-10-26, "tudo aprovado"; N1 implementado) | Grafo tipado 1:1 com a API; compila para Aipo; vista em contorno completa como primeira entrega; tela de nós própria sem biblioteca nova |
 | **DR-31** | Prefabs embutidos e o nó Esperar | **ACEITA** (2026-10-26, "prossiga com a implementação"; N4 implementado) | Porta, Item coletável e Ponto de nascimento como moldes de linhas + grafos; `Esperar` compila para uma função por espera |
 | **DR-24** | Workspaces e prioridades antes da API | **EM PARTE ACEITA** (andares, cavernas B) | Mapa (com Jogar), Pintura sem UV, Animação, Efeitos por nós; antes da API: andares, cavernas, terreno, prefabs, Jogar ([análise](../02-arquitetura/14-workspaces-e-prioridades.md)) |
+| **DR-33** | Sistema de mundos: terreno, cavernas, rios e estradas | **ACEITA** (2026-10-27, suas respostas) | Modelo híbrido (heightfield + SDF esparso em chunks), brushes 3D, dois estilos de mapa (CSG estilo Doom/Quake e orgânico), superfície segura e `surface_follow` opt-in ([terreno](../02-arquitetura/04-terreno-rios-estradas.md)) |
 
 ---
 
@@ -639,6 +640,30 @@ Se uma biblioteca for necessária mais tarde, passa no checklist de admissão an
 **Não verificado:** leitor de tela no canvas (o contorno tem texto e descrição falados; **não ouvi** nenhum dos dois), e o destaque com um grafo grande (os testes usam dois ou três nós).
 
 **Reabrir se:** o contorno não bastar para quem usa leitor de tela depois de um teste com uma pessoa real (era a condição do DR-30), ou se 200 ms não acompanharem um grafo grande.
+
+---
+
+## DR-33 — Sistema de mundos: terreno, cavernas, rios e estradas · ACEITA (2026-10-27)
+
+**Pedido:** assumir por completo o sistema de mundos e pesquisar as melhores formas de fazer terreno, rios e estradas. Perguntas respondidas pelo criador: SDF completo (custo), mapas estilo Doom/Quake, chunks em SDF, escavar cavernas sem entrar, brushes 3D e ferramentas; `surface_follow` opt-in com padrão configurável; ferramentas avançadas **sim**; brushes 2D e 3D **coexistem**.
+
+**Decisão:**
+
+1. **Modelo híbrido, não SDF em todo o mapa.** O exterior é um **heightmap** em chunks (barato de guardar, desenhar e colidir). Cavernas e volumes orgânicos são **SDF 3D esparso em chunks**: só os blocos não vazios existem na memória e só os blocos tocados são malhados (a base já existe em `petunia_sculpt`). O SDF completo para o mapa inteiro foi recusado por **memória e desempenho**, não por dificuldade de implementação: a 1 m de resolução, um mapa de 1 km × 1 km × 200 m pede ~200 milhões de células (~800 MB), e a malhagem e a colisão crescem junto. O heightmap continua sendo a representação do exterior.
+2. **Dois estilos de mapa, um editor.** (a) **Sólido/CSG estilo Doom/Quake**: brushes convexos (caixa, rampa, cilindro, cone, escada, cunha) com união, subtração e interseção, encaixados na grade — o `petunia_mesh` já tem os booleanos. (b) **Orgânico**: terreno esculpido e cavernas por SDF. Os dois **coexistem** na mesma cena; um modelo de projeto pode nascer com o estilo "boomer shooter" (grade grossa, brushes) ou "mundo aberto" (terreno + SDF), e as ferramentas dos dois ficam disponíveis.
+3. **SDF em chunks: sim.** Blocos de 16³ (como em `petunia_sculpt`), alocados só quando tocados, malhados por *surface nets* por bloco, com atualização incremental. Isso mantém o custo de uma pincelada proporcional ao brush, não ao tamanho da caverna, e permite várias cavernas no mesmo mundo. LOD de SDF fica para depois (as cavernas são locais; o terreno é que precisa de LOD).
+4. **Brushes 3D e falloffs.** Além dos brushes 2D de pegada (heightmap), existem brushes de **volume**: esfera, cápsula, caixa, cilindro, cone, plano (half-space), *stamp* de malha e caminho (spline). O falloff é radial ou **anisotrópico**, com perfis linear, suave (*smoothstep*), gaussiano e curva configurável. Os brushes 2D e 3D **coexistem** (o 2D altera altura; o 3D altera o campo de distância ou projeta um volume sobre o heightmap).
+5. **Escavar sem entrar: modo "raio X" com prévia fantasma.** O brush é um volume no **espaço do mundo** (não depende da câmera), então dá para esculpir de fora. No modo de edição, a região do brush mostra: o volume do brush translúcido, a superfície resultante em cor de prévia (adicionar/remover) e o terreno em volta em 30 % de opacidade ou arame; **nada é gravado até soltar o botão/Enter**. Um plano de corte (secção) opcional revela o interior sem alterar a superfície. Um raio de alcance e a máscara de profundidade mostram por onde o pincel está passando.
+6. **Objetos acompanham a superfície (`surface_follow`).** É uma **flag opt-in por objeto no inspetor**, com o padrão configurável no menu de configurações da engine. Quando ligada, ao editar terreno/caverna os objetos são re-projetados por raio na nova superfície, preservando o deslocamento (`surface_offset`), com alinhamento opcional à normal (`surface_align_normal`). Corpos dinâmicos não seguem. A re-projeção só percorre os chunks dentro do volume editado e usa ordem fixa por handle (determinismo).
+7. **Todas as ferramentas avançadas entram** (erosão hidráulica, *stamp*, booleanos, espelhamento, preencher, oco, deslocamento por ruído, terraços etc.), em ordem de valor: primeiro as de uso diário, depois as avançadas. A lista completa fica em `docs/02-arquitetura/04-terreno-rios-estradas.md`.
+8. **Rios e estradas** seguem o desenho já proposto: spline Bézier cúbica com perfis, escavação/aterro com falloff, malha por varredura (*sweep*), vetor de fluxo nos vértices, espuma por máscara de margem; estradas como **grafo** de nós e arestas, com cruzamentos por divisão de spline e nó, pontes por diferença de altura e decals de faixa. A spline e a varredura são **nossas** (determinismo), portadas do Petunia3D com `ATTRIBUTION.md`.
+9. **Sem dependência nova para gerar terreno.** O ruído (valor/fBm, semente explícita) é implementado no crate `petunia_terrain`: "ruído de jogo é nosso" (AGENTS.md §2). O crate novo é domínio puro, sem GPU, e segue os limites de `petunia_sculpt`.
+
+**Por quê:** o modelo híbrido dá o melhor custo por estilo de mapa, mantém a física barata no exterior e ainda permite cavernas orgânicas; os dois estilos de edição cobrem tanto *boomer shooters* quanto mundos abertos sem escolher um único paradigma. As escolhas de `surface_follow`, brushes e ferramentas foram feitas pelo criador nesta data.
+
+**Fica de fora (declarado):** LOD de SDF, malhagem na GPU, SDF para o mapa inteiro, edição de caverna por dentro em primeira pessoa (fica para quando houver modo de jogo no editor), e o modo "blockout" dedicado do Level Builder.
+
+**Reabrir se:** o custo de memória ou de malhagem do SDF em chunks passar do orçamento medido; ou se o modo raio X não bastar para esculpir cavernas sem entrar nelas.
 
 ---
 

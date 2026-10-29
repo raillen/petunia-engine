@@ -22,6 +22,7 @@ mod protocol;
 mod scripts;
 mod sculpt_tool;
 mod session;
+mod terrain_tool;
 mod tools;
 
 pub use failure::Failure;
@@ -448,6 +449,345 @@ mod tests {
             (iso_cam["result"]["pitch_degrees"].as_f64().unwrap() - true_iso_pitch).abs() < 1.0e-3
         );
 
+        let _ = std::fs::remove_dir_all(&root);
+    }
+    #[test]
+    fn terrain_is_created_generated_sculpted_saved_and_reopened() {
+        let root = scratch_dir("terrain");
+        let mut session = EditorSession::new().expect("session");
+        let opened = call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "Terreno" }),
+        );
+        assert_eq!(opened["ok"], true, "{opened}");
+
+        let made = call(
+            &mut session,
+            json!({ "op": "create.terrain", "cell_size": 1.0, "chunk_cells": 8 }),
+        );
+        assert_eq!(made["ok"], true, "{made}");
+        let entity = made["result"]["entity"].as_u64().expect("entity");
+
+        let generated = call(
+            &mut session,
+            json!({
+                "op": "terrain.generate",
+                "entity": entity,
+                "min_x": 0, "min_z": 0, "max_x": 0, "max_z": 0,
+                "seed": 11, "amplitude": 4.0
+            }),
+        );
+        assert_eq!(generated["ok"], true, "{generated}");
+
+        let height_before = call(
+            &mut session,
+            json!({ "op": "query.run", "query": "terrain.height",
+                    "payload": { "entity": entity, "x": 4.0, "z": 4.0 } }),
+        );
+        let height = height_before["result"]["height"].as_f64().expect("height");
+
+        let brushed = call(
+            &mut session,
+            json!({
+                "op": "terrain.brush",
+                "entity": entity,
+                "shape": "sphere",
+                "center": { "x": 4.0, "y": height, "z": 4.0 },
+                "radius": 2.0,
+                "falloff": "constant",
+                "strength": 2.0,
+                "operation": "raise"
+            }),
+        );
+        assert_eq!(brushed["ok"], true, "{brushed}");
+
+        let raised = call(
+            &mut session,
+            json!({ "op": "query.run", "query": "terrain.height",
+                    "payload": { "entity": entity, "x": 4.0, "z": 4.0 } }),
+        );
+        let raised_height = raised["result"]["height"].as_f64().expect("height");
+        assert!((raised_height - height - 2.0).abs() < 0.01, "{raised}");
+
+        assert_eq!(call(&mut session, json!({ "op": "edit.undo" }))["ok"], true);
+        let undone = call(
+            &mut session,
+            json!({ "op": "query.run", "query": "terrain.height",
+                    "payload": { "entity": entity, "x": 4.0, "z": 4.0 } }),
+        );
+        let undone_height = undone["result"]["height"].as_f64().expect("height");
+        assert!((undone_height - height).abs() < 0.01, "{undone}");
+
+        assert_eq!(call(&mut session, json!({ "op": "edit.redo" }))["ok"], true);
+        let redone = call(
+            &mut session,
+            json!({ "op": "query.run", "query": "terrain.height",
+                    "payload": { "entity": entity, "x": 4.0, "z": 4.0 } }),
+        );
+        let redone_height = redone["result"]["height"].as_f64().expect("height");
+        assert!((redone_height - raised_height).abs() < 0.01, "{redone}");
+
+        assert_eq!(
+            call(&mut session, json!({ "op": "project.save" }))["ok"],
+            true
+        );
+        call(
+            &mut session,
+            json!({ "op": "project.open", "path": root.display().to_string() }),
+        );
+        let reopened = call(
+            &mut session,
+            json!({ "op": "query.run", "query": "terrain.height",
+                    "payload": { "entity": entity, "x": 4.0, "z": 4.0 } }),
+        );
+        let reopened_height = reopened["result"]["height"].as_f64().expect("height");
+        assert!((reopened_height - raised_height).abs() < 0.01, "{reopened}");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+    #[test]
+    fn a_terrain_drag_is_one_undo_step_and_cancel_leaves_no_trace() {
+        let root = scratch_dir("terrain_tool");
+        let mut session = EditorSession::new().expect("session");
+        call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "Pincel" }),
+        );
+        let made = call(
+            &mut session,
+            json!({ "op": "create.terrain", "cell_size": 1.0, "chunk_cells": 8 }),
+        );
+        let entity = made["result"]["entity"].as_u64().expect("terrain");
+        call(
+            &mut session,
+            json!({
+                "op": "terrain.generate", "entity": entity,
+                "min_x": -1, "min_z": -1, "max_x": 0, "max_z": 0,
+                "seed": 1, "amplitude": 0.0
+            }),
+        );
+        call(
+            &mut session,
+            json!({ "op": "camera.view_direction", "x": 0.0, "y": 0.6, "z": 1.0 }),
+        );
+        call(
+            &mut session,
+            json!({
+                "op": "terrain.set", "radius": 2.0, "strength": 1.0,
+                "operation": "raise", "falloff": "constant", "paint": false
+            }),
+        );
+        let begun = call(
+            &mut session,
+            json!({
+                "op": "terrain.begin",
+                "x": 400.0, "y": 300.0, "width": 800.0, "height": 600.0
+            }),
+        );
+        assert!(
+            begun["result"]["changed"].as_u64().unwrap_or(0) > 0,
+            "{begun}"
+        );
+        let preview = call(&mut session, json!({ "op": "terrain.preview" }));
+        assert_eq!(preview["result"]["active"], true, "{preview}");
+        let point = &preview["result"]["cursor"]["point"];
+        let x = point["x"].as_f64().expect("x");
+        let z = point["z"].as_f64().expect("z");
+        let height_after = call(
+            &mut session,
+            json!({ "op": "query.run", "query": "terrain.height",
+                    "payload": { "entity": entity, "x": x, "z": z } }),
+        )["result"]["height"]
+            .as_f64()
+            .expect("height");
+        assert!(
+            height_after > 0.1,
+            "the first dab raised the surface: {height_after}"
+        );
+
+        let dragged = call(
+            &mut session,
+            json!({ "op": "terrain.drag", "x": 460.0, "y": 320.0, "width": 800.0, "height": 600.0 }),
+        );
+        assert_eq!(dragged["ok"], true, "{dragged}");
+        let ended = call(&mut session, json!({ "op": "terrain.end" }));
+        assert_eq!(ended["result"]["changed"], true, "{ended}");
+
+        assert_eq!(call(&mut session, json!({ "op": "edit.undo" }))["ok"], true);
+        let restored = call(
+            &mut session,
+            json!({ "op": "query.run", "query": "terrain.height",
+                    "payload": { "entity": entity, "x": x, "z": z } }),
+        )["result"]["height"]
+            .as_f64()
+            .expect("height");
+        assert!(
+            restored.abs() < 0.01,
+            "undo restored the terrain: {restored}"
+        );
+
+        // Begin again and cancel: the world goes back and no history entry is created.
+        call(
+            &mut session,
+            json!({
+                "op": "terrain.begin",
+                "x": 400.0, "y": 300.0, "width": 800.0, "height": 600.0
+            }),
+        );
+        let cancelled = call(&mut session, json!({ "op": "terrain.cancel" }));
+        assert_eq!(cancelled["result"]["changed"], false);
+        let after_cancel = call(
+            &mut session,
+            json!({ "op": "query.run", "query": "terrain.height",
+                    "payload": { "entity": entity, "x": x, "z": z } }),
+        )["result"]["height"]
+            .as_f64()
+            .expect("height");
+        assert!(
+            after_cancel.abs() < 0.01,
+            "cancel kept the surface: {after_cancel}"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+    #[test]
+    fn surface_follow_moves_objects_and_the_preference_adds_the_row() {
+        let root = scratch_dir("surface_follow");
+        let mut session = EditorSession::new().expect("session");
+        call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "Superfície" }),
+        );
+        let made = call(
+            &mut session,
+            json!({ "op": "create.terrain", "cell_size": 1.0, "chunk_cells": 8 }),
+        );
+        let terrain = made["result"]["entity"].as_u64().expect("terrain");
+        call(
+            &mut session,
+            json!({
+                "op": "terrain.generate", "entity": terrain,
+                "min_x": 0, "min_z": 0, "max_x": 0, "max_z": 0,
+                "seed": 1, "amplitude": 0.0
+            }),
+        );
+
+        let created = call(
+            &mut session,
+            json!({
+                "op": "command.execute",
+                "command": "world.create",
+                "payload": {
+                    "rows": {
+                        "Transform": { "position": { "x": 2.0, "y": 5.0, "z": 2.0 } },
+                        "SurfaceFollow": { "offset": 1.0 }
+                    }
+                }
+            }),
+        );
+        let object = created["result"]["entity"].as_u64().expect("object");
+        call(
+            &mut session,
+            json!({ "op": "surface.follow", "terrain": terrain }),
+        );
+        let position = call(
+            &mut session,
+            json!({ "op": "query.run", "query": "world.get",
+                    "payload": { "entity": object, "table": "Transform", "column": "position" } }),
+        );
+        let y = position["result"]["y"].as_f64().expect("y");
+        assert!((y - 1.0).abs() < 0.01, "{position}");
+        assert_eq!(call(&mut session, json!({ "op": "edit.undo" }))["ok"], true);
+        let restored = call(
+            &mut session,
+            json!({ "op": "query.run", "query": "world.get",
+                    "payload": { "entity": object, "table": "Transform", "column": "position" } }),
+        );
+        assert!((restored["result"]["y"].as_f64().unwrap_or(0.0) - 5.0).abs() < 0.01);
+
+        call(
+            &mut session,
+            json!({ "op": "preferences.surface_follow", "enabled": true }),
+        );
+        let brush = call(
+            &mut session,
+            json!({ "op": "create.brush", "shape": "box" }),
+        );
+        let brush_id = brush["result"]["entity"].as_u64().expect("brush");
+        let row = call(
+            &mut session,
+            json!({ "op": "query.run", "query": "world.get",
+                    "payload": { "entity": brush_id, "table": "SurfaceFollow" } }),
+        );
+        assert_eq!(row["ok"], true, "{row}");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+    #[test]
+    fn terrain_hover_updates_the_cursor_and_xray_is_a_preference() {
+        let root = scratch_dir("terrain_hover");
+        let mut session = EditorSession::new().expect("session");
+        call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "Hover" }),
+        );
+        let made = call(
+            &mut session,
+            json!({ "op": "create.terrain", "cell_size": 1.0, "chunk_cells": 8 }),
+        );
+        let terrain = made["result"]["entity"].as_u64().expect("terrain");
+        call(
+            &mut session,
+            json!({
+                "op": "terrain.generate", "entity": terrain,
+                "min_x": -1, "min_z": -1, "max_x": 0, "max_z": 0,
+                "seed": 1, "amplitude": 0.0
+            }),
+        );
+        call(
+            &mut session,
+            json!({ "op": "camera.view_direction", "x": 0.0, "y": 0.6, "z": 1.0 }),
+        );
+        call(&mut session, json!({ "op": "tool.set", "tool": "terrain" }));
+        let hovered = call(
+            &mut session,
+            json!({ "op": "terrain.hover", "x": 400.0, "y": 300.0, "width": 800.0, "height": 600.0 }),
+        );
+        assert!(hovered["result"]["cursor"].is_object(), "{hovered}");
+        call(
+            &mut session,
+            json!({ "op": "terrain.xray", "enabled": true }),
+        );
+        let preview = call(&mut session, json!({ "op": "terrain.preview" }));
+        assert_eq!(preview["result"]["xray"], true);
+        let snapshot = call(&mut session, json!({ "op": "editor.snapshot" }));
+        assert_eq!(snapshot["result"]["terrain_xray"], true);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+    #[test]
+    fn terrain_section_sets_the_render_cut_plane() {
+        let root = scratch_dir("terrain_section");
+        let mut session = EditorSession::new().expect("session");
+        call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "Corte" }),
+        );
+        let section = call(
+            &mut session,
+            json!({ "op": "terrain.section", "enabled": true, "height": 1.5 }),
+        );
+        assert_eq!(section["result"]["enabled"], true);
+        assert!((section["result"]["height"].as_f64().unwrap_or(0.0) - 1.5).abs() < 1.0e-6);
+        assert_eq!(
+            session.frame().and_then(|frame| frame.section_height),
+            Some(1.5)
+        );
+        call(
+            &mut session,
+            json!({ "op": "terrain.section", "enabled": false }),
+        );
+        assert_eq!(session.frame().and_then(|frame| frame.section_height), None);
         let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -73,7 +73,7 @@ Se algo falha, a resposta explica o que fazer:
 | `camera.look` · `camera.advance` | movimento | Gira e anda |
 | `camera.get` · `camera.reset` · `camera.focus` | — | Lê, volta ao início, aproxima da seleção |
 | `camera.view` | `name` (`front`, `back`, `left`, `right`, `top`, `bottom`) | Olha para a seleção ou a cena nessa direção |
-| `tool.set` | `tool` (`select`, `move`, `rotate`, `scale`, `push_pull`, `extrude`, `sculpt`, `sculpt_path`) | Escolhe a ferramenta |
+| `tool.set` | `tool` (`select`, `move`, `rotate`, `scale`, `push_pull`, `extrude`, `sculpt`, `sculpt_path`, `terrain`) | Escolhe a ferramenta |
 | `snap.set` | `enabled`, `translate`, `rotate_degrees`, `scale`, `target` (`smart`, `grid`, `increment`, `point`, `face`), `align_to_slope` | Liga o snap, muda os passos e o alvo |
 | `gizmo.hover` · `gizmo.begin` | `x`, `y`, `width`, `height` (pixels) | Qual alça está sob o mouse; começa o arrasto |
 | `gizmo.drag` · `gizmo.end` · `gizmo.cancel` | idem (`invert_snap` opcional) | Move ao vivo; **um** passo no histórico ao soltar |
@@ -111,6 +111,12 @@ Se algo falha, a resposta explica o que fazer:
 | `sculpt.generate` | `seed`, `rooms`, `worms`, `radius` | Soma salas e túneis gerados à caverna selecionada |
 | `sculpt.consolidate` | — | Funde traços em cadeia (um desfazer) |
 | `sculpt.faceted` | `value` | Triângulos chapados (low poly) na caverna selecionada |
+| `terrain.begin` · `terrain.drag` · `terrain.end` · `terrain.cancel` | pixels | Esculpe o terreno sob o mouse; o arrasto vira **um** `terrain.patch` e chama `surface.follow` |
+| `terrain.hover` | pixels | Move o anel do pincel sem arrastar |
+| `terrain.set` | `radius`, `strength`, `falloff`, `operation`, `shape`, `material`, `paint` | Opções do pincel de terreno |
+| `terrain.xray` | `enabled` | Terreno translúcido enquanto a ferramenta está ativa |
+| `terrain.generate` · `terrain.brush` · `terrain.paint` · `terrain.patch` · `terrain.holes` · `terrain.erode` | ver [terreno](04-terreno-rios-estradas.md) | Comandos de terreno, todos com desfazer |
+| `surface.follow` | `terrain` | Re-projeta os objetos com `SurfaceFollow` |
 | `brush.carve` · `brush.hollow` | — / `thickness` | **Cavar** (a seleção corta as caixas que toca) e **Tornar oco** |
 | `mesh.convert` | `entity`? | **Tornar editável**: o brush vira malha (`Mesh`), mesma entidade, mesma aparência (um desfazer) |
 | `mesh.boolean` | `operation` (`union`, `subtract`, `intersect`), `tool`, `entity`?, `keep_tool`? | **Fundir, cortar, interseção** com outro brush ou malha, em qualquer rotação e escala; o alvo vira malha; a ferramenta some (a menos que `keep_tool`). Um desfazer |
@@ -160,7 +166,7 @@ As regras de tamanho, cor e texto estão em [design da interface](15-design-da-i
 | **Barra de cima** | `≡` com todos os menus (`F10`; `Alt+letra` abre um menu direto); o projeto (`•` = não salvo); os workspaces **Cena** (`F3`) e **Código** (`F4`); **Buscar comando** (`Ctrl+K`); desfazer, refazer, salvar |
 | **Faixa da cena** | Eixos Global/Local, pivô (menu), editar pivô, **snap** (o botão mostra o passo; `⌄` abre passos, alvo e inclinação) e o andar |
 | **Coluna de ferramentas** | No canto do viewport: transformar · faces · esculpir · primitivas (a lista abre ao lado) |
-| **Opções da ferramenta** | Só com Esculpir ou Túnel, sob a faixa; quando falta espaço, o resto vai para `⋯` |
+| **Opções da ferramenta** | Só com Esculpir, Túnel ou Terreno, sob a faixa; quando falta espaço, o resto vai para `⋯` |
 | **Hierarquia** | Árvore com o projeto na raiz, ícone por tipo, número em cinza; busca e `+` (criar) |
 | **Inspetor** | Ícone, nome e número; uma seção por tabela, com nome em português, que **recolhe**; `⋯` remove; **Adicionar tabela** no fim |
 | **Workspace Código** | Lista de scripts (`+` cria), editor, Problemas e Console, e a **Referência da API** (funções do script primeiro) |
@@ -195,6 +201,7 @@ As regras de tamanho, cor e texto estão em [design da interface](15-design-da-i
 | Empurrar/puxar e Extrudar uma face | `P` e `E`, depois arraste a face |
 | Cavar e Tornar oco | `Ctrl+Alt+C` e `Ctrl+Alt+H` |
 | Esculpir caverna (modo nas opções da ferramenta, sob a faixa do viewport; `Ctrl` faz o oposto) | `B`; `[` e `]` mudam o raio; `Esc` cancela o arrasto |
+| Esculpir terreno (operação, forma, falloff e raio nas opções; `Gerar terreno` em Operações) | `T`; `[` e `]` mudam o raio; `Esc` cancela o arrasto |
 | Workspace Código | `F4` (e `F3` volta à cena); `F5` executa numa cópia; `Ctrl+S` dentro do editor salva o **script**; `Ctrl+Shift+F` formata; `Ctrl+Espaço` sugestões; **`Esc` e depois `Tab` sai do editor** |
 | Túnel por caminho: clique pontos na rocha | `Shift+B`; `Enter` cava, `Backspace` tira o último ponto, `Esc` cancela |
 | Editar o pivô do objeto | `Alt+P` |

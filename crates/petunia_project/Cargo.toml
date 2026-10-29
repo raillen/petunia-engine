@@ -8,6 +8,7 @@ description = "Text project format (diff-friendly JSON), hostile-data limits and
 
 [dependencies]
 petunia_math.workspace = true
+petunia_terrain.workspace = true
 petunia_world.workspace = true
 serde.workspace = true
 serde_json.workspace = true

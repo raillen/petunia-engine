@@ -13,7 +13,8 @@
 use std::cell::RefCell;
 
 use petunia_commands::{BATCH_COMMAND, CommandRecord};
-use petunia_math::{Color, Transform, Vec3};
+use petunia_math::{Color, PolygonMesh, Transform, Vec3};
+use petunia_mesh::BooleanOperation;
 use petunia_render::{
     OverlayItem, Ray, SculptCache, SculptItem, SculptVolume, SurfaceHit, extract_sculpt_volumes,
     hit_sculpt,
@@ -94,6 +95,8 @@ pub(crate) struct SculptState {
     pub mode: StrokeMode,
     /// 0..1: how hard flatten and smooth press, and how far inflate moves the surface.
     pub force: f32,
+    /// Mirror every stroke across the cave's local x = 0.
+    pub mirror_x: bool,
     /// Baked fields and meshes, kept between frames.
     pub cache: RefCell<SculptCache>,
 }
@@ -107,6 +110,7 @@ impl SculptState {
             radius: DEFAULT_SCULPT_RADIUS,
             mode: StrokeMode::Carve,
             force: DEFAULT_FORCE,
+            mirror_x: false,
             cache: RefCell::new(SculptCache::new()),
         }
     }
@@ -131,6 +135,37 @@ fn to_local(transform: &Transform, point: Vec3) -> Vec3 {
         rotated.y / safe(scale.y),
         rotated.z / safe(scale.z),
     )
+}
+
+fn cave_mesh(item: &petunia_render::SculptItem) -> Result<PolygonMesh, Failure> {
+    let mut mesh = PolygonMesh::default();
+    for chunk in &item.chunks {
+        for triangle in chunk.mesh.indices.as_chunks::<3>().0 {
+            let mut corners = Vec::with_capacity(3);
+            for index in triangle {
+                let Some(position) = chunk.mesh.positions.get(*index as usize) else {
+                    continue;
+                };
+                mesh.positions.push(to_world(
+                    &item.transform,
+                    Vec3::new(position[0], position[1], position[2]),
+                ));
+                corners.push((mesh.positions.len() - 1) as u32);
+            }
+            if corners.len() == 3 {
+                mesh.faces.push(corners);
+            }
+        }
+    }
+    petunia_mesh::merge_by_distance(&mesh, 0.0005)
+        .map(|(welded, _)| welded)
+        .map_err(|error| {
+            Failure::new(
+                "SCULPT_MESH",
+                &error.to_string(),
+                "A caverna não forma um sólido fechado; gere a malha de novo.",
+            )
+        })
 }
 
 fn to_world(transform: &Transform, local: Vec3) -> Vec3 {
@@ -442,6 +477,215 @@ impl EditorSession {
         Ok(json!({ "before": before, "after": after, "changed": true }))
     }
 
+    /// Turns mirroring across the cave's local x = 0 on or off.
+    pub fn set_sculpt_mirror(&mut self, enabled: bool) -> Json {
+        self.sculpt.mirror_x = enabled;
+        json!({ "mirror_x": enabled })
+    }
+
+    /// Fills the selected cave with a big add stroke (one undo step).
+    pub fn sculpt_fill(&mut self) -> Result<Json, Failure> {
+        let volume = self.selected_cave()?;
+        let size = self
+            .world()
+            .ok()
+            .and_then(|world| vec3_of(world, volume, "Sculpt", "size"))
+            .unwrap_or(Vec3::new(16.0, 6.0, 16.0));
+        let radius = (size.x.max(size.y).max(size.z) * 0.5).max(0.1);
+        let stroke = Stroke::capsule(StrokeMode::Add, Vec3::ZERO, Vec3::ZERO, radius, 0.0);
+        self.execute_step(vec![stroke_record(json!(volume), &stroke)])?;
+        Ok(json!({ "strokes": 1 }))
+    }
+
+    /// Leaves a shell: carves a sphere inside the selected cave (one undo step).
+    pub fn sculpt_hollow(&mut self, thickness: Option<f32>) -> Result<Json, Failure> {
+        let volume = self.selected_cave()?;
+        let size = self
+            .world()
+            .ok()
+            .and_then(|world| vec3_of(world, volume, "Sculpt", "size"))
+            .unwrap_or(Vec3::new(16.0, 6.0, 16.0));
+        let smallest = size.x.min(size.y).min(size.z) * 0.5;
+        let thickness = thickness.unwrap_or(1.0).clamp(0.1, smallest.max(0.1));
+        let radius = (smallest - thickness).max(0.1);
+        let stroke = Stroke::capsule(StrokeMode::Carve, Vec3::ZERO, Vec3::ZERO, radius, 0.0);
+        self.execute_step(vec![stroke_record(json!(volume), &stroke)])?;
+        Ok(json!({ "strokes": 1, "radius": radius }))
+    }
+
+    /// Adds deterministic bumps and pits inside the selected cave (one undo step).
+    pub fn sculpt_noise(
+        &mut self,
+        count: Option<u32>,
+        seed: Option<u64>,
+        radius: Option<f32>,
+    ) -> Result<Json, Failure> {
+        let volume = self.selected_cave()?;
+        let size = self
+            .world()
+            .ok()
+            .and_then(|world| vec3_of(world, volume, "Sculpt", "size"))
+            .unwrap_or(Vec3::new(16.0, 6.0, 16.0));
+        let count = count.unwrap_or(12).clamp(1, 64);
+        let room = MAX_STROKES.saturating_sub(self.strokes_of(volume).len());
+        if room == 0 {
+            return Err(Failure::new(
+                "SCULPT_FULL",
+                "a caverna já está no limite de traços",
+                "Use Fundir traços ou apague alguns.",
+            ));
+        }
+        let count = count.min(room as u32);
+        let radius = radius
+            .unwrap_or(size.x.min(size.y).min(size.z) * 0.08)
+            .clamp(0.1, 16.0);
+        let half = size * 0.5;
+        let mut state = seed.unwrap_or(1) | 1;
+        let mut strokes = Vec::with_capacity(count as usize);
+        for _ in 0..count {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let mut coordinate = || {
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                (state >> 33) as f32 / (1u64 << 31) as f32 - 1.0
+            };
+            let point = Vec3::new(
+                coordinate() * half.x,
+                coordinate() * half.y,
+                coordinate() * half.z,
+            );
+            let mode = if state & 1 == 0 {
+                StrokeMode::Add
+            } else {
+                StrokeMode::Carve
+            };
+            strokes.push(Stroke::capsule(mode, point, point, radius, 0.0));
+        }
+        let saved = strokes.len();
+        let records: Vec<CommandRecord> = strokes
+            .iter()
+            .map(|stroke| stroke_record(json!(volume), stroke))
+            .collect();
+        self.execute_step(records)?;
+        Ok(json!({ "strokes": saved }))
+    }
+
+    /// Bakes two caves into one mesh with a boolean and removes the caves (one undo step).
+    ///
+    /// The caves are SDF volumes; the result is a regular editable `Mesh` in world coordinates.
+    /// Subtracting or intersecting loses the ability to keep sculpting the result, which is the
+    /// price of a true boolean between two independently sculpted volumes.
+    pub fn sculpt_boolean(
+        &mut self,
+        target: u64,
+        tool: u64,
+        operation: &str,
+        keep_target: bool,
+        keep_tool: bool,
+    ) -> Result<Json, Failure> {
+        if target == tool {
+            return Err(Failure::bad_request(
+                "o alvo e a ferramenta precisam ser cavernas diferentes",
+            ));
+        }
+        let operation = match operation {
+            "union" => BooleanOperation::Union,
+            "subtract" => BooleanOperation::Subtract,
+            "intersect" => BooleanOperation::Intersect,
+            other => {
+                return Err(Failure::bad_request(&format!(
+                    "operação `{other}` desconhecida (use union, subtract ou intersect)"
+                )));
+            }
+        };
+        let (target_mesh, tool_mesh) = {
+            let items = self.sculpt_items();
+            let target_item = items
+                .iter()
+                .find(|item| item.entity == target)
+                .ok_or_else(|| {
+                    Failure::new(
+                        "SCULPT_MISSING",
+                        "a caverna alvo não existe",
+                        "Confira o id.",
+                    )
+                })?;
+            let tool_item = items
+                .iter()
+                .find(|item| item.entity == tool)
+                .ok_or_else(|| {
+                    Failure::new(
+                        "SCULPT_MISSING",
+                        "a caverna ferramenta não existe",
+                        "Confira o id.",
+                    )
+                })?;
+            (cave_mesh(target_item)?, cave_mesh(tool_item)?)
+        };
+        if target_mesh.faces.is_empty() || tool_mesh.faces.is_empty() {
+            return Err(Failure::new(
+                "SCULPT_EMPTY",
+                "uma das cavernas não tem malha",
+                "Gere ou esculpa a caverna antes do booleano.",
+            ));
+        }
+        let baked =
+            petunia_mesh::boolean(&target_mesh, &tool_mesh, operation).map_err(|error| {
+                Failure::new(
+                    "SCULPT_BOOLEAN",
+                    &error.to_string(),
+                    "Ajuste as cavernas ou tente outra operação.",
+                )
+            })?;
+        let vertices = baked.positions.len();
+        let faces = baked.faces.len();
+        let mut records = vec![CommandRecord::new(
+            "world.create",
+            json!({
+                "rows": {
+                    "Name": { "text": "Booleano" },
+                    "Mesh": { "geometry": baked.to_text_json() },
+                }
+            }),
+        )];
+        if !keep_target {
+            for stroke in self.strokes_of(target) {
+                records.push(CommandRecord::new(
+                    "world.remove",
+                    json!({ "entity": stroke }),
+                ));
+            }
+            records.push(CommandRecord::new(
+                "world.remove",
+                json!({ "entity": target }),
+            ));
+        }
+        if !keep_tool {
+            for stroke in self.strokes_of(tool) {
+                records.push(CommandRecord::new(
+                    "world.remove",
+                    json!({ "entity": stroke }),
+                ));
+            }
+            records.push(CommandRecord::new(
+                "world.remove",
+                json!({ "entity": tool }),
+            ));
+        }
+        let outcome = self.execute_step(records)?;
+        let entity = outcome
+            .get(0)
+            .and_then(|entry| entry.get("entity"))
+            .and_then(Json::as_u64);
+        if let Some(entity) = entity {
+            self.selection = Some(entity);
+        }
+        Ok(json!({ "entity": entity, "vertices": vertices, "faces": faces }))
+    }
+
     /// Switches flat shading (low poly) of the selected cave.
     pub fn sculpt_faceted(&mut self, faceted: bool) -> Result<Json, Failure> {
         let volume = self.selected_cave()?;
@@ -560,6 +804,14 @@ impl EditorSession {
             },
         };
         drag.strokes.push(stroke);
+        if self.sculpt.mirror_x {
+            let mirrored = Stroke {
+                start: Vec3::new(-stroke.start.x, stroke.start.y, stroke.start.z),
+                end: Vec3::new(-stroke.end.x, stroke.end.y, stroke.end.z),
+                ..stroke
+            };
+            drag.strokes.push(mirrored);
+        }
         drag.last = Some(center);
         Ok(self.sculpt_json())
     }
@@ -766,6 +1018,7 @@ impl EditorSession {
             "radius": self.sculpt.radius,
             "mode": self.sculpt.mode.name(),
             "force": self.sculpt.force,
+            "mirror_x": self.sculpt.mirror_x,
             "dragging": self.sculpt.drag.is_some(),
             "dabs": self.sculpt.drag.as_ref().map_or(0, |drag| drag.strokes.len()),
             "path_points": self.sculpt.path.as_ref().map_or(0, |path| path.points.len()),
@@ -845,6 +1098,7 @@ impl EditorSession {
 
 #[cfg(test)]
 mod tests {
+    use petunia_world::{PersistentId, Value};
     use serde_json::{Value as Json, json};
 
     use crate::session::EditorSession;
@@ -890,6 +1144,115 @@ mod tests {
             .iter()
             .map(|chunk| chunk.mesh.indices.len() / 3)
             .sum()
+    }
+
+    #[test]
+    fn a_cave_boolean_bakes_a_mesh_and_undoes() {
+        let (mut session, root) = opened("sculpt_boolean");
+        let target = call(&mut session, json!({ "op": "create.cave" }))["entity"]
+            .as_u64()
+            .expect("target");
+        let tool = call(&mut session, json!({ "op": "create.cave" }))["entity"]
+            .as_u64()
+            .expect("tool");
+        call(
+            &mut session,
+            json!({
+                "op": "command.execute", "command": "world.set",
+                "payload": {
+                    "entity": tool, "table": "Transform", "column": "position",
+                    "value": { "x": 2.0, "y": 0.0, "z": 0.0 }
+                }
+            }),
+        );
+        let made = call(
+            &mut session,
+            json!({ "op": "sculpt.boolean", "target": target, "tool": tool, "operation": "union" }),
+        );
+        assert!(made["entity"].as_u64().is_some(), "{made}");
+        assert!(made["faces"].as_u64().unwrap_or(0) > 0, "{made}");
+        let world = session.world().expect("world");
+        assert!(world.handle_of(PersistentId(target)).is_err());
+        assert!(world.handle_of(PersistentId(tool)).is_err());
+        assert!(
+            world
+                .entities_with_table("Mesh")
+                .unwrap_or_default()
+                .iter()
+                .any(|handle| world.persistent_id(*handle).ok()
+                    == made["entity"].as_u64().map(PersistentId))
+        );
+        call(&mut session, json!({ "op": "edit.undo" }));
+        let world = session.world().expect("world");
+        assert!(world.handle_of(PersistentId(target)).is_ok());
+        assert!(world.handle_of(PersistentId(tool)).is_ok());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn fill_hollow_and_noise_add_strokes_in_one_undo_each() {
+        let (mut session, root) = opened("sculpt_tools");
+        let cave = call(&mut session, json!({ "op": "create.cave" }))["entity"]
+            .as_u64()
+            .expect("cave");
+        let initial = session.strokes_of(cave).len();
+        call(&mut session, json!({ "op": "sculpt.fill" }));
+        assert_eq!(session.strokes_of(cave).len(), initial + 1);
+        call(
+            &mut session,
+            json!({ "op": "sculpt.hollow", "thickness": 1.0 }),
+        );
+        assert_eq!(session.strokes_of(cave).len(), initial + 2);
+        call(
+            &mut session,
+            json!({ "op": "sculpt.noise", "count": 4, "seed": 9 }),
+        );
+        assert_eq!(session.strokes_of(cave).len(), initial + 6);
+        call(&mut session, json!({ "op": "edit.undo" }));
+        assert_eq!(session.strokes_of(cave).len(), initial + 2);
+        call(&mut session, json!({ "op": "edit.undo" }));
+        assert_eq!(session.strokes_of(cave).len(), initial + 1);
+        call(&mut session, json!({ "op": "edit.undo" }));
+        assert_eq!(session.strokes_of(cave).len(), initial);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn mirror_x_saves_the_stroke_and_its_mirror_in_one_undo() {
+        let (mut session, root) = opened("sculpt_mirror");
+        let cave = call(&mut session, json!({ "op": "create.cave" }))["entity"]
+            .as_u64()
+            .expect("cave");
+        call(&mut session, json!({ "op": "tool.set", "tool": "sculpt" }));
+        call(
+            &mut session,
+            json!({ "op": "sculpt.mirror", "enabled": true }),
+        );
+        call(&mut session, pointer("sculpt.begin", 400.0));
+        for x in [430.0, 460.0, 490.0] {
+            call(&mut session, pointer("sculpt.drag", x));
+        }
+        let saved = call(&mut session, json!({ "op": "sculpt.end" }));
+        let dabs = saved["strokes"].as_u64().expect("strokes");
+        assert!(dabs >= 2, "{saved}");
+        assert_eq!(session.strokes_of(cave).len() as u64, 1 + dabs);
+        let world = session.world().expect("world");
+        let mut starts = Vec::new();
+        for id in session.strokes_of(cave) {
+            let handle = world.handle_of(PersistentId(id)).expect("stroke");
+            if let Ok(Value::Vec3(start)) = world.get(handle, "SculptStroke", "start") {
+                starts.push(start.x);
+            }
+        }
+        assert!(starts.iter().any(|x| *x > 0.1), "{starts:?}");
+        assert!(starts.iter().any(|x| *x < -0.1), "{starts:?}");
+        call(&mut session, json!({ "op": "edit.undo" }));
+        assert_eq!(session.strokes_of(cave).len(), 1);
+        call(
+            &mut session,
+            json!({ "op": "sculpt.mirror", "enabled": false }),
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

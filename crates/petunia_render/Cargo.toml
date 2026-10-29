@@ -10,6 +10,7 @@ description = "Renderer boundary: camera, matrices, meshes and the frame extract
 petunia_math.workspace = true
 petunia_world.workspace = true
 petunia_sculpt.workspace = true
+petunia_terrain.workspace = true
 
 [lints]
 workspace = true

@@ -29,6 +29,7 @@ gltf = { version = "=1.4.1", default-features = false, features = ["utils", "nam
 rapier3d = { version = "=0.36.1", default-features = false, features = ["dim3", "f32", "std", "enhanced-determinism"] }
 
 petunia_math = { path = "crates/petunia_math" }
+petunia_terrain = { path = "crates/petunia_terrain" }
 petunia_world = { path = "crates/petunia_world" }
 petunia_schema = { path = "crates/petunia_schema" }
 petunia_commands = { path = "crates/petunia_commands" }

@@ -31,8 +31,51 @@ fn save_scene_within(path: &Path, world: &World, max_bytes: u64) -> Result<(), P
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::diagnostics::Report;
+    use crate::scene::{SceneFile, load_entities};
     use crate::standard::register_standard_tables;
+    use petunia_terrain::Terrain;
     use petunia_world::Value;
+
+    #[test]
+    fn terrain_round_trips_through_a_scene_file() {
+        let folder =
+            std::env::temp_dir().join(format!("petunia_terrain_scene_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).expect("folder");
+        let path = folder.join("main.scene.json");
+
+        let mut terrain = Terrain::new(2.0, 8).expect("terrain");
+        terrain.set_sample(0, 0, 1.25).expect("height");
+        terrain.set_sample_material(0, 0, 3).expect("material");
+        terrain.set_sample(7, 7, -0.5).expect("height");
+
+        let mut world = World::new(1);
+        register_standard_tables(&mut world).expect("tables");
+        let handle = world.spawn().expect("spawn");
+        world
+            .insert_row_values(handle, "Terrain", vec![Value::Terrain(terrain.clone())])
+            .expect("terrain row");
+        let id = world.persistent_id(handle).expect("id").0;
+
+        save_scene(&path, &world).expect("save");
+        let text = std::fs::read_to_string(&path).expect("read");
+        let scene: SceneFile = serde_json::from_str(&text).expect("scene");
+        let mut loaded = World::new(1);
+        register_standard_tables(&mut loaded).expect("tables");
+        let mut report = Report::default();
+        load_entities(&mut loaded, &scene, &mut report);
+        assert!(!report.has_errors(), "{:?}", report.diagnostics);
+
+        let handle = loaded
+            .handle_of(petunia_world::PersistentId(id))
+            .expect("handle");
+        match loaded.get(handle, "Terrain", "data").expect("row") {
+            Value::Terrain(restored) => assert_eq!(*restored, terrain),
+            other => panic!("expected terrain, got {:?}", other.kind()),
+        }
+        let _ = std::fs::remove_dir_all(&folder);
+    }
 
     #[test]
     fn a_scene_too_large_to_open_again_is_refused_and_the_old_file_stays() {

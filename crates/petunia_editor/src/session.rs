@@ -8,7 +8,8 @@ use petunia_project::{
     ProjectManifest, Report, Severity, create_sample_project, load_project, save_scene,
 };
 use petunia_render::{
-    FlyCamera, MeshCache, RenderFrame, extract_frame_cached, pick_entity, ray_through, start_camera,
+    FlyCamera, MeshCache, RenderFrame, Shape, extract_frame_cached, pick_entity, ray_through,
+    start_camera,
 };
 use petunia_world::{PersistentId, Value, World};
 use serde_json::{Map, Value as Json, json};
@@ -19,6 +20,7 @@ use crate::floors::AboveFloor;
 use crate::gizmo::{Drag, Handle, Orientation, Snap, Tool};
 use crate::mesh_tool::ComponentSelection;
 use crate::sculpt_tool::SculptState;
+use crate::terrain_tool::TerrainState;
 use crate::tools::{DEFAULT_FLOOR_HEIGHT, FreeMode, PivotMode, SnapTarget};
 
 /// The log keeps the most recent entries only.
@@ -106,6 +108,12 @@ pub struct EditorSession {
     pub(crate) outline: crate::tools::OutlineStyle,
     /// The sculpting tool (caves).
     pub(crate) sculpt: SculptState,
+    /// The terrain tool (heightmap).
+    pub(crate) terrain: TerrainState,
+    /// When true, a new object gets a `SurfaceFollow` row by default (editor preference).
+    pub(crate) surface_follow_default: bool,
+    /// Draw the terrain translucent while the terrain tool is active (X-ray).
+    pub(crate) terrain_xray: bool,
     /// Faces, edges and vertices chosen on an editable mesh (`mesh.select`).
     pub(crate) components: Option<ComponentSelection>,
     /// Triangles of editable meshes, reused while they do not change (the tools extract the
@@ -177,6 +185,9 @@ impl EditorSession {
             gizmo_size: Self::default_gizmo_size(),
             outline: crate::tools::OutlineStyle::default(),
             sculpt: SculptState::new(),
+            terrain: TerrainState::new(),
+            surface_follow_default: false,
+            terrain_xray: false,
             components: None,
             mesh_cache: RefCell::new(MeshCache::new()),
             play: None,
@@ -286,6 +297,7 @@ impl EditorSession {
             || self.face_drag.is_some()
             || self.free.is_some()
             || self.sculpt.drag.is_some()
+            || self.terrain.drag.is_some()
             || self
                 .components
                 .as_ref()
@@ -304,6 +316,7 @@ impl EditorSession {
         self.hovered = None;
         self.hovered_face = None;
         self.sculpt.reset_transient();
+        self.terrain.reset_transient();
         self.components = None;
     }
 
@@ -508,6 +521,25 @@ impl EditorSession {
         Ok(json!({ "selection": self.selection }))
     }
 
+    /// Turns the "new objects follow the surface" preference on or off.
+    pub fn set_surface_follow_default(&mut self, enabled: bool) -> Json {
+        self.surface_follow_default = enabled;
+        json!({ "surface_follow_default": enabled })
+    }
+
+    /// Creates an empty terrain and selects it.
+    pub fn create_terrain(&mut self, cell_size: f32, chunk_cells: usize) -> Result<Json, Failure> {
+        let record = CommandRecord::new(
+            "terrain.create",
+            json!({ "cell_size": cell_size, "chunk_cells": chunk_cells }),
+        );
+        let result = self.execute(&record)?;
+        if let Some(entity) = result.get("entity").and_then(Json::as_u64) {
+            self.selection = Some(entity);
+        }
+        Ok(result)
+    }
+
     /// Adds a brush in front of the camera, sitting on the ground, and selects it.
     pub fn create_brush(&mut self, shape: &str) -> Result<Json, Failure> {
         let (name, size, color, detail) = match shape {
@@ -539,21 +571,22 @@ impl EditorSession {
             self.floor_elevation() + size.y * 0.5,
             snap(target.z),
         );
-        let record = CommandRecord::new(
-            "world.create",
-            json!({
-                "rows": {
-                    "Name": { "text": name },
-                    "Transform": { "position": vector_json(position) },
-                    "Brush": {
-                        "shape": shape,
-                        "size": vector_json(size),
-                        "detail": detail,
-                        "color": { "r": color[0], "g": color[1], "b": color[2], "a": 1.0 }
-                    }
-                }
-            }),
-        );
+        let mut rows = json!({
+            "Name": { "text": name },
+            "Transform": { "position": vector_json(position) },
+            "Brush": {
+                "shape": shape,
+                "size": vector_json(size),
+                "detail": detail,
+                "color": { "r": color[0], "g": color[1], "b": color[2], "a": 1.0 }
+            }
+        });
+        if self.surface_follow_default
+            && let Some(object) = rows.as_object_mut()
+        {
+            object.insert("SurfaceFollow".to_string(), json!({}));
+        }
+        let record = CommandRecord::new("world.create", json!({ "rows": rows }));
         self.create_and_select(&record)
     }
 
@@ -725,9 +758,20 @@ impl EditorSession {
         frame.mark_hovered(self.hovered.filter(|id| Some(*id) != self.selection));
         frame.overlay = self.outline_overlay(&frame);
         self.sculpt_overlay(&mut frame.overlay);
+        self.terrain_overlay(&mut frame.overlay);
         self.mesh_overlay(&mut frame.overlay);
         self.collider_overlay(&frame.items, &mut frame.overlay);
         self.light_overlay(&mut frame.overlay);
+        if self.terrain.section {
+            frame.section_height = Some(self.terrain.section_height);
+        }
+        if self.terrain_xray && self.tool.is_terrain() {
+            for item in &mut frame.items {
+                if item.shape == Shape::Terrain {
+                    item.color.a = 0.35;
+                }
+            }
+        }
         frame.show_grid = true;
         frame.grid_height = self.floor_elevation();
         Some(frame)
@@ -826,6 +870,8 @@ impl EditorSession {
             "transform": self.transform_json(),
             "floor": self.floor_json(),
             "sculpt": self.sculpt_json(),
+            "terrain": self.terrain_json(),
+            "terrain_xray": self.terrain_xray,
             "mesh_selection": self.components_json(),
         })
     }

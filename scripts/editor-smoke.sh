@@ -44,13 +44,13 @@ sleep 1
 
 env -u WAYLAND_DISPLAY DISPLAY="$display" XDG_CONFIG_HOME="$workdir/config" XDG_CACHE_HOME="$workdir/cache" \
     QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 QT_LOGGING_RULES='qt.qpa.*=false' \
-    "$editor" --sample "$workdir/sala" --screenshot "$output" --screenshot-delay 62000 2>/dev/null &
+    "$editor" --sample "$workdir/sala" --screenshot "$output" --screenshot-delay 80000 2>/dev/null &
 editor_pid=$!
-sleep 3
+sleep 10
 
 export DISPLAY="$display"
 xdotool mousemove 835 440 click 1;               sleep 0.6   # select the center of the big crate (#9)
-xdotool mousemove 275 121 click 1;               sleep 0.6   # Move tool (tool column in the viewport; G on the keyboard)
+xdotool key g;                                   sleep 0.6   # Move tool (G on the keyboard; the tool column coordinates are fragile)
 xdotool mousemove 875 431;                       sleep 0.5   # over the middle of the X arrow
 xdotool mousedown 1                                          # drag the arrow to the right
 for x in 895 915 935 955 975 990; do xdotool mousemove "$x" 431; sleep 0.15; done
@@ -59,7 +59,7 @@ xdotool mouseup 1;                               sleep 0.6
 # button's menu. Deleting a widget inside its own signal used to crash Qt (SIGSEGV).
 xdotool mousemove 1185 600; for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do xdotool click 5; sleep 0.05; done; sleep 0.4
 xdotool mousemove 1185 457 click 1;              sleep 0.6   # open the "Adicionar tabela" menu
-xdotool key Down Down Down Down Down Return;     sleep 0.8   # choose PlayerStart (list: Character, Floor, Light, Mesh, PlayerStart)
+xdotool key Down Down Down Down Down Return;     sleep 0.8   # choose PlayerStart (list: Character, Floor, Light, Mesh, PlayerStart, ...)
 xdotool mousemove 600 450; xdotool key shift+a;  sleep 0.8   # radial menu of primitives
 xdotool key 2;                                   sleep 0.8   # item 2: a ramp, on the current floor
 xdotool key ctrl+d;                              sleep 0.6   # duplicate it (the copy is selected)
@@ -69,7 +69,7 @@ xdotool mousemove 700 300 mousedown 3 mousemove_relative 70 0 mouseup 3; sleep 0
 xdotool key ctrl+Prior;                          sleep 0.6   # up a floor: creates Térreo and Andar 1
 xdotool key ctrl+1;                              sleep 0.6   # a box on floor 1
 xdotool key ctrl+Next;                           sleep 0.6   # back down (the box turns into a ghost)
-xdotool key alt+c; sleep 0.6; xdotool key Up Up Up Up Up Return; sleep 1.0   # Alt+C opens Criar (the menus are behind ≡) > Caverna (5 from the end: Sol, Luz, Importar, aleatória, Caverna)
+xdotool key ctrl+k; sleep 0.6; xdotool type --delay 30 "caverna"; sleep 0.6; xdotool key Return; sleep 1.0   # command palette: Caverna (menu positions are fragile)
 xdotool mousemove 600 380; xdotool key b;        sleep 0.6   # sculpting tool
 xdotool mousedown 1                                          # drag across the cave: carve
 for x in 620 640 660 680 700 720; do xdotool mousemove "$x" 380; sleep 0.25; done
@@ -79,16 +79,25 @@ xdotool mousemove 560 400 click 1;               sleep 0.5
 xdotool mousemove 660 360 click 1;               sleep 0.5
 xdotool mousemove 740 420 click 1;               sleep 0.5
 xdotool key Return;                              sleep 0.8
-xdotool key v;                                   sleep 0.3   # back to select
-xdotool mousemove 990 431 click 1;               sleep 0.5   # select crate #9 at its new position
-xdotool key Tab;                                 sleep 0.6   # enter Edit Mode (converts crate to editable mesh)
+
+xdotool mousemove 130 78 click 1;                sleep 0.4   # hierarchy search: pick the crate by name
+xdotool type --delay 20 "Caixa grande";          sleep 0.6
+xdotool key Down Down;                           sleep 0.5   # search -> root -> the only child
+xdotool key alt+e; sleep 0.6; xdotool key Home Down Down Down Down Down Down Return; sleep 0.8   # Editar > Modo de edição
 xdotool key 1;                                   sleep 0.4   # switch to vertex mode
 xdotool mousemove 990 431 click 1;               sleep 0.4   # pick component
 xdotool key 2;                                   sleep 0.4   # switch to edge mode
 xdotool mousemove 990 431 click 1;               sleep 0.4   # pick component
 xdotool key 3;                                   sleep 0.4   # switch to face mode
 xdotool mousemove 990 431 click 1;               sleep 0.4   # pick component
-xdotool key Tab;                                 sleep 0.6   # exit Edit Mode (remains a mesh)
+xdotool key alt+e; sleep 0.6; xdotool key Home Down Down Down Down Down Down Return; sleep 0.8   # exit Edit Mode
+# Terrain last: it covers the room, so create it only after the mesh steps. Criar > Terreno from
+# the command palette, generate it, focus it and drag the terrain brush across the surface.
+xdotool key alt+o; sleep 0.6; xdotool key Home Return; sleep 1.6   # Operações > Gerar terreno (first item)
+xdotool key f;                                   sleep 0.8   # focus the selected terrain
+xdotool mousemove 600 400 mousedown 1
+for x in 620 640 660 680; do xdotool mousemove "$x" 400; sleep 0.2; done
+xdotool mouseup 1;                               sleep 0.8
 xdotool key ctrl+s;                              sleep 0.6   # save the scene
 xdotool mousemove 385 649 click 1;               sleep 0.4   # open the history tab
 xdotool key F4;                                  sleep 1.2   # the Código workspace opens
@@ -160,6 +169,10 @@ print(f"verificação: caverna criada e esculpida ({len(strokes)} traços) ->", 
 # 1 tunnel + at least 2 dabs from the drag + at least 3 capsules from the path (Enter dug it).
 dug = len(strokes) >= 6
 print(f"verificação: túnel por caminho cavado com Enter ({len(strokes)} traços no total) ->", "ok" if dug else "FALHOU")
+terrains = [e for e in scene["entities"] if "Terrain" in e["rows"]]
+terrain_chunks = len(terrains[0]["rows"]["Terrain"]["data"].get("chunks", [])) if terrains else 0
+terrain_ok = len(terrains) == 1 and terrain_chunks >= 1
+print(f"verificação: terreno criado e gerado ({terrain_chunks} blocos) ->", "ok" if terrain_ok else "FALHOU")
 import os
 script_path = sys.argv[1].replace(".scene.json", ".script.aipo")
 scripted = os.path.exists(script_path) and "fn on_update(entity, dt) {\n    log.info(" in open(script_path).read()
@@ -189,12 +202,12 @@ if os.path.exists(layout_path) and os.path.exists(graph_path):
     moved_box = moved_box and all("x" not in n and "y" not in n for n in graph["nodes"])
 print("verificação: caixa arrastada no canvas mudou só scripts/gira.layout.json ->", "ok" if moved_box else "FALHOU")
 converted_to_mesh = any(
-    e["rows"].get("Name", {}).get("text") == "Caixa" and "Mesh" in e["rows"] and "Brush" not in e["rows"]
+    e["rows"].get("Name", {}).get("text") in ("Caixa", "Caixa grande") and "Mesh" in e["rows"] and "Brush" not in e["rows"]
     for e in scene["entities"]
 )
 print("verificação: modo de edição (Tab) converteu caixa para malha editável ->", "ok" if converted_to_mesh else "FALHOU")
 hero_free = not any(e["rows"].get("Name", {}).get("text") == "Jogador" for e in scene["entities"]) and not any("Character" in e["rows"] for e in scene["entities"])
 print("verificação: Jogar (F6) e parar (Esc) não deixaram o herói de reserva na cena salva ->", "ok" if hero_free else "FALHOU")
-sys.exit(0 if (moved and added and on_cursor and built_up and carved and dug and scripted and graph_ok and moved_box and converted_to_mesh and hero_free) else 1)
+sys.exit(0 if (moved and added and on_cursor and built_up and carved and dug and terrain_ok and scripted and graph_ok and moved_box and converted_to_mesh and hero_free) else 1)
 PY
 echo "imagem: $output (e $output.viewport.png, $output.canvas.png, $output.playing.png); cena salva: $output.scene.json"

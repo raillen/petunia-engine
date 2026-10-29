@@ -12,6 +12,7 @@ mod builtin;
 mod dispatcher;
 mod error;
 mod query;
+mod terrain;
 
 pub use builtin::{builtin_query_specs, builtin_schema};
 pub use dispatcher::{BATCH_COMMAND, CommandRecord, Dispatcher, MAX_BATCH, MAX_HISTORY, Outcome};

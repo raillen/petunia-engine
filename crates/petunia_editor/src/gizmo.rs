@@ -44,6 +44,8 @@ pub enum Tool {
     Sculpt,
     /// Click points on a cave and dig a smooth tunnel through them (Shift+B). No gizmo.
     SculptPath,
+    /// Drag over the terrain to sculpt it (T). No gizmo.
+    Terrain,
 }
 
 impl Tool {
@@ -57,6 +59,7 @@ impl Tool {
             "extrude" => Some(Self::Extrude),
             "sculpt" => Some(Self::Sculpt),
             "sculpt_path" => Some(Self::SculptPath),
+            "terrain" => Some(Self::Terrain),
             _ => None,
         }
     }
@@ -71,6 +74,7 @@ impl Tool {
             Self::Extrude => "extrude",
             Self::Sculpt => "sculpt",
             Self::SculptPath => "sculpt_path",
+            Self::Terrain => "terrain",
         }
     }
 
@@ -83,13 +87,18 @@ impl Tool {
     pub fn has_gizmo(self) -> bool {
         !matches!(
             self,
-            Self::PushPull | Self::Extrude | Self::Sculpt | Self::SculptPath
+            Self::PushPull | Self::Extrude | Self::Sculpt | Self::SculptPath | Self::Terrain
         )
     }
 
     /// Tools that work on caves with a brush ring instead of a gizmo.
     pub fn is_sculpting(self) -> bool {
         matches!(self, Self::Sculpt | Self::SculptPath)
+    }
+
+    /// Tools that work on the terrain heightmap with a brush ring.
+    pub fn is_terrain(self) -> bool {
+        matches!(self, Self::Terrain)
     }
 }
 
@@ -511,7 +520,8 @@ pub fn screen_gizmo(
             | Tool::PushPull
             | Tool::Extrude
             | Tool::Sculpt
-            | Tool::SculptPath => None,
+            | Tool::SculptPath
+            | Tool::Terrain => None,
         };
         if let Some(radius) = ring_radius {
             let tangent = axes.get((index + 1) % 3).copied().unwrap_or(Vec3::ZERO);
@@ -536,7 +546,12 @@ pub fn screen_gizmo(
                 slot.arrow = Some(arrow(slot.end, direction, arrow_back, arrow_half));
             }
             Tool::Move => slot.arrow = Some(arrow(slot.end, direction, arrow_back, arrow_half)),
-            Tool::Rotate | Tool::PushPull | Tool::Extrude | Tool::Sculpt | Tool::SculptPath => {}
+            Tool::Rotate
+            | Tool::PushPull
+            | Tool::Extrude
+            | Tool::Sculpt
+            | Tool::SculptPath
+            | Tool::Terrain => {}
         }
     }
 
@@ -573,7 +588,12 @@ pub fn screen_gizmo(
             Tool::Move => Some(Handle::MoveScreen),
             Tool::Scale => Some(Handle::ScaleUniform),
             Tool::Rotate => Some(Handle::Trackball),
-            Tool::Select | Tool::PushPull | Tool::Extrude | Tool::Sculpt | Tool::SculptPath => None,
+            Tool::Select
+            | Tool::PushPull
+            | Tool::Extrude
+            | Tool::Sculpt
+            | Tool::SculptPath
+            | Tool::Terrain => None,
         },
     })
 }

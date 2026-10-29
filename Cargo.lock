@@ -1534,6 +1534,7 @@ version = "0.1.0"
 dependencies = [
  "petunia_math",
  "petunia_schema",
+ "petunia_terrain",
  "petunia_world",
  "serde",
  "serde_json",
@@ -1553,6 +1554,7 @@ dependencies = [
  "petunia_render",
  "petunia_script",
  "petunia_sculpt",
+ "petunia_terrain",
  "petunia_world",
  "serde_json",
 ]
@@ -1616,6 +1618,7 @@ version = "0.1.0"
 dependencies = [
  "petunia_math",
  "petunia_project",
+ "petunia_terrain",
  "petunia_world",
  "rapier3d",
  "serde_json",
@@ -1645,6 +1648,7 @@ name = "petunia_project"
 version = "0.1.0"
 dependencies = [
  "petunia_math",
+ "petunia_terrain",
  "petunia_world",
  "serde",
  "serde_json",
@@ -1657,6 +1661,7 @@ version = "0.1.0"
 dependencies = [
  "petunia_math",
  "petunia_sculpt",
+ "petunia_terrain",
  "petunia_world",
 ]
 
@@ -1712,10 +1717,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "petunia_terrain"
+version = "0.1.0"
+dependencies = [
+ "petunia_math",
+]
+
+[[package]]
 name = "petunia_world"
 version = "0.1.0"
 dependencies = [
  "petunia_math",
+ "petunia_terrain",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

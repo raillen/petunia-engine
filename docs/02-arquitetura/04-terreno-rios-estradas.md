@@ -1,12 +1,119 @@
 # Terreno, rios e estradas
 
-**Revisão:** 2026-10-24 · **Estado:** proposta; precisa de protótipos
+**Revisão:** 2026-10-27 (DR-33) · **Estado:** decisão aceita; implementação começou pelo terreno
+
+> **Decisão (DR-33):** o exterior é **heightmap em chunks**; cavernas e volumes orgânicos são **SDF 3D esparso em chunks** (`petunia_sculpt` já é a base). Dois estilos de mapa coexistem: **sólido/CSG estilo Doom/Quake** (brushes convexos + booleanos do `petunia_mesh`) e **orgânico** (terreno esculpido + SDF). Brushes 2D e 3D coexistem. Escavar cavernas sem entrar usa **raio X + prévia fantasma**. `surface_follow` é opt-in por objeto, com padrão configurável nas preferências.
 
 ## Resumo (TL;DR)
 
-Terreno, rios e estradas são **a mesma família**: curvas (splines) + um perfil + regras que **modificam o terreno** ao redor.
+Terreno, rios e estradas são **a mesma família**: curvas (splines) + um perfil + regras que **modificam o terreno** ao redor. Cavernas entram como **volumes SDF** que cortam o heightmap onde abrem para a superfície.
 
 O Petunia3D já tem as peças centrais (`LOCAL`): spline Bézier com quadros por ponto, varredura de perfil ao longo de um caminho e "pontos presos a superfície". A engine reaproveita essas peças e acrescenta **redes**: estradas se ligam em cruzamentos, rios se juntam em confluências.
+
+## O que existe (2026-10-28)
+
+| Parte | Onde | O que faz |
+|---|---|---|
+| Dados e edição | `crates/petunia_terrain` | Heightmap em chunks, brushes 3D (esfera, caixa, cápsula, cilindro), 4 falloffs, subir/baixar/suavizar/aplainar/ruído/terraço, erosão térmica, furos, geração fBm determinística |
+| Armazenamento | `ValueKind::Terrain` + tabela `Terrain` | O terreno inteiro é um valor da cena, com alturas, materiais e furos; uma linha por cena |
+| Comandos | `terrain.*` e `surface.follow` | `create`, `generate`, `brush` (com `mirror_x`/`mirror_z`), `paint`, `patch`, `holes`, `erode`, `surface.follow`; todos com desfazer |
+| Consultas | `terrain.height`, `terrain.info` | Altura e normal numa posição; resumo de blocos e amostras |
+| Render | `crates/petunia_render::terrain` | Malha por chunk, 8 cores de camada, LOD 1/2/4, saias e furos; o adaptador OpenGL usa cor por vértice |
+| Física | `petunia_physics::scene` | Heightfield do Rapier por chunk; trimesh no chunk com furo (para o personagem entrar na caverna) |
+| Editor | `crates/petunia_editor::terrain_tool` | Pincel com prévia ao vivo, anel, `begin/drag/end/cancel/set/preview`, um desfazer; `SurfaceFollow` re-projeta os objetos |
+| Preferência | `preferences.surface_follow` | Novo objeto nasce com `SurfaceFollow` quando ligada |
+
+## Modelo híbrido: heightfield + SDF (DR-33)
+
+| Representação | Onde | Por quê |
+|---|---|---|
+| **Heightmap em chunks** | Exterior (colinas, vales, planícies) | Memória baixa, física barata (heightfield do Rapier), LOD simples |
+| **SDF 3D esparso em chunks** | Cavernas, túneis, volumes orgânicos | Overhangs e túneis que o heightmap não representa; só os blocos tocados existem |
+| **Brushes convexos + CSG** | Arquitetura estilo Doom/Quake | Edição em grade, rápida e previsível; booleanos já existem |
+
+Regras de integração:
+
+1. A caverna ancora no terreno ao ser criada (usa a altura do terreno como base).
+2. Onde a caverna abre para cima, o terreno é **suprimido** (região de furo) e a malha da caverna preenche; *skirts* escondem a costura.
+3. Em zona de caverna a colisão usa a malha da caverna; fora dela, o heightfield. O Rapier aceita vários colisores.
+4. Chunks do terreno e blocos da caverna compartilham a mesma grade espacial para *culling* e streaming.
+5. **SDF completo para o mapa inteiro está fora**: a 1 m de resolução, 1 km × 1 km × 200 m pede ~200 milhões de células (~800 MB) e malhagem/colisão proporcionais. O híbrido evita isso.
+
+### Brushes 2D e 3D (coexistem)
+
+| Brush | Onde atua | Operação |
+|---|---|---|
+| Pegada 2D (círculo/elipse) | Heightmap | Soma/subtrai altura com falloff |
+| Esfera, cápsula, caixa, cilindro, cone | SDF e heightmap (projetado) | Soma/subtrai distância; no heightmap, empurra a superfície |
+| Plano (*half-space*) | SDF | Corta em linha reta (falésia, muro) |
+| *Stamp* de malha | SDF e heightmap | Imprime uma forma 3D |
+| Caminho (spline) | SDF | Túnel por caminho (já existe em `petunia_sculpt`) |
+
+Falloff: radial ou **anisotrópico**; perfis linear, *smoothstep*, gaussiano e curva configurável.
+
+### Escavar sem entrar (raio X)
+
+O brush vive no **espaço do mundo**, então não depende da câmera. No modo de edição:
+
+| Recurso | Efeito |
+|---|---|
+| Prévia fantasma | Volume do brush translúcido + superfície resultante em cor de prévia; **nada é gravado até soltar/Enter** |
+| Raio X | Terreno em volta a 30 % de opacidade ou arame na região do brush |
+| Plano de corte | Secção opcional revela o interior sem alterar a superfície |
+| Máscara de profundidade | Mostra por onde o pincel está passando |
+
+### Objetos que acompanham a superfície (`surface_follow`)
+
+| Coluna | Tipo | Efeito |
+|---|---|---|
+| `surface_follow` | Bool | Re-projeta o objeto ao editar terreno/caverna (opt-in no inspetor) |
+| `surface_offset` | Float | Altura acima da superfície |
+| `surface_align_normal` | Bool | Alinha a rotação ao normal da superfície |
+
+O padrão é configurável no menu de configurações da engine. Corpos dinâmicos não seguem. A re-projeção percorre só os chunks do volume editado, em ordem fixa por handle.
+
+## Ferramentas de terreno (DR-33)
+
+| Ferramenta | O que faz | Prioridade |
+|---|---|---|
+| Subir/baixar | Altura com falloff | Alta |
+| Suavizar | Média dos vizinhos | Alta |
+| Aplainar | Plano do primeiro toque | Alta |
+| Ruído | Detalhe procedural | Alta |
+| Terraço | Degraus em encostas | Média |
+| Erosão térmica | Desliza material de encostas | Feito (`terrain.erode`) |
+| Erosão hidráulica | Água escava canais | Feito (`terrain.erode_hydraulic`) |
+| *Stamp* | Imprime malha 3D ou heightmap | Feito (`terrain.stamp`, `terrain.stamp_mesh`) |
+| Furo | Abre para caverna/rio | Alta |
+| Rampa | Rampa entre dois pontos | Média |
+| Altura exata | Valor numérico (sem mouse) | Acessibilidade |
+| Importar/exportar heightmap | RAW/PNG | Média |
+| Espelhar | Edição simétrica | Média |
+| Camadas (splatmap) | Pintar grama/terra/pedra/lama | Alta |
+| Textura automática | Por inclinação/altura | Média |
+
+## Ferramentas de caverna (DR-33)
+
+| Ferramenta | O que faz | Estado |
+|---|---|---|
+| Cavar/adicionar | Soma/subtrai rocha | Feito |
+| Inflar/desinflar | Empurra a superfície | Feito |
+| Suavizar | Borra o campo | Feito |
+| Nivelar | Plano | Feito |
+| Caminho/túnel | Spline | Feito |
+| Gerar por semente | Caverna aleatória | Feito |
+| Fundir traços | Douglas-Peucker | Feito |
+| Facetada | Low poly | Feito |
+| *Stamp* de malha | Forma 3D | Novo |
+| Booleanos | Unir/subtrair/intersectar volumes | Feito (`sculpt.boolean`) |
+| Espelhar | Simetria | Novo |
+| Preencher | Fecha cavidades | Feito (`sculpt.fill`) |
+| Oco | Casca | Feito (`sculpt.hollow`) |
+| Deslocamento por ruído | Irregularidade orgânica | Feito (`sculpt.noise`) |
+
+## Ferramentas gerais
+
+Medição 3D, snap à superfície, grade configurável por andar, camadas de edição, máscaras de pintura, presets de brush, atalhos para tudo, prévia ao vivo e estatísticas (triângulos/área) para orçamento.
 
 ## Peça comum: curva + perfil + efeito no terreno
 

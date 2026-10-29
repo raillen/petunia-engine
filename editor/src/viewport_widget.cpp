@@ -220,6 +220,10 @@ QString ViewportWidget::currentTool() const {
 }
 
 // B (sculpt) and Shift+B (path): the brush ring follows the mouse over the rock.
+bool ViewportWidget::terrainTool() const {
+    return currentTool() == QLatin1String("terrain");
+}
+
 bool ViewportWidget::sculptTool() const {
     const QString tool = currentTool();
     return tool == QLatin1String("sculpt") || tool == QLatin1String("sculpt_path");
@@ -454,6 +458,10 @@ void ViewportWidget::cancelActiveEdit() {
         sculptDragging_ = false;
         bridge_->call(QStringLiteral("sculpt.cancel"));
     }
+    if (terrainDragging_) {
+        terrainDragging_ = false;
+        bridge_->call(QStringLiteral("terrain.cancel"));
+    }
     if (pathPending()) {
         bridge_->call(QStringLiteral("path.cancel"));
     }
@@ -480,6 +488,19 @@ void ViewportWidget::mousePressEvent(QMouseEvent* event) {
         if (hasProject() && editMode_) {
             pressPosition_ = event->pos();
             clickCandidate_ = true;
+            event->accept();
+            return;
+        }
+        if (hasProject() && terrainTool()) {
+            const Reply reply = bridge_->call(QStringLiteral("terrain.begin"), pointerFields(event->pos()));
+            if (!reply.ok) {
+                emit renderFailed(reply.explanation());
+            } else {
+                terrainDragging_ = true;
+                clickCandidate_ = false;
+                emit selectionChanged();
+                update();
+            }
             event->accept();
             return;
         }
@@ -539,6 +560,16 @@ void ViewportWidget::mouseMoveEvent(QMouseEvent* event) {
         update();
         return;
     }
+    if (terrainDragging_) {
+        bridge_->call(QStringLiteral("terrain.drag"), pointerFields(event->pos()));
+        update();
+        return;
+    }
+    if (!looking_ && event->buttons() == Qt::NoButton && hasProject() && terrainTool()) {
+        bridge_->call(QStringLiteral("terrain.hover"), pointerFields(event->pos()));
+        update();
+        return;
+    }
     if (!looking_ && event->buttons() == Qt::NoButton && hasProject() && sculptTool()) {
         // The brush ring follows the mouse over the cave.
         bridge_->call(QStringLiteral("pointer.hover"), pointerFields(event->pos()));
@@ -587,6 +618,14 @@ void ViewportWidget::mouseReleaseEvent(QMouseEvent* event) {
         if (sculptDragging_) {
             sculptDragging_ = false;
             const Reply reply = bridge_->call(QStringLiteral("sculpt.end"));
+            if (!reply.ok) {
+                emit renderFailed(reply.explanation());
+            }
+            emit selectionChanged();  // refresh: one new undo step
+            update();
+        } else if (terrainDragging_) {
+            terrainDragging_ = false;
+            const Reply reply = bridge_->call(QStringLiteral("terrain.end"));
             if (!reply.ok) {
                 emit renderFailed(reply.explanation());
             }

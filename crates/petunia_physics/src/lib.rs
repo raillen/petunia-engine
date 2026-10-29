@@ -121,6 +121,15 @@ pub enum ColliderShape {
         points: Vec<Vec3>,
         triangles: Vec<[u32; 3]>,
     },
+    /// A chunk of heightmap. `rows` and `columns` are the sample counts (at least 2), `heights`
+    /// is row-major with `rows * columns` entries (row = z, column = x) and `scale` is the
+    /// total size in meters. Far cheaper than a triangle mesh for terrain.
+    Heightfield {
+        heights: Vec<f32>,
+        rows: usize,
+        columns: usize,
+        scale: Vec3,
+    },
 }
 
 /// One named collider of an object.
@@ -756,6 +765,40 @@ pub(crate) fn check_collider(collider: &ColliderDescription) -> Result<(), Physi
                 )));
             }
         }
+        ColliderShape::Heightfield {
+            heights,
+            rows,
+            columns,
+            scale,
+        } => {
+            if *rows < 2 || *columns < 2 {
+                return Err(PhysicsError::Invalid(
+                    "o heightfield precisa de pelo menos 2 linhas e 2 colunas".to_string(),
+                ));
+            }
+            let expected = rows
+                .checked_mul(*columns)
+                .ok_or_else(|| PhysicsError::Invalid("heightfield grande demais".to_string()))?;
+            if heights.len() != expected {
+                return Err(PhysicsError::Invalid(format!(
+                    "o heightfield tem {} alturas; esperava {expected}",
+                    heights.len()
+                )));
+            }
+            if heights.iter().any(|height| !height.is_finite()) {
+                return Err(PhysicsError::Invalid(
+                    "o heightfield tem uma altura que não é um número finito".to_string(),
+                ));
+            }
+            for (axis, value) in [("x", scale.x), ("y", scale.y), ("z", scale.z)] {
+                check_range(
+                    &format!("escala {axis} do heightfield"),
+                    value,
+                    MIN_SIZE,
+                    MAX_MAGNITUDE,
+                )?;
+            }
+        }
         ColliderShape::TriMesh { points, triangles } => {
             if points.len() < 3 || points.len() > MAX_TRIMESH_POINTS {
                 return Err(PhysicsError::Invalid(format!(
@@ -908,6 +951,19 @@ fn shape_builder(
                     collider.collider
                 ))
             })?
+        }
+        ColliderShape::Heightfield {
+            heights,
+            rows,
+            columns,
+            scale: size,
+        } => {
+            let size = multiply(*size, scale);
+            let grid = rapier3d::parry::utils::Array2::new(*rows, *columns, heights.clone());
+            rapier::ColliderBuilder::new(rapier::SharedShape::heightfield(
+                grid,
+                rapier::Vector::new(size.x, size.y, size.z),
+            ))
         }
     })
 }

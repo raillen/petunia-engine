@@ -1,0 +1,13 @@
+[package]
+name = "petunia_terrain"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Chunked heightmap terrain: deterministic generation, 3D brushes and falloffs. Pure, no GPU."
+
+[dependencies]
+petunia_math.workspace = true
+
+[lints]
+workspace = true

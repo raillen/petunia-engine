@@ -1,4 +1,5 @@
 use petunia_math::{Color, PolygonMesh, Vec3};
+use petunia_terrain::Terrain;
 use petunia_world::{TableSpec, Value, ValueKind, World, WorldError};
 
 /// Shapes a brush can have. The renderer builds the mesh from the shape and the size.
@@ -62,6 +63,10 @@ pub const BODY_KINDS: [&str; 3] = ["static", "dynamic", "kinematic"];
 ///   contacts) or `kinematic` (moved by the game, pushes others). `mass` in kilograms,
 ///   `gravity_scale` (1 normal, 0 floats), damping, and `lock_rotation` to keep it upright.
 ///   Objects with colliders and no `RigidBody` are static.
+/// - `Terrain`: the chunked heightmap of the scene (`data`). One row per scene.
+/// - `SurfaceFollow` (opt-in): the object follows the terrain surface. `offset` is the height above
+///   it (meters) and `align_normal` turns the object with the slope. The default for new objects is
+///   an editor preference.
 pub fn register_standard_tables(world: &mut World) -> Result<(), WorldError> {
     world.define_table(TableSpec::new("Name").column(
         "text",
@@ -98,6 +103,16 @@ pub fn register_standard_tables(world: &mut World) -> Result<(), WorldError> {
                 ValueKind::Color,
                 Value::Color(Color::rgb(0.8, 0.8, 0.8)),
             ),
+    )?;
+    world.define_table(TableSpec::new("Terrain").column(
+        "data",
+        ValueKind::Terrain,
+        Value::Terrain(Terrain::default()),
+    ))?;
+    world.define_table(
+        TableSpec::new("SurfaceFollow")
+            .column("offset", ValueKind::Float, Value::Float(0.0))
+            .column("align_normal", ValueKind::Bool, Value::Bool(false)),
     )?;
     world.define_table(
         TableSpec::new("Script")

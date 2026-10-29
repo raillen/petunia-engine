@@ -11,6 +11,7 @@ mod grid;
 mod mesh;
 mod pick;
 mod sculpt;
+mod terrain;
 
 pub use camera::{Camera, Mat4, ProjectionMode, model_matrix, multiply};
 pub use fly::FlyCamera;
@@ -23,3 +24,7 @@ pub use mesh::{MeshCache, MeshData, MeshError, build_mesh, item_mesh, polygon_me
 pub use petunia_sculpt::{ChunkMesh, SurfaceMesh};
 pub use pick::{Ray, SurfaceHit, mesh_points, pick_entity, pick_surface, ray_through};
 pub use sculpt::{SculptCache, SculptItem, SculptVolume, extract_sculpt_volumes, hit_sculpt};
+pub use terrain::{
+    LOD_MID_DISTANCE, LOD_NEAR_DISTANCE, TERRAIN_LAYERS, chunk_fingerprint, chunk_mesh,
+    layer_color, lod_step,
+};

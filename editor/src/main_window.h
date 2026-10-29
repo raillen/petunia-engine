@@ -24,6 +24,7 @@ class QToolButton;
 class QToolBar;
 class QComboBox;
 class QDoubleSpinBox;
+class QSpinBox;
 class QCheckBox;
 class QPushButton;
 class QDockWidget;
@@ -68,6 +69,8 @@ private:
     void setFullMenus(bool on);
     void buildSculptBar();
     void syncSculptBar(const QJsonObject& snapshot);
+    void buildTerrainBar();
+    void syncTerrainBar(const QJsonObject& snapshot);
     void buildDocks();
 
     Reply perform(const QString& operation, const QJsonObject& fields, bool interactive = true);
@@ -135,13 +138,17 @@ private:
     QAction* edgeModeAction_ = nullptr;
     QAction* faceModeAction_ = nullptr;
     QAction* shapeActions_[6] = {};
-    QAction* toolActions_[8] = {};
+    QAction* toolActions_[9] = {};
     QAction* carveAction_ = nullptr;
     QAction* codeAction_ = nullptr;
     CodePanel* code_ = nullptr;
     QAction* logicAction_ = nullptr;
     GraphPanel* graph_ = nullptr;
     QAction* caveAction_ = nullptr;
+    QAction* terrainAction_ = nullptr;
+    QAction* generateTerrainAction_ = nullptr;
+    QAction* caveHolesAction_ = nullptr;
+    QAction* caveBooleanAction_ = nullptr;
     // Criar > Luz: a bulb and a sun (DR-29).
     QAction* importModelAction_ = nullptr;
     QAction* pointLightAction_ = nullptr;
@@ -161,9 +168,26 @@ private:
     QDoubleSpinBox* sculptRadiusBox_ = nullptr;
     QDoubleSpinBox* sculptForceBox_ = nullptr;
     QCheckBox* facetedBox_ = nullptr;
+    QCheckBox* mirrorBox_ = nullptr;
     QLabel* strokesLabel_ = nullptr;
     QPushButton* generateButton_ = nullptr;
     QPushButton* consolidateButton_ = nullptr;
+    QPushButton* fillButton_ = nullptr;
+    QPushButton* hollowButton_ = nullptr;
+    QPushButton* noiseButton_ = nullptr;
+    // Options bar of the terrain tool (T), shown instead of the sculpt bar.
+    QToolBar* terrainBar_ = nullptr;
+    QComboBox* terrainOperation_ = nullptr;
+    QComboBox* terrainShape_ = nullptr;
+    QComboBox* terrainFalloff_ = nullptr;
+    QDoubleSpinBox* terrainRadiusBox_ = nullptr;
+    QDoubleSpinBox* terrainStrengthBox_ = nullptr;
+    QSpinBox* terrainMaterialBox_ = nullptr;
+    QCheckBox* terrainPaintBox_ = nullptr;
+    QCheckBox* terrainMirrorXBox_ = nullptr;
+    QCheckBox* terrainMirrorZBox_ = nullptr;
+    QCheckBox* terrainXrayBox_ = nullptr;
+    QCheckBox* terrainSectionBox_ = nullptr;
     QAction* hollowAction_ = nullptr;
     QAction* floorUpAction_ = nullptr;
     QAction* floorDownAction_ = nullptr;
