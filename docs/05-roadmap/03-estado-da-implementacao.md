@@ -1,6 +1,6 @@
 # Estado da implementação
 
-**Revisão:** 2026-10-29 (protótipo de rios e estradas, branch) · **Fase atual:** 1 (esqueleto) concluída no código; **fase 2 (editor e construção de mapas) começou**
+**Revisão:** 2026-10-29 (rios, estradas e terreno na `main`) · **Fase atual:** 1 (esqueleto) concluída no código; **fase 2 (editor e construção de mapas) começou**
 
 ## Resumo (TL;DR)
 
@@ -35,13 +35,17 @@ Decisão: [DR-36](../06-decisoes/registro-de-decisoes.md) e o complemento dela (
 | **Ponte e bueiro:** a ponte ganha convés e defensas; o bueiro/corte fica só como dado (o terreno é a estrutura) | teste do editor com estrada acima do terreno (ponte) e dentro do corte (bueiro) |
 | **Física:** cada bloco de terreno entra como malha sólida, então o leito do rio é chão andável; a água continua meio (empuxo, nado, correnteza) | 2 testes do `petunia_physics` (bloco andável, bloco quebrado reportado e deixado de fora) |
 | Editor Qt | compila (`scripts/editor.sh build`); `scripts/natural-smoke.sh` **16/16** no display virtual: cria o terreno, pinta alturas, **erode** e aplica **ruído** (cada um muda o material e conserva o volume), aplica **um passo por teclado** e **desfaz** (o terreno volta ao medido), grava um **carimbo de cratera** (meio afundou, borda subiu) e um **de monte** (só subiu), carimba a **mesma crista reta e girada 90°** (a medida longa troca de eixo), cria rio e estrada, cava sob a estrada e **detecta a ponte** (entidade `Ponte`, vão 0..2) |
+| **Merge na `main` (2026-10-29):** `feat/mundo-natural-rios-estradas` mesclada; as decisões daquela linha renumeradas para **`DR-36`/`DR-37`** porque a `main` já usava `DR-33`, `DR-34` e `DR-35` | conflitos resolvidos guardando os dois lados (verificação de `PlayerStart` da `main` **e** as checagens de terreno/caminho; `_virtual-display.sh` **e** a limpeza de saídas antigas); 535 testes depois do merge |
+| Editor Qt na `main` mesclada | `scripts/editor-smoke.sh` **11/11** (124 s) e `scripts/natural-smoke.sh` **16/16** (77 s), no display virtual |
 | Workspace inteiro | **535 testes, 0 falhas** (`main` com esta linha mesclada, 2026-10-29, 2 threads); `cargo clippy --workspace --all-targets -- -D warnings` ok; `cargo fmt` ok **por pacote** (ver a nota do `fmt` abaixo); `cargo deny` **não rodou** (ferramenta não instalada) e nenhuma dependência nova entrou |
 
 **Corrigido ao ligar o teste de fumaça à janela (2026-10-28):** a barra de opções mostrava todos os controles de uma vez, não cabia na largura da janela e o botão **Pontes e bueiros** caía fora da área visível (o canto `⋯` da barra não alcança widgets, só ações); e a checagem de "há estrada selecionada?" comparava `selected_road` — que é o **número** do id — com booleano, então o botão e a caixa **Defensas** nunca habilitavam. Agora cada ferramenta mostra só os seus controles e o teste é `isDouble()`.
 
 **Outro teste de janela:** `scripts/editor-smoke.sh` voltou a **11/11** depois de acertar quantas teclas `Down` escolhem `PlayerStart` no menu **Adicionar tabela**. O menu lista as tabelas que faltam em ordem alfabética e o branch trouxe `Bridge`, `River`, `Road`, `Terrain` e `TerrainChunk` — todos antes de `PlayerStart`, que virou o **sexto** item. O teste reprovava antes de qualquer mudança de produto.
 
-**Uma reprovação intermitente no `editor-smoke.sh` (2026-10-29):** a checagem da malha editável (Tab) reprovou na primeira de duas execuções seguidas, sem nenhuma mudança no caminho do Tab — a segunda passou **11/11**. O passo clica a caixa em (990, 431) depois de andar e girar a câmera; um clique que não acerta a caixa deixa o Tab sem o que converter. Fica registrado como falha do teste, não do produto, e sem conserto: se voltar a acontecer, o clique tem de seguir a posição da caixa em vez de um pixel fixo.
+**Uma reprovação intermitente no `editor-smoke.sh` (2026-10-29):** a checagem da malha editável (Tab) reprovou na primeira de duas execuções seguidas, sem nenhuma mudança no caminho do Tab — a segunda passou **11/11**. O passo clica a caixa em (990, 431) depois de andar e girar a câmera; um clique que não acerta a caixa deixa o Tab sem o que converter. Se voltar a acontecer, esse clique tem de seguir a posição da caixa em vez de um pixel fixo.
+
+**Duas falhas de janela com causa comum, consertadas no merge (2026-10-29):** na `main` mesclada o `editor-smoke.sh` reprovou tudo numa rodada (o clique na caixa grande não selecionava nada) e depois morreu com `rc=139`, e o `natural-smoke.sh` parou com "a cena não foi regravada". Não era o produto: (1) o teste dormia **3 s** fixos e clicava antes de a janela existir — logo depois de uma compilação o primeiro quadro em OpenGL por software demora mais; (2) o `--screenshot-delay 62000` é também o **tempo total da rodada** (o editor tira as fotos e sai ali), e os passos passaram a levar ~65 s, então o editor fechava no meio, às vezes durante um evento em voo (daí o segfault). Agora `_virtual-display.sh` tem `wait_for_window`, que espera a janela aparecer (e aborta com o log se o editor morrer antes), o timer subiu para 120 s e `PETUNIA_SMOKE_KEEP=1` guarda a pasta da rodada para pós-mortem. Medido depois disso: **11/11** e **16/16**.
 
 **Pasta de build da janela (2026-10-29):** a pasta do CMake se chamava `/tmp/petunia-editor-build` e estava configurada para o checkout irmão `petunia-engine-mundo`. O CMake guarda a pasta de origem de quem configurou primeiro, então `scripts/editor.sh build` compilava o editor **daquele** checkout e o teste de fumaça rodava um binário com telas que não existem aqui (o status bar dizia `TERRAIN_NO_HIT`, texto que não está neste código). Agora cada cópia de trabalho tem a sua pasta (`/tmp/petunia-editor-<nome do checkout>`), `scripts/editor.sh` recusa uma pasta configurada para outra origem e os dois testes de fumaça derivam o mesmo nome, sem `PETUNIA_EDITOR_BIN` no comando.
 
@@ -381,27 +385,29 @@ Primeira versão do redesenho (uma barra no topo, hierarquia em árvore, inspeto
 
 ## O que existe
 
-**41,8 mil linhas de Rust** em 16 crates (14,1 mil delas copiadas do Petunia3D em `petunia_mesh/src/legacy/`), **7,0 mil linhas de C++** próprias e **3,6 mil linhas de C++ copiadas** do Petunia3D (`editor/src/ui_kit/`; o tema foi reescrito, o resto está igual), medidas em 2026-10-27.
+**63,4 mil linhas de Rust** em 18 crates (14,1 mil delas copiadas do Petunia3D em `petunia_mesh/src/legacy/`), **10,9 mil linhas de C++** próprias no editor e **3,6 mil linhas de C++ copiadas** do Petunia3D (`editor/src/ui_kit/`; o tema foi reescrito, o resto está igual), medidas em 2026-10-29. A tabela conta só `src/` e não inclui testes.
 
 | Parte | Linhas | O que faz |
 |---|---:|---|
-| `petunia_math` | 753 | `Vec2`, `Vec3`, `Color`, `Transform`, **`PolygonMesh`** (malha editável como dado, triângulos para desenhar) |
-| `petunia_world` | 1444 | Entidades, tabelas, tags, comandos adiados, RNG; `f32` salvo em decimal curto; tipo de valor **`mesh`** |
+| `petunia_math` | 1496 | `Vec2`, `Vec3`, `Color`, `Transform`, **`PolygonMesh`**, **spline Bézier** por comprimento de arco, ruído próprio |
+| `petunia_world` | 2798 | Entidades, tabelas, tags, comandos adiados, RNG; `f32` salvo em decimal curto; tipo de valor **`mesh`**; **mapa de altura em blocos**, carimbos e rede de caminhos |
 | `petunia_schema` | 466 | API como dado |
-| `petunia_commands` | 1245 | Despachante com desfazer/refazer; histórico com **teto de memória** |
-| `petunia_project` | 1074 | Formato de texto, salvar (recusa cena grande demais para abrir), diagnósticos, projeto de exemplo; tabela **`Mesh`** |
+| `petunia_commands` | 1392 | Despachante com desfazer/refazer; histórico com **teto de memória** |
+| `petunia_project` | 1710 | Formato de texto, salvar (recusa cena grande demais para abrir), diagnósticos, projeto de exemplo; tabelas **`Mesh`**, `Terrain`, `TerrainChunk`, `River`, `Road`, `Bridge` |
 | `petunia_input` | 166 | Entrada por ações nomeadas |
-| `petunia_render` | 1831 | Câmera, **seis formas** e **malhas editáveis**, picking, **overlay para gizmos**, volumes esculpidos no quadro |
-| `petunia_sculpt` | 2176 | **Cavernas**: campo em blocos, malha por *surface nets*, gerador, caminho, fundir traços |
-| `petunia_script` | 3614 | **Script Host**: compila e roda Aipo, API como dado, Doctor de scripts, simulação numa cópia |
-| `petunia_render_gl` | 820 | OpenGL 3.3: contorno de seleção, **passe de overlay em pixels**, buffers de malhas editáveis |
-| `petunia_player` | 386 | Janela simples com câmera livre |
-| `petunia_cli` | 177 | `petunia new / check / run / schema / version` |
-| `petunia_mesh` | 15361 | **Edição de malha**: booleanos, inset, loop cut, bevel… (14100 linhas de legado do Petunia3D + API validada) |
-| `petunia_editor` | 7801 | Sessão, operações JSON, **gizmo**, **gestos**, snap a objetos, Modo Livre, **operações de brush**, andares, **esculpir**, **edição de malha** |
-| `petunia_editor_ffi` | 210 | Fronteira C |
-| `editor/` (C++/Qt) | 6138 | Janela, barra principal, workspaces, paleta de comandos, faixa da cena, docas, inspetor, editor de código |
-| `editor/src/ui_kit/` (copiado) | 3567 | Tema, campo numérico, campo XYZ, expressões, arrasto, ícones |
+| `petunia_import` | 642 | GLB/glTF → malhas editáveis; arquivo tratado como hostil, com limites e avisos |
+| `petunia_render` | 2842 | Câmera, **seis formas** e **malhas editáveis**, picking, **overlay para gizmos**, volumes esculpidos, **terreno, água e estrada** no quadro |
+| `petunia_sculpt` | 3745 | **Cavernas** (campo em blocos, *surface nets*, gerador, caminho) e **perfis varridos** de rio/estrada, cruzamentos, ponte/bueiro |
+| `petunia_script` | 6678 | **Script Host**: compila e roda Aipo, API como dado, Doctor de scripts, simulação numa cópia, Aipo ⇄ IR |
+| `petunia_graph` | 5120 | **Grafo de nós** (DR-30): documento tipado, catálogo tirado da API, compilação para Aipo com mapa de linhas, validação, layout |
+| `petunia_render_gl` | 948 | OpenGL 3.3: contorno de seleção, **passe de overlay em pixels**, buffers de malhas editáveis |
+| `petunia_player` | 437 | Janela simples com câmera livre |
+| `petunia_cli` | 184 | `petunia new / check / run / schema / version` |
+| `petunia_mesh` | 15479 | **Edição de malha**: booleanos, inset, loop cut, bevel… (14100 linhas de legado do Petunia3D + API validada) |
+| `petunia_editor` | 16141 | Sessão, operações JSON, **gizmo**, **gestos**, snap a objetos, Modo Livre, **operações de brush**, andares, **esculpir**, **edição de malha**, **terreno/rio/estrada** |
+| `petunia_editor_ffi` | 212 | Fronteira C |
+| `editor/` (C++/Qt, próprio) | 10918 | Janela, barras de ferramenta, workspaces, paleta de comandos, docas, inspetor, editor de código, painel de grafo |
+| `editor/src/ui_kit/` (copiado) | 3589 | Tema, campo numérico, campo XYZ, expressões, arrasto, ícones |
 
 Detalhes: [editor](../02-arquitetura/11-editor.md), [paridade](../02-arquitetura/12-paridade-ui-petunia3d.md).
 
@@ -410,7 +416,7 @@ Detalhes: [editor](../02-arquitetura/11-editor.md), [paridade](../02-arquitetura
 | Item | Estado | Evidência |
 |---|---|---|
 | `cargo fmt`, `cargo clippy --workspace --all-targets -D warnings` | **passou** | limpo |
-| `cargo fmt --all` (literal) | **não passa neste worktree** | `--all` também formata a dependência de caminho `../aipo-lang` (29 diferenças, já existentes, fora desta branch). O que se mede aqui é `cargo fmt -p <cada crate petunia> -- --check`, e esse passa. |
+| `cargo fmt --all` (literal) | **não passa neste repositório** | `--all` também formata a dependência de caminho `../aipo-lang` (27 diferenças, já existentes, nenhuma nos crates `petunia_*`). O que se mede aqui é `cargo fmt -p <cada crate petunia> -- --check`, e esse passa. |
 | Suíte completa, **535 testes** (2026-10-29, `main` com a linha dos rios mesclada) | **passou** | math 21, world 42, sculpt 41, graph 39, physics 29, render 22, editor 70, script 67, mesh 181, project 6, commands 6, import 6, input 3, schema 2 |
 | Suíte completa, **441 testes** (2026-10-28) | **passou** | inclui 6 de Aipo → IR, 14 de IR → grafo, 1 de `script.to_graph` no editor, 1 de isolamento por objeto e 14 de modelo de grafo com migração v1→v2 |
 | Suíte completa, **414 testes** (2026-10-27) | **passou** | mesh 181 (164 do Petunia3D), script 55 (15 + 16 do host + 7 de física + 17 de grafo), editor 57, graph 22 (13 + 9 de edição), physics 18, sculpt 17, render 16, world 14, math 11, commands 6, import 6, input 3, project 6, schema 2 |

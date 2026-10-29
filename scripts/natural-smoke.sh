@@ -42,7 +42,13 @@ scene="$workdir/mundo/scenes/room.scene.json"
 cleanup() {
     [[ -n "${editor_pid:-}" ]] && kill "$editor_pid" 2>/dev/null || true
     [[ -n "${xvfb_pid:-}" ]] && kill "$xvfb_pid" 2>/dev/null || true
-    # rm -rf "$workdir"
+    # A run that fails leaves the scene, the editor log and the pictures behind when
+    # PETUNIA_SMOKE_KEEP is set: the log of a crash is the only evidence of where it died.
+    if [[ -n "${PETUNIA_SMOKE_KEEP:-}" ]]; then
+        echo "arquivos da rodada em $workdir" >&2
+    else
+        rm -rf "$workdir"
+    fi
 }
 trap cleanup EXIT
 
@@ -106,8 +112,9 @@ env -u WAYLAND_DISPLAY DISPLAY="$display" XDG_CONFIG_HOME="$workdir/config" XDG_
     QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 QT_LOGGING_RULES='qt.qpa.*=false' \
     "$editor" --sample "$workdir/mundo" 2>"$workdir/editor.log" &
 editor_pid=$!
-sleep 3
+sleep 1
 watch_editor "$editor_pid" "$workdir/editor.log"
+wait_for_window "Petunia Editor" "$display" "$editor_pid" "$workdir/editor.log"
 
 export DISPLAY="$display"
 xdotool mousemove 835 440 click 1;               sleep 0.4   # focus the viewport

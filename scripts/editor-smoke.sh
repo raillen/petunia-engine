@@ -46,7 +46,13 @@ rm -f "$output" "$output.viewport.png" "$output.canvas.png" "$output.playing.png
 cleanup() {
     [[ -n "${editor_pid:-}" ]] && kill "$editor_pid" 2>/dev/null || true
     [[ -n "${xvfb_pid:-}" ]] && kill "$xvfb_pid" 2>/dev/null || true
-    rm -rf "$workdir"
+    # A run that fails leaves the scene, the editor log and the pictures behind when
+    # PETUNIA_SMOKE_KEEP is set: the log of a crash is the only evidence of where it died.
+    if [[ -n "${PETUNIA_SMOKE_KEEP:-}" ]]; then
+        echo "arquivos da rodada em $workdir" >&2
+    else
+        rm -rf "$workdir"
+    fi
 }
 trap cleanup EXIT
 
@@ -56,10 +62,15 @@ sleep 1
 
 env -u WAYLAND_DISPLAY DISPLAY="$display" XDG_CONFIG_HOME="$workdir/config" XDG_CACHE_HOME="$workdir/cache" \
     QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 QT_LOGGING_RULES='qt.qpa.*=false' \
-    "$editor" --sample "$workdir/sala" --screenshot "$output" --screenshot-delay 62000 2>"$workdir/editor.log" &
+    # The delay is also the LENGTH of the run: the editor takes the pictures and quits when it
+    # fires. At 62000 the steps grew past the timer, the editor quit in the middle of the last
+    # ones and the run reported failures (and once a segfault) that the product did not have
+    # (2026-10-29). Keep it well above the slowest pass.
+    "$editor" --sample "$workdir/sala" --screenshot "$output" --screenshot-delay 120000 2>"$workdir/editor.log" &
 editor_pid=$!
-sleep 3
+sleep 1
 watch_editor "$editor_pid" "$workdir/editor.log"
+wait_for_window "Petunia Editor" "$display" "$editor_pid" "$workdir/editor.log"
 
 export DISPLAY="$display"
 xdotool mousemove 835 440 click 1;               sleep 0.6   # select the center of the big crate (#9)
