@@ -1,10 +1,15 @@
 [build]
 # AGENTS.md section 4: never run the compiler unbounded on this machine.
 jobs = 2
-# One build folder for everyone (cargo in a terminal, rust-analyzer, scripts, agents), in RAM
-# because the disk runs full. A second `target/` inside the project only duplicates ~1 GB.
-# Cleaned by scripts/clean-builds.sh; it disappears on reboot and rebuilds in about a minute.
-target-dir = "/tmp/petunia-engine-target"
+# One build folder for everything in THIS working copy (cargo in a terminal, rust-analyzer, scripts,
+# agents), in RAM because the disk runs full. A second `target/` inside the project only duplicates
+# ~1 GB. Cleaned by scripts/clean-builds.sh; it disappears on reboot and rebuilds in about a minute.
+#
+# The folder must NOT be shared with another checkout. Cargo does not put the checkout path in its
+# unit hash, so this worktree and `petunia-engine` wrote the same `libpetunia_math-<hash>.rmeta` and
+# the build failed with a phantom `unresolved import petunia_math::CubicBezierSpline` while the
+# symbol existed in the source. The main checkout keeps /tmp/petunia-engine-target.
+target-dir = "/tmp/petunia-engine-mundo-natural-target"
 
 [target.x86_64-unknown-linux-gnu]
 # lld links much faster than the default GNU linker (build-time lever, experiment S0).

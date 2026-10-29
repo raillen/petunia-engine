@@ -11,7 +11,9 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 build_dir="${PETUNIA_BUILD_DIR:-/tmp/petunia-editor-build}"
-export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/tmp/petunia-engine-target}"
+# The Rust build folder is the one `.cargo/config.toml` names for this working copy: sharing it with
+# another checkout makes cargo overwrite the other copy's metadata (phantom unresolved imports).
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/tmp/petunia-engine-mundo-natural-target}"
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}"
 
 mode="${1:-run}"
@@ -23,6 +25,9 @@ build() {
     local library="$CARGO_TARGET_DIR/debug/libpetunia_editor_ffi.a"
     cmake -S "$root/editor" -B "$build_dir" -G Ninja \
         -DCMAKE_BUILD_TYPE=Debug -DPETUNIA_FFI_LIB="$library"
+    # clangd only looks for the compilation database next to the sources (and in parents), so link it
+    # there. The link is ignored by git; without it the IDE cannot find the Qt headers.
+    ln -sfn "$build_dir/compile_commands.json" "$root/editor/compile_commands.json"
     cmake --build "$build_dir" --parallel 2
 }
 

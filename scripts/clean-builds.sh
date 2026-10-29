@@ -9,7 +9,7 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-build="${CARGO_TARGET_DIR:-/tmp/petunia-engine-target}"
+build="${CARGO_TARGET_DIR:-/tmp/petunia-engine-mundo-natural-target}"
 editor_build="${PETUNIA_BUILD_DIR:-/tmp/petunia-editor-build}"
 mode="${1:-stale}"
 
