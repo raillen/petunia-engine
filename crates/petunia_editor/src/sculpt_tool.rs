@@ -20,8 +20,8 @@ use petunia_render::{
     hit_sculpt,
 };
 use petunia_sculpt::{
-    GenerateParams, MAX_SMOOTH, MAX_STROKES, Stroke, StrokeMode, consolidate, generate_cave,
-    tunnel_strokes,
+    GenerateParams, MAX_SMOOTH, MAX_STAMP_TRIANGLES, MAX_STROKES, StampOperation, Stroke,
+    StrokeMode, consolidate, generate_cave, tunnel_strokes,
 };
 use petunia_world::{PersistentId, Value};
 use serde_json::{Value as Json, json};
@@ -686,6 +686,84 @@ impl EditorSession {
         Ok(json!({ "entity": entity, "vertices": vertices, "faces": faces }))
     }
 
+    /// Imprints the surface of a mesh entity into the selected cave (one undo step).
+    ///
+    /// The mesh is taken with its own transform, so moving, turning or scaling the object decides
+    /// where the stamp lands. The triangles are baked in the cave's own space: later edits to the
+    /// source object do not move the stamp, and deleting it leaves the cave as it is.
+    pub fn sculpt_stamp_mesh(
+        &mut self,
+        mesh_entity: u64,
+        operation: &str,
+        smooth: Option<f32>,
+    ) -> Result<Json, Failure> {
+        let volume = self.selected_cave()?;
+        let operation = StampOperation::parse(operation).ok_or_else(|| {
+            Failure::bad_request(&format!(
+                "operação `{operation}` desconhecida (use add ou carve)"
+            ))
+        })?;
+        let geometry = {
+            let world = self.world()?;
+            let handle = world.handle_of(PersistentId(mesh_entity)).map_err(|_| {
+                Failure::new(
+                    "SCULPT_NO_MESH",
+                    "a malha não existe",
+                    "Escolha um objeto com malha na cena.",
+                )
+            })?;
+            match world.get(handle, "Mesh", "geometry") {
+                Ok(Value::Mesh(mesh)) => mesh.clone(),
+                _ => {
+                    return Err(Failure::new(
+                        "SCULPT_NO_MESH",
+                        "o objeto escolhido não tem malha",
+                        "Escolha um objeto importado ou criado por booleano.",
+                    ));
+                }
+            }
+        };
+        if geometry.faces.is_empty() {
+            return Err(Failure::new(
+                "SCULPT_EMPTY",
+                "a malha não tem faces",
+                "Escolha um objeto com geometria.",
+            ));
+        }
+        let triangles = geometry.triangles().len();
+        if triangles > MAX_STAMP_TRIANGLES {
+            return Err(Failure::bad_request(&format!(
+                "a malha tem {triangles} triângulos; o carimbo aceita até {MAX_STAMP_TRIANGLES}"
+            )));
+        }
+        let smooth = smooth.unwrap_or(0.5).clamp(0.0, MAX_SMOOTH);
+        let source = self.transform_of(mesh_entity);
+        let cave = self.transform_of(volume);
+        let local = PolygonMesh {
+            positions: geometry
+                .positions
+                .iter()
+                .map(|point| to_local(&cave, to_world(&source, *point)))
+                .collect(),
+            faces: geometry.faces.clone(),
+        };
+        let record = CommandRecord::new(
+            "world.create",
+            json!({
+                "rows": {
+                    "SculptStamp": {
+                        "volume": volume,
+                        "operation": operation.name(),
+                        "geometry": local.to_text_json(),
+                        "smooth": smooth,
+                    }
+                }
+            }),
+        );
+        self.execute(&record)?;
+        Ok(json!({ "triangles": triangles, "faces": local.faces.len() }))
+    }
+
     /// Switches flat shading (low poly) of the selected cave.
     pub fn sculpt_faceted(&mut self, faceted: bool) -> Result<Json, Failure> {
         let volume = self.selected_cave()?;
@@ -1098,6 +1176,7 @@ impl EditorSession {
 
 #[cfg(test)]
 mod tests {
+    use petunia_math::Vec3;
     use petunia_world::{PersistentId, Value};
     use serde_json::{Value as Json, json};
 
@@ -1186,6 +1265,85 @@ mod tests {
         let world = session.world().expect("world");
         assert!(world.handle_of(PersistentId(target)).is_ok());
         assert!(world.handle_of(PersistentId(tool)).is_ok());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_stamped_mesh_imprints_the_cave_and_undoes_in_one_step() {
+        let (mut session, root) = opened("sculpt_stamp");
+        let cave = call(&mut session, json!({ "op": "create.cave" }))["entity"]
+            .as_u64()
+            .expect("cave");
+        // The cave is created in front of the camera; put it on the origin so the local checks
+        // below read in world numbers too.
+        call(
+            &mut session,
+            json!({
+                "op": "command.execute", "command": "world.set",
+                "payload": {
+                    "entity": cave, "table": "Transform", "column": "position",
+                    "value": { "x": 0.0, "y": 0.0, "z": 0.0 }
+                }
+            }),
+        );
+        // A 6 m plate at y = 0, its face looking up (+y).
+        let plate = call(
+            &mut session,
+            json!({
+                "op": "command.execute", "command": "world.create",
+                "payload": {
+                    "rows": {
+                        "Name": { "text": "Placa" },
+                        "Mesh": { "geometry": {
+                            "positions": ["-3 0 -3", "-3 0 3", "3 0 3", "3 0 -3"],
+                            "faces": ["0 1 2 3"]
+                        }}
+                    }
+                }
+            }),
+        )["entity"]
+            .as_u64()
+            .expect("plate");
+        let volume_of = |session: &EditorSession| {
+            session
+                .sculpt_volumes()
+                .into_iter()
+                .find(|volume| volume.entity == cave)
+                .expect("volume")
+                .volume
+        };
+        let before = triangles(&session, cave);
+        let made = call(
+            &mut session,
+            json!({
+                "op": "sculpt.stamp_mesh", "mesh": plate,
+                "operation": "carve", "smooth": 0.0
+            }),
+        );
+        assert_eq!(made["triangles"].as_u64(), Some(2), "{made}");
+        let volume = volume_of(&session);
+        assert_eq!(volume.stamps.len(), 1);
+        assert_eq!(volume.stamps[0].triangles.len(), 2);
+        assert!(
+            volume.distance(Vec3::new(0.0, -0.5, 0.0)) > 0.0,
+            "air below the plate"
+        );
+        assert!(
+            volume.distance(Vec3::new(0.0, 0.5, 0.0)) < 0.0,
+            "rock above the plate"
+        );
+        assert!(
+            volume.distance(Vec3::new(6.0, -1.0, 0.0)) < 0.0,
+            "rock outside the plate stays"
+        );
+        assert_ne!(triangles(&session, cave), before, "the surface changed");
+        call(&mut session, json!({ "op": "edit.undo" }));
+        let volume = volume_of(&session);
+        assert!(volume.stamps.is_empty());
+        assert!(
+            volume.distance(Vec3::new(0.0, -0.5, 0.0)) < 0.0,
+            "the rock is back"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -14,7 +14,7 @@ Este documento é a lista viva do que foi implementado e do que falta no sistema
 | Terreno (render) | Malha por chunk, cores por camada (8), LOD 1/2/4, saias, furos, plano de corte | Materiais por textura, culling por chunk, verificação visual | 80% |
 | Terreno (física) | Heightfield no Rapier; trimesh nos chunks com furo | Terreno com transformação não-identidade | 80% |
 | Terreno (editor) | Pincel `terrain.begin/drag/end/cancel/set/preview`, anel, prévia ao vivo, um desfazer; menu **Criar > Terreno**, ferramenta **T**, barra de opções, **Gerar terreno** e **Raio X** | Plano de corte; ajuste fino de raio X; teste de fumaça estável | 85% |
-| Cavernas (SDF) | `petunia_sculpt` (chunks 16³, surface nets, 5 modos, caminho, gerador, fundir, facetada) + espelhamento X, preencher, oco, ruído e **booleanos** (`sculpt.boolean`) | *Stamp* de malha na caverna | 95% |
+| Cavernas (SDF) | `petunia_sculpt` (chunks 16³, surface nets, 5 modos, caminho, gerador, fundir, facetada) + espelhamento X, preencher, oco, ruído, **booleanos** (`sculpt.boolean`) e **carimbo de malha** (`sculpt.stamp_mesh`) | Malha sólida (o carimbo imprime a superfície) | 98% |
 | Caverna ↔ terreno | Furos explícitos (`terrain.holes`), furos automáticos dos túneis (`terrain.holes_from_caves`), render sem as células, física trimesh | Costura visual, ajuste fino do raio do furo | 85% |
 | `surface_follow` | Tabela `SurfaceFollow`, comando `surface.follow`, `surface.set` inverso, preferência, re-projeção, alinhamento à normal e **um desfazer** junto de `generate/brush/paint/erode/hydraulic/stamp` e do arrasto | UI dedicada (o inspetor genérico já edita a tabela) | 95% |
 | Erosão | Térmica determinística e hidráulica por gotas determinísticas, com desfazer | Ajuste visual fino | 90% |
@@ -39,6 +39,7 @@ Este documento é a lista viva do que foi implementado e do que falta no sistema
 | **Preencher**, **Oco** e **Ruído** em cavernas (`sculpt.fill/hollow/noise`), com botões na barra | teste de editor: cada um é um desfazer |
 | **Carimbo de malha 3D** (`terrain.stamp_mesh`): a superfície de uma malha vira altura do terreno, com transformação | 1 teste de comando |
 | **Booleano de cavernas** (`sculpt.boolean`): assa as malhas das cavernas, roda `petunia_mesh::boolean` (união, subtração, interseção) e remove/mantém originais em um desfazer | 1 teste de editor; ação **Operações > Booleano de cavernas…** na janela com diálogo de seleção |
+| **Carimbo de malha na caverna** (`sculpt.stamp_mesh`): imprime a superfície de um objeto com malha no campo SDF (cavar ou pôr rocha atrás de cada face), com a transformação do objeto assada no espaço da caverna; um desfazer e nova tabela `SculptStamp` | 3 testes de distância ponto-triângulo + 1 de forma no crate (`a_stamp_carves_the_side_its_face_looks_away_from`), 1 teste de editor (forma + desfazer); ação **Operações > Carimbar malha na caverna…** |
 
 ### 2026-10-28 — janela Qt do terreno
 
@@ -77,8 +78,7 @@ Este documento é a lista viva do que foi implementado e do que falta no sistema
 |---|---|---|---|
 | 1 | Estabilizar o teste de fumaça (coordenadas fixas, foco do Tab, paleta) | editor | 12/12 repetível |
 | 2 | Arame no raio X (hoje translucidez + plano de corte) | 1 | ver o interior sem alterar a superfície |
-| 3 | *Stamp* de malha 3D diretamente sobre o volume da caverna | `petunia_sculpt` | teste de forma |
-| 4 | Rios e estradas | outro agent | — |
+| 3 | Rios e estradas | outro agent | — |
 
 ## Não verificado (honesto)
 
@@ -92,6 +92,7 @@ Este documento é a lista viva do que foi implementado e do que falta no sistema
 | Raio X | **translucidez implementada**; plano de corte e arame **não** |
 | Teste de fumaça | **intermitente**: 9/12 na última execução; gizmo, geração por paleta e Tab falharam |
 | Erosão em terreno grande | **não medida**; o teste usa 8×8 |
+| Carimbo de malha na caverna | **sem lugar sólido**: imprime a superfície numa banda (2 células); uma malha fechada vira casca, não volume; limite de 4096 triângulos e 8 carimbos por caverna; **não olhado em imagem** |
 | Terreno com `Transform` deslocado | **não suportado**; os dados são do mundo e o collider assume origem |
 
 ## Fora desta fase (declarado)

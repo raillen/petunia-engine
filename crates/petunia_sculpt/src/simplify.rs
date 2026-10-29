@@ -116,6 +116,7 @@ mod tests {
             size: Vec3::new(40.0, 8.0, 8.0),
             cell_size: 0.5,
             strokes,
+            stamps: Vec::new(),
         };
         let (before, after) = (volume(strokes), volume(merged));
         for step in 0..30 {

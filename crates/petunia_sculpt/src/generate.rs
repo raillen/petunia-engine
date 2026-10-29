@@ -308,6 +308,7 @@ mod tests {
             size,
             cell_size: 0.5,
             strokes,
+            stamps: Vec::new(),
         }
     }
 

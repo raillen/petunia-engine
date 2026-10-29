@@ -298,6 +298,19 @@ impl EditorSession {
                         .unwrap_or(false),
                 )
             }
+            "sculpt.stamp_mesh" => {
+                let mesh = request.get("mesh").and_then(Json::as_u64).ok_or_else(|| {
+                    Failure::bad_request("falta o campo `mesh` (id do objeto com malha)")
+                })?;
+                self.sculpt_stamp_mesh(
+                    mesh,
+                    request
+                        .get("operation")
+                        .and_then(Json::as_str)
+                        .unwrap_or("carve"),
+                    optional_number(request, "smooth"),
+                )
+            }
             "sculpt.fill" => self.sculpt_fill(),
             "sculpt.hollow" => self.sculpt_hollow(optional_number(request, "thickness")),
             "sculpt.noise" => self.sculpt_noise(

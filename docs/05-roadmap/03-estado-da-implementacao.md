@@ -35,9 +35,11 @@ Segundo slice, na branch `feat/sistemas-de-mundo`. Checklist vivo: [sistema de m
 
 **Não verificado:** a aparência do terreno, o LOD sem costura e as cores em imagem; o arrasto da ferramenta de terreno pela janela (só pelos testes de protocolo); o personagem andando no heightfield pela janela; erosão em terreno grande.
 
-**Ferramentas avançadas (2026-10-28):** `terrain.stamp` (heightmap) e `terrain.stamp_mesh` (malha 3D), erosão hidráulica determinística, furos automáticos dos túneis (`terrain.holes_from_caves`), `surface.set` + `surface.follow` automático com **um** desfazer, plano de corte no shader e na barra, espelhamento X, **preencher/oco/ruído** e **booleano de cavernas** (`sculpt.boolean`). **477 testes, 0 falhas** no workspace.
+**Ferramentas avançadas (2026-10-28):** `terrain.stamp` (heightmap) e `terrain.stamp_mesh` (malha 3D), erosão hidráulica determinística, furos automáticos dos túneis (`terrain.holes_from_caves`), `surface.set` + `surface.follow` automático com **um** desfazer, plano de corte no shader e na barra, espelhamento X, **preencher/oco/ruído**, **booleano de cavernas** (`sculpt.boolean`) e **carimbo de malha na caverna** (`sculpt.stamp_mesh`, tabela `SculptStamp`). **485 testes, 0 falhas** no workspace (medido em 2026-10-28).
 
-**Falta:** estabilizar o teste de fumaça, arame no raio X, *stamp* de malha 3D, *stamp* de malha em cavernas, e rios/estradas (outro agent).
+**Falta:** estabilizar o teste de fumaça, arame no raio X e rios/estradas (outro agent).
+
+**Carimbo de malha na caverna (2026-10-28):** `sculpt.stamp_mesh` imprime a superfície de um objeto com malha no campo SDF da caverna selecionada, com a transformação do objeto assada no espaço da caverna. `add` põe rocha atrás de cada face, `carve` tira. Um desfazer. Limites: 4096 triângulos por carimbo, 8 carimbos por caverna, banda de 2 células. **Não é um sólido**: uma malha fechada vira casca (para volume, `sculpt.boolean`). Testes: 3 de distância ponto-triângulo + 1 de forma no crate, 1 de editor com desfazer; ação **Operações › Carimbar malha na caverna…** compila no Qt 6.4.2, **não olhada em imagem**.
 
 ## Etapa atual: sistema de mundos — terreno (2026-10-27, DR-33)
 

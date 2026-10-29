@@ -6,7 +6,9 @@
 use std::collections::{BTreeMap, HashSet};
 
 use petunia_math::{Color, Transform, Vec3};
-use petunia_sculpt::{Base, ChunkMesh, Sculpture, Stroke, StrokeMode, Volume};
+use petunia_sculpt::{
+    Base, ChunkMesh, Sculpture, Stamp, StampOperation, Stroke, StrokeMode, Volume,
+};
 use petunia_world::{EntityHandle, Value, World};
 
 use crate::camera::model_matrix;
@@ -50,8 +52,8 @@ fn vector(world: &World, handle: EntityHandle, table: &str, column: &str) -> Opt
     }
 }
 
-/// Every `Sculpt` with its strokes, in creation order. Strokes that point to no volume, or carry
-/// an unknown mode, are left out (the Project Doctor reports them).
+/// Every `Sculpt` with its strokes and stamps, in creation order. Strokes that point to no volume,
+/// or carry an unknown mode, are left out (the Project Doctor reports them).
 pub fn extract_sculpt_volumes(world: &World) -> Vec<SculptVolume> {
     let mut strokes: BTreeMap<u64, Vec<(u64, Stroke)>> = BTreeMap::new();
     for handle in world
@@ -91,6 +93,50 @@ pub fn extract_sculpt_volumes(world: &World) -> Vec<SculptVolume> {
             },
         ));
     }
+    let mut stamps: BTreeMap<u64, Vec<(u64, Stamp)>> = BTreeMap::new();
+    for handle in world.entities_with_table("SculptStamp").unwrap_or_default() {
+        let Ok(identity) = world.persistent_id(handle) else {
+            continue;
+        };
+        let Ok(Value::Int(volume)) = world.get(handle, "SculptStamp", "volume") else {
+            continue;
+        };
+        let Ok(volume) = u64::try_from(*volume) else {
+            continue;
+        };
+        let Ok(Value::Text(mode)) = world.get(handle, "SculptStamp", "operation") else {
+            continue;
+        };
+        let Some(operation) = StampOperation::parse(mode) else {
+            continue;
+        };
+        let Ok(Value::Mesh(geometry)) = world.get(handle, "SculptStamp", "geometry") else {
+            continue;
+        };
+        let Some(smooth) = float(world, handle, "SculptStamp", "smooth") else {
+            continue;
+        };
+        let triangles: Vec<[Vec3; 3]> = geometry
+            .triangles()
+            .iter()
+            .filter_map(|face| {
+                let point = |slot: usize| {
+                    face.get(slot)
+                        .and_then(|vertex| geometry.positions.get(*vertex as usize))
+                        .copied()
+                };
+                Some([point(0)?, point(1)?, point(2)?])
+            })
+            .collect();
+        stamps.entry(volume).or_default().push((
+            identity.0,
+            Stamp {
+                operation,
+                triangles,
+                smooth,
+            },
+        ));
+    }
     let mut volumes = Vec::new();
     for handle in world.entities_with_table("Sculpt").unwrap_or_default() {
         let Ok(identity) = world.persistent_id(handle) else {
@@ -102,6 +148,8 @@ pub fn extract_sculpt_volumes(world: &World) -> Vec<SculptVolume> {
         };
         let mut own = strokes.remove(&identity.0).unwrap_or_default();
         own.sort_by_key(|(order, _)| *order);
+        let mut own_stamps = stamps.remove(&identity.0).unwrap_or_default();
+        own_stamps.sort_by_key(|(order, _)| *order);
         let color = match world.get(handle, "Sculpt", "color") {
             Ok(Value::Color(color)) => *color,
             _ => Color::WHITE,
@@ -124,6 +172,7 @@ pub fn extract_sculpt_volumes(world: &World) -> Vec<SculptVolume> {
                 size: vector(world, handle, "Sculpt", "size").unwrap_or(Vec3::ONE),
                 cell_size: float(world, handle, "Sculpt", "cell_size").unwrap_or(0.5),
                 strokes: own.into_iter().map(|(_, stroke)| stroke).collect(),
+                stamps: own_stamps.into_iter().map(|(_, stamp)| stamp).collect(),
             },
         });
     }
@@ -273,6 +322,7 @@ mod tests {
             size: Vec3::new(6.0, 6.0, 6.0),
             cell_size: 0.5,
             strokes: Vec::new(),
+            stamps: Vec::new(),
         };
         let mut cache = SculptCache::new();
         cache
@@ -333,6 +383,7 @@ mod tests {
                 size: Vec3::new(20.0, 6.0, 20.0),
                 cell_size: 0.5,
                 strokes: Vec::new(),
+                stamps: Vec::new(),
             },
         };
         let mut cache = SculptCache::new();

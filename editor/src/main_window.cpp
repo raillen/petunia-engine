@@ -371,6 +371,9 @@ void MainWindow::buildActions() {
     caveBooleanAction_ = make(QStringLiteral("Booleano de cavernas…"),
                               QStringLiteral("Une, subtrai ou intersecta duas cavernas e cria uma malha com o resultado"));
     caveBooleanAction_->setProperty("iconName", QStringLiteral("boolean"));
+    caveStampAction_ = make(QStringLiteral("Carimbar malha na caverna…"),
+                            QStringLiteral("Imprime a superfície de um objeto com malha na caverna selecionada: cavar ou pôr rocha atrás de cada face"));
+    caveStampAction_->setProperty("iconName", QStringLiteral("paint_decal"));
     importModelAction_ = make(QStringLiteral("Importar modelo 3D…"), QStringLiteral("Traz um modelo .glb ou .gltf como objetos editáveis (uma cópia fica em assets/)"));
     importModelAction_->setProperty("iconName", QStringLiteral("cube"));
     connect(importModelAction_, &QAction::triggered, this, &MainWindow::chooseImportModel);
@@ -608,6 +611,61 @@ void MainWindow::buildActions() {
                                      8000);
         }
     });
+    connect(caveStampAction_, &QAction::triggered, this, [this] {
+        const QJsonObject snapshot = bridge_->snapshot();
+        const QJsonValue selection = snapshot.value(QStringLiteral("selection"));
+        if (!selection.isDouble()) {
+            statusBar()->showMessage(QStringLiteral("Selecione a caverna antes de carimbar a malha."), 6000);
+            return;
+        }
+        const double target = selection.toDouble();
+        QStringList labels;
+        QList<double> ids;
+        for (const QJsonValue& value : snapshot.value(QStringLiteral("entities")).toArray()) {
+            const QJsonObject entity = value.toObject();
+            const double id = entity.value(QStringLiteral("id")).toDouble();
+            QStringList tables;
+            for (const QJsonValue& table : entity.value(QStringLiteral("tables")).toArray()) {
+                tables.append(table.toString());
+            }
+            if (id == target || !tables.contains(QStringLiteral("Mesh"))) {
+                continue;
+            }
+            labels.append(QStringLiteral("%1 (#%2)").arg(entity.value(QStringLiteral("name")).toString()).arg(qRound64(id)));
+            ids.append(id);
+        }
+        if (labels.isEmpty()) {
+            statusBar()->showMessage(QStringLiteral("Não há nenhum objeto com malha para carimbar."), 6000);
+            return;
+        }
+        bool accepted = false;
+        const QString label = QInputDialog::getItem(this, QStringLiteral("Carimbar malha na caverna"),
+                                                    QStringLiteral("Malha:"), labels, 0, false, &accepted);
+        if (!accepted) {
+            return;
+        }
+        const int index = labels.indexOf(label);
+        if (index < 0 || index >= ids.size()) {
+            return;
+        }
+        const QStringList operations = {QStringLiteral("Cavar (ar atrás da face)"),
+                                        QStringLiteral("Adicionar rocha (rocha atrás da face)")};
+        const QString operation = QInputDialog::getItem(this, QStringLiteral("Carimbar malha na caverna"),
+                                                        QStringLiteral("Operação:"), operations, 0, false, &accepted);
+        if (!accepted) {
+            return;
+        }
+        const QString name = operation.startsWith(QStringLiteral("Adicionar")) ? QStringLiteral("add")
+                                                                                : QStringLiteral("carve");
+        const Reply reply = perform(QStringLiteral("sculpt.stamp_mesh"), QJsonObject{
+            {"mesh", ids[index]}, {"operation", name}, {"smooth", 0.5},
+        });
+        if (reply.ok) {
+            statusBar()->showMessage(QStringLiteral("Malha carimbada: %1 triângulo(s). Ctrl+Z desfaz.")
+                                         .arg(reply.result.toObject().value(QStringLiteral("triangles")).toInt()),
+                                     8000);
+        }
+    });
     connect(caveHolesAction_, &QAction::triggered, this, [this] {
         const auto run = [this](double entity) {
             return perform(QStringLiteral("terrain.holes_from_caves"),
@@ -753,6 +811,7 @@ void MainWindow::buildMenus() {
     operations->addAction(generateTerrainAction_);
     operations->addAction(caveHolesAction_);
     operations->addAction(caveBooleanAction_);
+    operations->addAction(caveStampAction_);
     operations->addSeparator();
     QMenu* collision = operations->addMenu(QStringLiteral("Colisão"));
     collision->setIcon(PetuniaIcons::get(QStringLiteral("bounding_box")));
@@ -1707,7 +1766,7 @@ void MainWindow::onSnapshot() {
     for (QAction* action : shapeActions_) {
         action->setEnabled(project);
     }
-    for (QAction* action : {caveAction_, terrainAction_, generateTerrainAction_, caveHolesAction_, caveBooleanAction_, randomCaveAction_, importModelAction_, pointLightAction_, sunLightAction_, sculptLargerAction_, sculptSmallerAction_}) {
+    for (QAction* action : {caveAction_, terrainAction_, generateTerrainAction_, caveHolesAction_, caveBooleanAction_, caveStampAction_, randomCaveAction_, importModelAction_, pointLightAction_, sunLightAction_, sculptLargerAction_, sculptSmallerAction_}) {
         action->setEnabled(project);
     }
     for (QAction* action : std::as_const(prefabActions_)) {

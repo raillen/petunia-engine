@@ -39,6 +39,10 @@ pub const BODY_KINDS: [&str; 3] = ["static", "dynamic", "kinematic"];
 ///   the volume) with `radius`, blended over `smooth` meters (up to 2). `strength` is how far
 ///   inflate moves the surface (meters, negative deflates) or how hard flatten and smooth press
 ///   (0 to 1). Strokes apply in the order they were created.
+/// - `SculptStamp`: a mesh surface imprinted on a `Sculpt` after its strokes. `volume` is the
+///   persistent id of the cave, `operation` is `add` (rock behind the face) or `carve` (air behind
+///   it), `geometry` holds the triangles already in the cave's own space and `smooth` is the blend
+///   in meters (0 to 2). Stamps apply in the order they were created, after every stroke.
 /// - `PlayerStart`: where the player (and the fly camera) starts, facing `yaw_degrees`.
 /// - `Collider`: one named collision shape of an object (DR-27). Each collider is its own entity,
 ///   so an object can have many: `owner` is the object's persistent id and `name` is what scripts
@@ -149,6 +153,21 @@ pub fn register_standard_tables(world: &mut World) -> Result<(), WorldError> {
             .column("radius", ValueKind::Float, Value::Float(1.5))
             .column("smooth", ValueKind::Float, Value::Float(0.5))
             .column("strength", ValueKind::Float, Value::Float(0.0)),
+    )?;
+    world.define_table(
+        TableSpec::new("SculptStamp")
+            .column("volume", ValueKind::Int, Value::Int(0))
+            .column(
+                "operation",
+                ValueKind::Text,
+                Value::Text("carve".to_string()),
+            )
+            .column(
+                "geometry",
+                ValueKind::Mesh,
+                Value::Mesh(PolygonMesh::default()),
+            )
+            .column("smooth", ValueKind::Float, Value::Float(0.5)),
     )?;
     world.define_table(TableSpec::new("PlayerStart").column(
         "yaw_degrees",

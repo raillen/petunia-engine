@@ -21,10 +21,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use petunia_math::Vec3;
 
+use crate::stamp::{combine, reach, stamp_box, triangle_box, triangle_distance};
 use crate::{
-    Base, MAX_SAMPLES, MAX_SAMPLES_PER_AXIS, MAX_SMOOTH, MIN_CELL_SIZE, SculptError, Stroke,
-    StrokeMode, SurfaceMesh, Volume, apply_pointwise, box_distance, component_max, component_min,
-    falloff,
+    Base, MAX_SAMPLES, MAX_SAMPLES_PER_AXIS, MAX_SMOOTH, MIN_CELL_SIZE, SculptError, Stamp,
+    StampOperation, Stroke, StrokeMode, SurfaceMesh, Volume, apply_pointwise, box_distance,
+    component_max, component_min, falloff,
 };
 
 /// Cells per chunk edge.
@@ -155,6 +156,14 @@ fn influence_box(stroke: &Stroke, truncation: f32, cell: f32) -> Region {
     }
 }
 
+/// Every lattice sample a stamp can change: its box and the band around it.
+fn stamp_surface_box(stamp: &Stamp, cell: f32) -> Region {
+    match stamp_box(stamp) {
+        Some(boxed) => expand(boxed, reach(stamp, cell) + 2.0 * cell),
+        None => (Vec3::ZERO, Vec3::ZERO),
+    }
+}
+
 /// Where the surface can change when this stroke is the newest one: what to re-mesh.
 fn surface_box(stroke: &Stroke, cell: f32) -> Region {
     let margin = 2.0 * cell;
@@ -195,6 +204,14 @@ impl Layout {
         };
         for stroke in &volume.strokes {
             if let Some(grown) = growth_box(stroke) {
+                region = Some(region.map_or(grown, |known| union(known, grown)));
+            }
+        }
+        for stamp in &volume.stamps {
+            if stamp.operation == StampOperation::Add
+                && let Some(boxed) = stamp_box(stamp)
+            {
+                let grown = expand(boxed, stamp.smooth + 1.0);
                 region = Some(region.map_or(grown, |known| union(known, grown)));
             }
         }
@@ -300,6 +317,7 @@ pub struct Sculpture {
     settings: Option<Settings>,
     layout: Option<Layout>,
     strokes: Vec<Stroke>,
+    stamps: Vec<Stamp>,
     field: Vec<f32>,
     chunks: BTreeMap<[i32; 3], ChunkMesh>,
 }
@@ -324,8 +342,10 @@ impl Sculpture {
         let settings = Settings::of(volume, layout.cell);
         let fresh = self.settings != Some(settings) || self.layout.is_none();
         let same_layout = !fresh && self.layout == Some(layout);
-        let appended = same_layout
-            && volume.strokes.get(..self.strokes.len()) == Some(self.strokes.as_slice());
+        let strokes_same =
+            volume.strokes.get(..self.strokes.len()) == Some(self.strokes.as_slice());
+        let stamps_same = volume.stamps.get(..self.stamps.len()) == Some(self.stamps.as_slice());
+        let appended = same_layout && strokes_same && stamps_same;
 
         let mut dirty: Vec<Region> = Vec::new();
         if appended {
@@ -333,9 +353,18 @@ impl Sculpture {
                 self.apply(&layout, stroke);
                 dirty.push(surface_box(stroke, layout.cell));
             }
+            for stamp in volume.stamps.iter().skip(self.stamps.len()) {
+                self.apply_stamp(&layout, stamp);
+                dirty.push(stamp_surface_box(stamp, layout.cell));
+            }
         } else {
             if fresh {
                 self.chunks.clear();
+                let far = layout.position(layout.dims[0], layout.dims[1], layout.dims[2]);
+                dirty.push((layout.position(0, 0, 0), far));
+            } else if self.stamps != volume.stamps {
+                // A stamp reaches across its whole box: re-mesh everything rather than guess which
+                // chunks it may have touched.
                 let far = layout.position(layout.dims[0], layout.dims[1], layout.dims[2]);
                 dirty.push((layout.position(0, 0, 0), far));
             } else {
@@ -344,6 +373,7 @@ impl Sculpture {
             self.rebuild(volume, layout);
         }
         self.strokes = volume.strokes.clone();
+        self.stamps = volume.stamps.clone();
         self.settings = Some(settings);
         self.layout = Some(layout);
 
@@ -505,6 +535,9 @@ impl Sculpture {
                 self.apply(&layout, stroke);
             }
         }
+        for stamp in &volume.stamps {
+            self.apply_stamp(&layout, stamp);
+        }
     }
 
     /// Replays the strokes with the field cut into slabs of layers, one per thread. A stroke changes
@@ -522,6 +555,37 @@ impl Sculpture {
                 });
             }
         });
+    }
+
+    /// Imprints one stamp: every sample within the band of each triangle takes the signed distance
+    /// to that triangle, combined into the field. Applying triangle by triangle gives the same
+    /// result as walking the whole mesh per sample, for the cost of the band instead of the volume.
+    fn apply_stamp(&mut self, layout: &Layout, stamp: &Stamp) {
+        let band = reach(stamp, layout.cell);
+        for triangle in &stamp.triangles {
+            let Some((low, high)) = triangle_box(triangle) else {
+                continue;
+            };
+            let Some([(i0, i1), (j0, j1), (k0, k1)]) = layout.range(expand((low, high), band))
+            else {
+                continue;
+            };
+            for k in k0..=k1 {
+                for j in j0..=j1 {
+                    for i in i0..=i1 {
+                        let point = layout.position(i, j, k);
+                        let distance = triangle_distance(point, triangle);
+                        if !distance.is_finite() || distance.abs() > band {
+                            continue;
+                        }
+                        if let Some(slot) = self.field.get_mut(layout.index(i, j, k)) {
+                            *slot = combine(*slot, distance, stamp)
+                                .clamp(-layout.truncation, layout.truncation);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Applies one stroke to the samples it can reach.
@@ -907,6 +971,7 @@ mod tests {
             size,
             cell_size: 0.5,
             strokes,
+            stamps: Vec::new(),
         }
     }
 

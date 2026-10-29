@@ -104,9 +104,9 @@ O padrão é configurável no menu de configurações da engine. Corpos dinâmic
 | Gerar por semente | Caverna aleatória | Feito |
 | Fundir traços | Douglas-Peucker | Feito |
 | Facetada | Low poly | Feito |
-| *Stamp* de malha | Forma 3D | Novo |
+| *Stamp* de malha | Imprime a superfície da malha no campo | Feito (`sculpt.stamp_mesh`): grava a superfície numa banda; não transforma a malha em sólido (para isso, `sculpt.boolean`) |
 | Booleanos | Unir/subtrair/intersectar volumes | Feito (`sculpt.boolean`) |
-| Espelhar | Simetria | Novo |
+| Espelhar | Simetria | Feito (`sculpt.mirror`) |
 | Preencher | Fecha cavidades | Feito (`sculpt.fill`) |
 | Oco | Casca | Feito (`sculpt.hollow`) |
 | Deslocamento por ruído | Irregularidade orgânica | Feito (`sculpt.noise`) |

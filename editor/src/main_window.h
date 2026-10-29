@@ -149,6 +149,7 @@ private:
     QAction* generateTerrainAction_ = nullptr;
     QAction* caveHolesAction_ = nullptr;
     QAction* caveBooleanAction_ = nullptr;
+    QAction* caveStampAction_ = nullptr;
     // Criar > Luz: a bulb and a sun (DR-29).
     QAction* importModelAction_ = nullptr;
     QAction* pointLightAction_ = nullptr;

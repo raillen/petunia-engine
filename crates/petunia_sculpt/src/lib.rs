@@ -20,6 +20,7 @@ mod field;
 mod generate;
 mod path;
 mod simplify;
+mod stamp;
 
 pub use field::{ChunkMesh, Sculpture, Update};
 pub use generate::{GenerateParams, generate_cave};
@@ -40,6 +41,10 @@ pub const MAX_RADIUS: f32 = 64.0;
 /// Largest blend between a stroke and the rock around it (meters). It bounds how far a stroke can
 /// reach beyond its radius, which is what keeps one dab cheap.
 pub const MAX_SMOOTH: f32 = 2.0;
+/// A volume keeps at most this many mesh stamps, each of at most this many triangles. Stamps are
+/// re-read every frame, so they are for decoration and detail, not for scanned scenes.
+pub const MAX_STAMPS: usize = 8;
+pub const MAX_STAMP_TRIANGLES: usize = 4096;
 
 /// What fills the volume before any stroke.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -132,7 +137,43 @@ impl Stroke {
     }
 }
 
-/// A whole sculpted volume. Strokes apply in order.
+/// Which way a mesh stamp edits the rock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StampOperation {
+    /// Rock behind the face: a relief, a plate, the outside of an imported model.
+    Add,
+    /// Air behind the face: a groove, a carved pattern, a piece of a model dug into the rock.
+    Carve,
+}
+
+impl StampOperation {
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "add" => Some(Self::Add),
+            "carve" => Some(Self::Carve),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Add => "add",
+            Self::Carve => "carve",
+        }
+    }
+}
+
+/// A triangle surface imprinted on the rock, after the strokes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Stamp {
+    pub operation: StampOperation,
+    /// Triangles in the volume's own space (the editor bakes the source transform in).
+    pub triangles: Vec<[Vec3; 3]>,
+    /// Meters over which the stamp blends with the rock around it (`0` is a sharp edge).
+    pub smooth: f32,
+}
+
+/// A whole sculpted volume. Strokes apply in order, then the stamps, in their own order.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Volume {
     pub base: Base,
@@ -140,6 +181,7 @@ pub struct Volume {
     pub size: Vec3,
     pub cell_size: f32,
     pub strokes: Vec<Stroke>,
+    pub stamps: Vec<Stamp>,
 }
 
 /// Triangles ready for a renderer: positions and unit normals per vertex, three indices per
@@ -215,7 +257,7 @@ pub(crate) fn axis_distance(point: Vec3, start: Vec3, end: Vec3) -> f32 {
 }
 
 /// Polynomial smooth minimum: like `min`, rounded over `blend` meters.
-fn smooth_min(first: f32, second: f32, blend: f32) -> f32 {
+pub(crate) fn smooth_min(first: f32, second: f32, blend: f32) -> f32 {
     if blend <= 0.0 {
         return first.min(second);
     }
@@ -223,7 +265,7 @@ fn smooth_min(first: f32, second: f32, blend: f32) -> f32 {
     first.min(second) - weight * weight * blend * 0.25
 }
 
-fn smooth_max(first: f32, second: f32, blend: f32) -> f32 {
+pub(crate) fn smooth_max(first: f32, second: f32, blend: f32) -> f32 {
     -smooth_min(-first, -second, blend)
 }
 
@@ -277,6 +319,34 @@ impl Volume {
         if self.strokes.len() > MAX_STROKES {
             return Err(SculptError::TooManyStrokes(self.strokes.len()));
         }
+        if self.stamps.len() > MAX_STAMPS {
+            return Err(SculptError::Invalid("o volume passa de 8 carimbos"));
+        }
+        for stamp in &self.stamps {
+            if stamp.triangles.len() > MAX_STAMP_TRIANGLES {
+                return Err(SculptError::Invalid("um carimbo passa de 4096 triângulos"));
+            }
+            if !(stamp.smooth.is_finite() && (0.0..=MAX_SMOOTH).contains(&stamp.smooth)) {
+                return Err(SculptError::Invalid(
+                    "a suavização de um carimbo vai de 0 a 2 metros",
+                ));
+            }
+            let far = MAX_SIZE * 2.0;
+            for triangle in &stamp.triangles {
+                for point in triangle {
+                    let magnitude = absolute(*point);
+                    if !magnitude.is_finite()
+                        || magnitude.x > far
+                        || magnitude.y > far
+                        || magnitude.z > far
+                    {
+                        return Err(SculptError::Invalid(
+                            "um carimbo tem pontos não finitos ou longe demais",
+                        ));
+                    }
+                }
+            }
+        }
         if !(self.size.is_finite() && self.cell_size.is_finite()) {
             return Err(SculptError::Invalid("tamanho ou célula não finitos"));
         }
@@ -324,9 +394,9 @@ impl Volume {
         Ok(())
     }
 
-    /// Exact signed distance at a local point (negative inside rock), by walking the strokes.
-    /// Slow for many strokes and blind to Smooth strokes (they need the lattice); meshing uses the
-    /// baked field instead.
+    /// Exact signed distance at a local point (negative inside rock), by walking the strokes and
+    /// then the stamps. Slow for many strokes and blind to Smooth strokes (they need the lattice);
+    /// meshing uses the baked field instead.
     pub fn distance(&self, point: Vec3) -> f32 {
         let mut value = match self.base {
             Base::Solid => box_distance(point, self.size * 0.5),
@@ -334,6 +404,9 @@ impl Volume {
         };
         for stroke in &self.strokes {
             value = apply_pointwise(value, point, stroke);
+        }
+        for stamp in &self.stamps {
+            value = stamp::stamped_value(value, point, stamp, self.cell_size);
         }
         value
     }
@@ -363,6 +436,7 @@ mod tests {
             size,
             cell_size: 0.5,
             strokes,
+            stamps: Vec::new(),
         }
     }
 
@@ -397,6 +471,7 @@ mod tests {
             size: Vec3::ONE,
             cell_size: 0.25,
             strokes: vec![sphere(StrokeMode::Add, center, 2.0)],
+            stamps: Vec::new(),
         };
         let mesh = volume.mesh().expect("mesh");
         assert!(mesh.indices.len() > 300);
@@ -457,6 +532,30 @@ mod tests {
         assert!(volume.distance(Vec3::new(-5.0, 0.0, 0.0)) > 0.0);
         assert!(volume.distance(Vec3::new(5.0, 0.0, 0.0)) > 0.0);
         assert!(is_closed(&volume.mesh().expect("mesh")));
+    }
+
+    #[test]
+    fn a_stamp_carves_the_side_its_face_looks_away_from() {
+        let plate = Stamp {
+            operation: StampOperation::Carve,
+            triangles: vec![[
+                Vec3::new(-3.0, 0.0, -3.0),
+                Vec3::new(-3.0, 0.0, 3.0),
+                Vec3::new(3.0, 0.0, 3.0),
+            ]],
+            smooth: 0.0,
+        };
+        let volume = Volume {
+            stamps: vec![plate],
+            ..solid(Vec3::new(16.0, 6.0, 16.0), Vec::new())
+        };
+        let below = volume.distance(Vec3::new(0.0, -0.5, 0.0));
+        let above = volume.distance(Vec3::new(0.0, 0.5, 0.0));
+        let outside = volume.distance(Vec3::new(6.0, -0.5, 0.0));
+        assert!(below > 0.0, "air below the plate: {below}");
+        assert!(above < 0.0, "rock above the plate: {above}");
+        assert!(outside < 0.0, "rock outside the plate: {outside}");
+        assert!(volume.mesh().expect("mesh").indices.len() > 6);
     }
 
     #[test]
