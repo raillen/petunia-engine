@@ -48,6 +48,7 @@ São **24 decisões**. Estados possíveis:
 | **DR-31** | Prefabs embutidos e o nó Esperar | **ACEITA** (2026-10-26, "prossiga com a implementação"; N4 implementado) | Porta, Item coletável e Ponto de nascimento como moldes de linhas + grafos; `Esperar` compila para uma função por espera |
 | **DR-24** | Workspaces e prioridades antes da API | **EM PARTE ACEITA** (andares, cavernas B) | Mapa (com Jogar), Pintura sem UV, Animação, Efeitos por nós; antes da API: andares, cavernas, terreno, prefabs, Jogar ([análise](../02-arquitetura/14-workspaces-e-prioridades.md)) |
 | **DR-33** | Terreno, rios e estradas | **FEITA NO BRANCH** (2026-10-28, `feat/mundo-natural-rios-estradas`) | Spline Bézier por comprimento de arco, perfis varridos, escavação/aplainamento/aterro, descida do rio, cruzamentos, lagos, quedas, confluências e grafo de navegação; depois da aceitação: comandos e consultas, barra no editor, gravação na cena, convés de ponte, leito sólido na física, pincel de erosão, pincel de ruído, pincel "passo" por teclado e carimbos de terreno. **Faltam** decals (`DR-12` é proposta), LOD em quadtree, tubo de bueiro e partículas ([arquitetura](../02-arquitetura/04-terreno-rios-estradas.md)) |
+| **DR-34** | Giro do carimbo de terreno | PROPOSTA | Ângulo por carimbo (`rotation`, em graus) aplicado ao deslocamento dentro do disco, campo **Girar** só no modo Carimbo e o mesmo estado no passo por teclado |
 
 ---
 
@@ -675,9 +676,30 @@ Se uma biblioteca for necessária mais tarde, passa no checklist de admissão an
 
 **Continua fora:** decals (bloqueados pelo `DR-12`, que é proposta), LOD em quadtree, tubo visível de bueiro e partículas na queda.
 
-**Não verificado:** a janela na sessão real do usuário; a evidência de janela é o teste de fumaça no display virtual (terreno, alturas pintadas, erosão, ruído, **passo por teclado e desfazer**, **carimbo de cratera e de monte**, rio, estrada e **ponte**), nenhuma imagem foi tirada na sessão real. O convés da ponte é provado pelo teste de malha e pelo quadro entregue à janela, não pela captura do teste de fumaça, cuja câmera fica atrás do barranco levantado. O passo por teclado **não** foi testado com leitor de tela: o texto do rodapé existe, não se sabe se é anunciado. Os carimbos **não** giram (a crista corre sempre ao longo do eixo x do mundo) e a forma **platô** só tem teste no domínio, não na janela.
+**Não verificado:** a janela na sessão real do usuário; a evidência de janela é o teste de fumaça no display virtual (terreno, alturas pintadas, erosão, ruído, **passo por teclado e desfazer**, **carimbo de cratera e de monte**, rio, estrada e **ponte**), nenhuma imagem foi tirada na sessão real. O convés da ponte é provado pelo teste de malha e pelo quadro entregue à janela, não pela captura do teste de fumaça, cuja câmera fica atrás do barranco levantado. O passo por teclado **não** foi testado com leitor de tela: o texto do rodapé existe, não se sabe se é anunciado. Os carimbos **não** giram (a crista corre sempre ao longo do eixo x do mundo; ver `DR-34`) e a forma **platô** só tem teste no domínio, não na janela.
 
 **Reabrir se:** a integração com o editor precisar de outro formato de dados, ou se o custo de amostragem por comprimento de arco pesar em rios muito longos.
+
+---
+
+## DR-34 — Giro do carimbo de terreno · PROPOSTA
+
+**Pedido:** fechar o último limite declarado do carimbo do `DR-33`. Hoje a forma é sempre aplicada **alinhada ao mundo** — a crista corre ao longo do eixo x —, então não há como levantar uma crista perpendicular a um rio ou a uma estrada sem girar o terreno inteiro.
+
+**Opções**
+1. **Ângulo por carimbo**, em graus, no próprio registro do carimbo (`rotation`, padrão `0`). O motor gira o deslocamento antes de avaliar a forma, então a silhueta continua sendo a mesma função de antes, apenas orientada: a força segue em metros e a borda segue zerando, o que mantém a emenda invisível entre carimbos vizinhos. Na barra, um campo **Girar** aparece no modo Carimbo ao lado de **Forma**; o passo por teclado lê o mesmo estado e a frase do rodapé ganha o ângulo. Cenas antigas continuam válidas (`serde(default)`), não há comando novo e uma pincelada inteira continua sendo **um** desfazer.
+2. **Giro pela direção da pincelada:** a crista segue o traço. Não custa campo na barra, mas o resultado deixa de ser previsível — o mesmo clique em pontos diferentes gira sem aviso, um carimbo parado não tem direção e o passo por teclado, que não tem traço, não teria o que seguir.
+3. **Sem giro:** entregar mais formas fixas (vala, degrau, encosta) e considerar a orientação resolvida por composição de formas.
+
+**Recomendação:** **1.** É o menor acréscimo que resolve o problema real (crista perpendicular a um rio ou a uma estrada, encosta virada para o vale), cabe no formato de dados que já vai para a cena e mantém a regra "carimbo é dado, não gesto". A opção 2 não tem como ser testada com firmeza: depende do ponteiro, que é justamente o que a regra de acessibilidade quer tornar opcional.
+
+**Detalhes a decidir junto**
+1. **Passo do campo:** 15° com `Ctrl` para 1°, ou ângulo livre digitado.
+2. **Alcance:** recomendo que o giro valha **só para carimbos**. Um pincel radial (subir, descer, suavizar, erosão, ruído) não tem orientação, e um campo que não muda nada ensina a interface errada.
+
+**Fora desta proposta:** espelhar a forma (a crista é simétrica; o espelho só faria diferença numa forma assimétrica futura) e pré-visualizar a silhueta no viewport antes do clique.
+
+**Para fechar:** aceitar a opção 1 e escolher o passo do campo. Depois disso o trabalho é o de sempre: `rotation` no registro do carimbo, teste no domínio (mesma forma girada 90° troca os eixos), teste de fluxo no editor e uma verificação no teste de fumaça.
 
 ---
 
@@ -694,4 +716,4 @@ Reabrir se:  condição objetiva
 
 ## Próximo passo
 
-**Responder `DR-11`, pergunta 1** (esta pasta é a retomada do `petunia-game-engine`?) e **`DR-01`** (direitos autorais do Petunia3D). Elas destravam as outras.
+**Responder `DR-34`** (giro do carimbo, o último item declarado dos carimbos) e **`DR-11`, pergunta 1** (esta pasta é a retomada do `petunia-game-engine`?). A `DR-01` está decidida desde 2026-10-24.

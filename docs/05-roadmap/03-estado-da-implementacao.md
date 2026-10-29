@@ -48,7 +48,7 @@ Decisão: [DR-33](../06-decisoes/registro-de-decisoes.md) e o complemento dela. 
 
 **Navegação do combo por posição (2026-10-29):** o mesmo teste escolhia o modo com `End` (último item) e `End`+`Up` (penúltimo). Ao entrar **Carimbo** no fim da lista, os dois atalhos passaram a apontar para outros modos e a erosão virou carimbo sem nenhum aviso. Agora um auxiliar `pick_mode` conta `Home` + N × `Down`, e a ordem dos modos está escrita ao lado para conferência.
 
-**Ainda falta (declarado):** decals de faixa (bloqueado: `DR-12` é só proposta), LOD em quadtree, tubo visível de bueiro e partículas na queda.
+**Ainda falta (declarado):** decals de faixa (bloqueado: `DR-12` é só proposta), LOD em quadtree, tubo visível de bueiro, partículas na queda e o giro do carimbo (`DR-34` é proposta).
 
 **Não verificado:** a janela na sua sessão real (a evidência é o display virtual); leitor de tela (o passo por teclado escreve no rodapé, mas **não foi testado** se o leitor de tela anuncia); o mesmo passo no pincel de esculpir caverna; campo numérico para `times` na barra; terreno grande (desempenho e memória); os carimbos **não giram** (a crista corre sempre ao longo do eixo x do mundo) e as formas **platô** e **crista** só têm teste no domínio — na janela foram vistos a cratera e o monte.
 
