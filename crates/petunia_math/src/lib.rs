@@ -4,10 +4,12 @@
 //! network protocol, so they never depend on a third-party math library. Renderer adapters
 //! convert them at the boundary.
 
+mod noise;
 mod polygon;
 mod solid;
 mod spline;
 
+pub use noise::{NOISE_LATTICE_METERS, fractal_noise_2d, lattice_value, value_noise_2d};
 pub use polygon::{
     MAX_FACE_CORNERS, MAX_MESH_CORNERS, MAX_MESH_FACES, MAX_MESH_VERTICES, PolygonError,
     PolygonMesh,

@@ -167,10 +167,20 @@ impl EditorSession {
                 request.get("mode").and_then(Json::as_str),
                 optional_number(request, "radius"),
                 optional_number(request, "strength"),
+                request.get("stamp").and_then(Json::as_str),
             ),
             "terrain.begin" => self.terrain_begin(pointer(request)?),
             "terrain.drag" => self.terrain_drag(pointer(request)?),
             "terrain.end" => self.terrain_end(),
+            // One stamp without a drag (the keyboard "step" brush); `times` repeats it as ONE undo
+            // step. The engine clamps it again to its own ceiling.
+            "terrain.step" => self.terrain_step(
+                pointer(request)?,
+                request
+                    .get("times")
+                    .and_then(Json::as_u64)
+                    .map_or(1, |times| times.min(64) as u32),
+            ),
             "terrain.cancel" => Ok(self.terrain_cancel()),
             "natural.point" => self.natural_point(pointer(request)?),
             "natural.pop" => Ok(self.natural_pop()),

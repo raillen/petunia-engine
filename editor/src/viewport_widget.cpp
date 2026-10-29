@@ -50,7 +50,8 @@ ViewportWidget::ViewportWidget(EngineBridge* bridge, QWidget* parent)
     setAccessibleDescription(QStringLiteral(
         "Vista 3D da cena. Setas movem a câmera. Segure o botão direito do mouse para girar "
         "e voar com W A S D Q E. Clique esquerdo seleciona ou arrasta o gizmo; "
-        "com Empurrar/Puxar ou Extrudar, arraste uma face."));
+        "com Empurrar/Puxar ou Extrudar, arraste uma face. Com a ferramenta de terreno, "
+        "a barra de espaços aplica um carimbo do pincel sem arrastar."));
     overlay_ = new ViewportOverlay(bridge_, this);
     navCube_ = new NavCubeWidget(bridge_, this);
     connect(navCube_, &NavCubeWidget::viewChanged, this, [this] {
@@ -369,6 +370,8 @@ bool ViewportWidget::event(QEvent* event) {
             (looking_ && plain && isLetterMovementKey(key->key())) ||
             ((gizmoDragging_ || faceDragging_) && key->key() == Qt::Key_Escape) ||
             (freeMode_ && plain && isFreeModeKey(key->key())) ||
+            (plain && key->key() == Qt::Key_Space && hasProject() &&
+             currentTool() == QLatin1String("terrain")) ||
             ((pathPending() || naturalPathPending()) &&
              (key->key() == Qt::Key_Escape || key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter ||
               key->key() == Qt::Key_Backspace))) {
@@ -380,6 +383,12 @@ bool ViewportWidget::event(QEvent* event) {
         auto* key = static_cast<QKeyEvent*>(event);
         if (key->key() == Qt::Key_Tab && !(key->modifiers() & (Qt::ControlModifier | Qt::AltModifier))) {
             emit editModeToggleRequested();
+            return true;
+        }
+        // The keyboard path of the terrain brush: one press, one stamp, no drag at all.
+        if (key->key() == Qt::Key_Space && !(key->modifiers() & (Qt::ControlModifier | Qt::AltModifier)) &&
+            hasProject() && currentTool() == QLatin1String("terrain") && !naturalDragging_) {
+            applyTerrainStep();
             return true;
         }
         if (freeMode_ && isFreeModeKey(key->key())) {
@@ -454,6 +463,23 @@ void ViewportWidget::cancelGizmoDrag() {
     bridge_->call(QStringLiteral("gizmo.cancel"));
     unsetCursor();
     emit selectionChanged();  // refresh everything: the value is back to what it was
+    update();
+}
+
+// The "step" brush (docs/04-acessibilidade/01-editor.md, Pilar 1: "esculpir/pintar sem arrastar"):
+// one press stamps the current mode, radius and strength where the pointer is, without holding the
+// button or dragging. With the pointer outside the view the stamp lands in the middle of the
+// screen, so the keyboard alone is enough (the arrows already move the camera).
+void ViewportWidget::applyTerrainStep() {
+    const QPoint position = rect().contains(brushPointer_) ? brushPointer_ : rect().center();
+    brushPointer_ = position;
+    const Reply reply = bridge_->call(QStringLiteral("terrain.step"), pointerFields(position));
+    if (!reply.ok) {
+        emit renderFailed(reply.explanation());
+        return;
+    }
+    emit terrainStepped(reply.result.toObject());
+    emit selectionChanged();  // one new undo step: history and buttons refresh
     update();
 }
 
@@ -554,6 +580,7 @@ void ViewportWidget::mousePressEvent(QMouseEvent* event) {
         }
         if (hasProject() && currentTool() == QLatin1String("terrain")) {
             const Reply reply = bridge_->call(QStringLiteral("terrain.begin"), pointerFields(event->pos()));
+            brushPointer_ = event->pos();
             if (!reply.ok) {
                 emit renderFailed(reply.explanation());
             } else {
@@ -613,6 +640,7 @@ void ViewportWidget::mouseMoveEvent(QMouseEvent* event) {
     }
     if (!looking_ && event->buttons() == Qt::NoButton && hasProject() && (sculptTool() || naturalTool())) {
         // The brush ring follows the mouse over the cave.
+        brushPointer_ = event->pos();
         bridge_->call(QStringLiteral("pointer.hover"), pointerFields(event->pos()));
         update();
         return;

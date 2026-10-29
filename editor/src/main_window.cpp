@@ -1175,7 +1175,9 @@ void MainWindow::buildNaturalBar() {
     naturalMode_->addItem(QStringLiteral("Descer"), QStringLiteral("lower"));
     naturalMode_->addItem(QStringLiteral("Suavizar"), QStringLiteral("smooth"));
     naturalMode_->addItem(QStringLiteral("Nivelar"), QStringLiteral("flatten"));
+    naturalMode_->addItem(QStringLiteral("Ruído"), QStringLiteral("noise"));
     naturalMode_->addItem(QStringLiteral("Erosão"), QStringLiteral("erode"));
+    naturalMode_->addItem(QStringLiteral("Carimbo"), QStringLiteral("stamp"));
     WheelGuard::protect(naturalMode_);
     naturalTerrainItems_.append(naturalBar_->addWidget(naturalMode_));
     connect(naturalMode_, &QComboBox::activated, this, [this](int index) {
@@ -1202,6 +1204,51 @@ void MainWindow::buildNaturalBar() {
     naturalTerrainItems_.append(naturalBar_->addWidget(naturalStrengthBox_));
     connect(naturalStrengthBox_, &QDoubleSpinBox::editingFinished, this, [this] {
         perform(QStringLiteral("terrain.mode"), QJsonObject{{"strength", naturalStrengthBox_->value()}}, false);
+    });
+
+    // The shape of a "Carimbo". It only shows while that mode is chosen, so the bar keeps the same
+    // width for the everyday brushes.
+    naturalStampItems_.append(naturalBar_->addWidget(new QLabel(QStringLiteral("Forma"))));
+    naturalTerrainItems_.append(naturalStampItems_.last());
+    naturalStampBox_ = new QComboBox;
+    naturalStampBox_->setAccessibleName(QStringLiteral("Forma do carimbo de terreno"));
+    naturalStampBox_->setToolTip(QStringLiteral("A silhueta que o carimbo grava no terreno"));
+    naturalStampBox_->addItem(QStringLiteral("Cratera"), QStringLiteral("crater"));
+    naturalStampBox_->addItem(QStringLiteral("Monte"), QStringLiteral("mound"));
+    naturalStampBox_->addItem(QStringLiteral("Platô"), QStringLiteral("plateau"));
+    naturalStampBox_->addItem(QStringLiteral("Crista"), QStringLiteral("ridge"));
+    WheelGuard::protect(naturalStampBox_);
+    naturalStampItems_.append(naturalBar_->addWidget(naturalStampBox_));
+    naturalTerrainItems_.append(naturalStampItems_.last());
+    connect(naturalStampBox_, &QComboBox::activated, this, [this](int index) {
+        perform(QStringLiteral("terrain.mode"), QJsonObject{{"stamp", naturalStampBox_->itemData(index).toString()}}, false);
+    });
+
+    // The step brush (Space) says what it did. The mode label comes from this combo, so it is the
+    // same word the creator sees in the bar, and the height confirms the result without looking.
+    connect(viewport_, &ViewportWidget::terrainStepped, this, [this](const QJsonObject& result) {
+        QString mode = QStringLiteral("pincel");
+        const int index = naturalMode_->findData(result.value(QStringLiteral("mode")).toString());
+        if (index >= 0) {
+            mode = naturalMode_->itemText(index);
+        }
+        const int steps = result.value(QStringLiteral("steps")).toInt();
+        QString text = steps > 1 ? QStringLiteral("Passo: %1 ×%2").arg(mode).arg(steps)
+                                 : QStringLiteral("Passo: %1").arg(mode);
+        if (result.value(QStringLiteral("stamp")).isString()) {
+            const int shape = naturalStampBox_->findData(result.value(QStringLiteral("stamp")).toString());
+            if (shape >= 0) {
+                text += QStringLiteral(" (%1)").arg(naturalStampBox_->itemText(shape));
+            }
+        }
+        text += QStringLiteral(", raio %1 m")
+                    .arg(QLocale().toString(result.value(QStringLiteral("radius")).toDouble(), 'f', 2));
+        if (result.value(QStringLiteral("height")).isDouble()) {
+            text += QStringLiteral(". Altura agora %1 m")
+                        .arg(QLocale().toString(result.value(QStringLiteral("height")).toDouble(), 'f', 2));
+        }
+        text += QStringLiteral(". Ctrl+Z desfaz.");
+        statusBar()->showMessage(text, 6000);
     });
 
     naturalPathItems_.append(naturalBar_->addWidget(new QLabel(QStringLiteral("Largura"))));
@@ -1279,7 +1326,10 @@ void MainWindow::syncNaturalBar(const QJsonObject& snapshot) {
     const QSignalBlocker c(naturalStrengthBox_);
     const QSignalBlocker d(naturalWidthBox_);
     const QSignalBlocker e(naturalDepthBox_);
+    const QSignalBlocker g(naturalStampBox_);
     naturalMode_->setCurrentIndex(qMax(0, naturalMode_->findData(state.value(QStringLiteral("mode")).toString())));
+    naturalStampBox_->setCurrentIndex(
+        qMax(0, naturalStampBox_->findData(state.value(QStringLiteral("stamp")).toString())));
     if (!naturalRadiusBox_->hasFocus()) {
         naturalRadiusBox_->setValue(state.value(QStringLiteral("radius")).toDouble(4.0));
     }
@@ -1298,12 +1348,15 @@ void MainWindow::syncNaturalBar(const QJsonObject& snapshot) {
     const bool riverTool = tool == QLatin1String("river_path");
     const bool roadTool = tool == QLatin1String("road_path");
     const bool pathTool = riverTool || roadTool;
+    const bool stampMode = state.value(QStringLiteral("mode")).toString() == QLatin1String("stamp");
     const auto showItems = [](const QList<QAction*>& items, bool visible) {
         for (QAction* item : items) {
             item->setVisible(visible);
         }
     };
     showItems(naturalTerrainItems_, terrainTool);
+    // The shape belongs to the stamp mode only; the rest of the bar keeps its place either way.
+    showItems(naturalStampItems_, terrainTool && stampMode);
     showItems(naturalPathItems_, pathTool);
     showItems(naturalRiverItems_, riverTool);
     showItems(naturalRoadItems_, roadTool);
@@ -1864,6 +1917,7 @@ void MainWindow::showShortcuts() {
             "P empurrar/puxar uma face · E extrudar · Ctrl+Alt+C cavar · Ctrl+Alt+H tornar oco · Alt+P editar pivô<br>"
             "Ctrl+PageUp / Ctrl+PageDown: subir e descer um andar · Shift+A menu de primitivas<br>"
             "B esculpir caverna (arraste cava; com Ctrl adiciona rocha) · [ e ] raio do pincel<br>"
+            "T terreno · Y rio · U estrada · com o terreno, a barra de espaços aplica um carimbo sem arrastar<br>"
             "No gizmo: seta = eixo, quadrado = plano, centro = tela; Ctrl inverte o snap; Esc cancela<br><br>"
             "<b>Edição</b><br>"
             "Tab modo edição de malha · 1 vértice · 2 aresta · 3 face<br>"

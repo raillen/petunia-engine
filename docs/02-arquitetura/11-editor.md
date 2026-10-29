@@ -146,8 +146,9 @@ Só aparecem para as ferramentas `terrain`, `river_path` e `road_path`, e cada f
 
 | Operação | Campos | O que faz |
 |---|---|---|
-| `terrain.mode` | `mode` (`raise`, `lower`, `smooth`, `flatten`, `erode`), `radius`, `strength` | Modo, raio e força do pincel de terreno (os campos da barra) |
+| `terrain.mode` | `mode` (`raise`, `lower`, `smooth`, `flatten`, `noise`, `erode`, `stamp`), `radius`, `strength`, `stamp` (`crater`, `mound`, `plateau`, `ridge`) | Modo, raio, força e forma do pincel de terreno (os campos da barra); a forma só aparece no modo carimbo |
 | `terrain.begin` · `terrain.drag` · `terrain.end` · `terrain.cancel` | pixels | Pincelada: a primeira **cria** o terreno, cada ponto empilha um carimbo e soltar vira **um** `terrain.paint` (um desfazer) |
+| `terrain.step` | pixels, `times` | Passo por teclado (barra de espaços): um carimbo do modo atual no ponteiro, **sem arrastar**; responde com modo, forma do carimbo, raio, força, ponto e a altura dali; `times` repete no mesmo ponto e tudo vira **um** `terrain.paint` |
 | `natural.point` · `natural.pop` · `natural.commit` · `natural.cancel` | pixels | Pontos do rio (`Y`) ou da estrada (`U`); `Enter` vira `path.create` e `Backspace` tira o último ponto |
 | `natural.width` | `width`, `depth` | Largura da estrada e profundidade do rio nos passos seguintes |
 | Botão **Pontes e bueiros** | — | Envia `road.detect_structures` para a estrada selecionada e escreve no rodapé quantas pontes e bueiros saíram; sem estrada selecionada, fica desabilitado |

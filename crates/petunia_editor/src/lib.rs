@@ -537,6 +537,65 @@ mod tests {
             "erosion lowered the peak: {eroded_height} >= {raised}"
         );
 
+        // The noise brush adds detail on the spot without lifting the patch as a whole.
+        let noise_mode = call(
+            &mut session,
+            json!({ "op": "terrain.mode", "mode": "noise" }),
+        );
+        assert_eq!(noise_mode["ok"], true, "{noise_mode}");
+        assert_eq!(noise_mode["result"]["mode"], "noise", "{noise_mode}");
+        let roughened = call(
+            &mut session,
+            json!({
+                "op": "command.execute",
+                "command": "terrain.paint",
+                "payload": {
+                    "terrain": terrain,
+                    "stamps": [{
+                        "center": {"x": 40.0, "y": 0.0, "z": 40.0},
+                        "radius": 4.0,
+                        "strength": 1.0,
+                        "mode": "noise"
+                    }]
+                }
+            }),
+        );
+        assert_eq!(roughened["ok"], true, "{roughened}");
+        let height_at = |session: &mut EditorSession, x: f64, z: f64| {
+            call(
+                session,
+                json!({ "op": "query.run", "query": "terrain.sample", "payload": { "terrain": terrain, "x": x, "z": z } }),
+            )["result"]["height"]
+                .as_f64()
+                .unwrap_or(0.0)
+        };
+        let samples = [
+            (38.5, 40.0),
+            (39.25, 41.5),
+            (40.75, 39.5),
+            (41.5, 41.0),
+            (40.0, 38.5),
+        ];
+        let heights: Vec<f64> = samples
+            .iter()
+            .map(|(x, z)| height_at(&mut session, *x, *z))
+            .collect();
+        let detailed = heights.iter().filter(|height| height.abs() > 0.05).count();
+        assert!(detailed >= 3, "the noise left the ground flat: {heights:?}");
+        assert!(
+            heights.iter().all(|height| height.abs() <= 2.0),
+            "the noise went past twice the strength: {heights:?}"
+        );
+        assert_eq!(call(&mut session, json!({ "op": "edit.undo" }))["ok"], true);
+        let restored: Vec<f64> = samples
+            .iter()
+            .map(|(x, z)| height_at(&mut session, *x, *z))
+            .collect();
+        assert!(
+            restored.iter().all(|height| height.abs() < 1.0e-4),
+            "one undo did not bring the ground back: {restored:?}"
+        );
+
         let mut spline = petunia_math::CubicBezierSpline::new();
         spline.points.push(petunia_math::SplinePoint {
             position: petunia_math::Vec3::new(0.0, 2.0, 0.0),
@@ -636,6 +695,98 @@ mod tests {
             json!({ "op": "query.run", "query": "path.report", "payload": { "entity": river_id } }),
         );
         assert_eq!(report["result"]["kind"], "river", "{report}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_step_brush_raises_the_terrain_without_a_drag_and_one_undo_takes_it_back() {
+        let root = scratch_dir("terrain_step");
+        let mut session = EditorSession::new().expect("session");
+        call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "Passo" }),
+        );
+        call(&mut session, json!({ "op": "tool.set", "tool": "terrain" }));
+        // Exactly what the window sends when the terrain tool is active and Space is pressed: a
+        // pointer position and how many times to stamp. No `terrain.begin`, no drag, no release.
+        let stepped = call(
+            &mut session,
+            json!({
+                "op": "terrain.step",
+                "x": 720.0, "y": 560.0, "width": 1440.0, "height": 900.0,
+                "times": 3
+            }),
+        );
+        assert_eq!(stepped["ok"], true, "{stepped}");
+        let result = &stepped["result"];
+        assert_eq!(result["steps"].as_u64(), Some(3), "{stepped}");
+        assert_eq!(result["mode"], "raise", "{stepped}");
+        let terrain = result["terrain"].as_u64().expect("terrain");
+        let height = result["height"].as_f64().expect("height");
+        assert!(
+            height > 0.2,
+            "três passos de 0,5 m deixaram {height} m: {stepped}"
+        );
+        let x = result["point"]["x"].as_f64().expect("x");
+        let z = result["point"]["z"].as_f64().expect("z");
+
+        // The step is ONE undo step: the ground goes back to flat, not to two thirds of it.
+        assert_eq!(call(&mut session, json!({ "op": "edit.undo" }))["ok"], true);
+        let after = call(
+            &mut session,
+            json!({ "op": "query.run", "query": "terrain.sample", "payload": { "terrain": terrain, "x": x, "z": z } }),
+        );
+        assert!(
+            after["result"]["height"].as_f64().unwrap_or(1.0).abs() < 1.0e-4,
+            "{after}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_crater_stamp_carves_a_bowl_with_a_bank_in_one_undo_step() {
+        let root = scratch_dir("terrain_stamp");
+        let mut session = EditorSession::new().expect("session");
+        call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "Carimbo" }),
+        );
+        call(&mut session, json!({ "op": "tool.set", "tool": "terrain" }));
+        // The same op the options bar sends: a named shape instead of a plain raise.
+        let options = call(
+            &mut session,
+            json!({ "op": "terrain.mode", "mode": "stamp", "stamp": "crater", "radius": 8.0, "strength": 2.0 }),
+        );
+        assert_eq!(options["ok"], true, "{options}");
+        assert_eq!(options["result"]["mode"], "stamp", "{options}");
+        assert_eq!(options["result"]["stamp"], "crater", "{options}");
+        let stamped = call(
+            &mut session,
+            json!({ "op": "terrain.step", "x": 720.0, "y": 560.0, "width": 1440.0, "height": 900.0 }),
+        );
+        assert_eq!(stamped["ok"], true, "{stamped}");
+        assert_eq!(stamped["result"]["stamp"], "crater", "{stamped}");
+        let terrain = stamped["result"]["terrain"].as_u64().expect("terrain");
+        let x = stamped["result"]["point"]["x"].as_f64().expect("x");
+        let z = stamped["result"]["point"]["z"].as_f64().expect("z");
+
+        let height_at = |session: &mut EditorSession, x: f64, z: f64| -> f64 {
+            let sampled = call(
+                session,
+                json!({ "op": "query.run", "query": "terrain.sample", "payload": { "terrain": terrain, "x": x, "z": z } }),
+            );
+            sampled["result"]["height"].as_f64().unwrap_or(f64::NAN)
+        };
+        let middle = height_at(&mut session, x, z);
+        // The bank sits at 0.72 of the radius, the strongest point of the crater rim.
+        let bank = height_at(&mut session, x + 8.0 * 0.72, z);
+        assert!(middle < -1.5, "the middle is a bowl: {middle} ({stamped})");
+        assert!(bank > 0.2, "the rim is a bank: {bank} ({stamped})");
+
+        // One stroke, one undo: the whole shape goes back at once.
+        assert_eq!(call(&mut session, json!({ "op": "edit.undo" }))["ok"], true);
+        let after = height_at(&mut session, x, z);
+        assert!(after.abs() < 1.0e-4, "undo left {after} m behind");
         let _ = std::fs::remove_dir_all(&root);
     }
 

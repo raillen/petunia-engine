@@ -162,6 +162,8 @@ private:
     QToolBar* sculptBar_ = nullptr;
     QToolBar* naturalBar_ = nullptr;
     QComboBox* naturalMode_ = nullptr;
+    // Which shape a "Carimbo" stroke stamps. Only shown while that mode is selected.
+    QComboBox* naturalStampBox_ = nullptr;
     QDoubleSpinBox* naturalRadiusBox_ = nullptr;
     QDoubleSpinBox* naturalStrengthBox_ = nullptr;
     QDoubleSpinBox* naturalWidthBox_ = nullptr;
@@ -171,6 +173,7 @@ private:
     // Items of the options bar, grouped by the tool that uses them. A widget inside a QToolBar
     // follows the visibility of its action, so the actions are what gets toggled.
     QList<QAction*> naturalTerrainItems_;
+    QList<QAction*> naturalStampItems_;
     QList<QAction*> naturalPathItems_;
     QList<QAction*> naturalRiverItems_;
     QList<QAction*> naturalRoadItems_;

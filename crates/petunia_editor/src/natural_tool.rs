@@ -4,10 +4,10 @@
 //! `terrain.paint` command on release. Rivers and roads are drawn point by point and committed
 //! as one `path.create` command. Both use the same click surface the other tools use.
 
-use petunia_commands::CommandRecord;
+use petunia_commands::{CommandRecord, QueryRecord, run_query};
 use petunia_math::{Color, CubicBezierSpline, SplinePoint, Vec3};
 use petunia_render::OverlayItem;
-use petunia_world::{PersistentId, Value};
+use petunia_world::{PersistentId, StampShape, Value};
 use serde_json::{Value as Json, json};
 
 use crate::failure::Failure;
@@ -19,6 +19,8 @@ const TERRAIN_RING_COLOR: Color = Color::new(1.0, 0.82, 0.25, 1.0);
 const RIVER_COLOR: Color = Color::new(0.35, 0.85, 1.0, 1.0);
 const ROAD_COLOR: Color = Color::new(0.95, 0.55, 0.25, 1.0);
 const STAMP_SPACING_RATIO: f32 = 0.35;
+/// Ceiling for `terrain.step`: enough to shape a crater without one huge undo step.
+const MAX_STEP_TIMES: u32 = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TerrainPaintMode {
@@ -26,7 +28,10 @@ pub(crate) enum TerrainPaintMode {
     Lower,
     Smooth,
     Flatten,
+    Noise,
     Erode,
+    /// A named shape (`StampShape`) instead of a raised or lowered patch.
+    Stamp,
 }
 
 impl TerrainPaintMode {
@@ -36,7 +41,9 @@ impl TerrainPaintMode {
             "lower" | "down" => Some(Self::Lower),
             "smooth" => Some(Self::Smooth),
             "flatten" | "level" => Some(Self::Flatten),
+            "noise" | "rough" => Some(Self::Noise),
             "erode" => Some(Self::Erode),
+            "stamp" | "carimbo" => Some(Self::Stamp),
             _ => None,
         }
     }
@@ -47,7 +54,9 @@ impl TerrainPaintMode {
             Self::Lower => "lower",
             Self::Smooth => "smooth",
             Self::Flatten => "flatten",
+            Self::Noise => "noise",
             Self::Erode => "erode",
+            Self::Stamp => "stamp",
         }
     }
 }
@@ -71,6 +80,8 @@ impl NaturalPathKind {
 pub(crate) struct NaturalState {
     pub terrain: Option<u64>,
     pub mode: TerrainPaintMode,
+    /// Which shape a `stamp` stroke uses. Kept across mode changes, like radius and strength.
+    pub stamp: StampShape,
     pub radius: f32,
     pub strength: f32,
     pub path_kind: Option<NaturalPathKind>,
@@ -88,6 +99,7 @@ impl Default for NaturalState {
         Self {
             terrain: None,
             mode: TerrainPaintMode::Raise,
+            stamp: StampShape::Crater,
             radius: 4.0,
             strength: 0.5,
             path_kind: None,
@@ -203,11 +215,19 @@ impl EditorSession {
         mode: Option<&str>,
         radius: Option<f32>,
         strength: Option<f32>,
+        stamp: Option<&str>,
     ) -> Result<Json, Failure> {
         if let Some(name) = mode {
             self.natural.mode = TerrainPaintMode::parse(name).ok_or_else(|| {
                 Failure::bad_request(&format!(
-                    "modo de terreno `{name}` desconhecido (raise, lower, smooth, flatten ou erode)"
+                    "modo de terreno `{name}` desconhecido (raise, lower, smooth, flatten, noise, erode ou stamp)"
+                ))
+            })?;
+        }
+        if let Some(name) = stamp {
+            self.natural.stamp = StampShape::parse(name).ok_or_else(|| {
+                Failure::bad_request(&format!(
+                    "carimbo `{name}` desconhecido (crater, mound, plateau ou ridge)"
                 ))
             })?;
         }
@@ -238,6 +258,11 @@ impl EditorSession {
             && let Some(object) = stamp.as_object_mut()
         {
             object.insert("target_height".to_string(), json!(point.y));
+        }
+        if self.natural.mode == TerrainPaintMode::Stamp
+            && let Some(object) = stamp.as_object_mut()
+        {
+            object.insert("stamp".to_string(), json!(self.natural.stamp.name()));
         }
         self.natural.stamps.push(stamp);
         self.natural.last_stamp = Some(point);
@@ -308,6 +333,62 @@ impl EditorSession {
         ))?;
         self.selection = Some(terrain);
         Ok(result)
+    }
+
+    /// One brush application without a drag: the "passo" (step) brush of the keyboard path.
+    ///
+    /// `docs/04-acessibilidade/01-editor.md` (Pilar 1) asks for sculpting without dragging. This
+    /// stamps the current mode, radius and strength at the pointer and commits it as ONE
+    /// `terrain.paint`, so a single undo takes the whole step back. `times` repeats the same stamp
+    /// at the same point, which is the same as pressing the key again without moving.
+    pub fn terrain_step(&mut self, pointer: Pointer, times: u32) -> Result<Json, Failure> {
+        self.ensure_not_playing()?;
+        if self.natural.dragging {
+            return Err(Failure::bad_request(
+                "termine a pincelada (solte o mouse) antes de usar o passo",
+            ));
+        }
+        let times = times.clamp(1, MAX_STEP_TIMES);
+        self.terrain_begin(pointer)?;
+        let point = self.natural.last_stamp.ok_or_else(|| {
+            Failure::bad_request("o ponteiro não aponta para uma superfície ou o plano do chão")
+        })?;
+        for _ in 1..times {
+            self.push_terrain_stamp(point);
+        }
+        let terrain = self.natural.terrain;
+        let mut painted = self.terrain_end()?;
+        let height = terrain.and_then(|terrain| self.terrain_height_at(terrain, point));
+        if let Some(object) = painted.as_object_mut() {
+            object.insert("mode".to_string(), json!(self.natural.mode.name()));
+            object.insert("steps".to_string(), json!(times));
+            object.insert("radius".to_string(), json!(self.natural.radius));
+            object.insert("strength".to_string(), json!(self.natural.strength));
+            if self.natural.mode == TerrainPaintMode::Stamp {
+                object.insert("stamp".to_string(), json!(self.natural.stamp.name()));
+            }
+            object.insert(
+                "point".to_string(),
+                json!({ "x": point.x, "y": point.y, "z": point.z }),
+            );
+            if let Some(height) = height {
+                object.insert("height".to_string(), json!(height));
+            }
+        }
+        Ok(painted)
+    }
+
+    /// The height of the terrain at a world point, so the reply can say what the step did.
+    fn terrain_height_at(&self, terrain: u64, point: Vec3) -> Option<f64> {
+        let world = self.world_for_query().ok()?;
+        let record = QueryRecord::new(
+            "terrain.sample",
+            json!({ "terrain": terrain, "x": point.x, "z": point.z }),
+        );
+        run_query(world, &record)
+            .ok()?
+            .get("height")
+            .and_then(Json::as_f64)
     }
 
     pub fn terrain_cancel(&mut self) -> Json {
@@ -447,6 +528,7 @@ impl EditorSession {
         json!({
             "terrain": selected_terrain.or(self.natural.terrain),
             "mode": self.natural.mode.name(),
+            "stamp": self.natural.stamp.name(),
             "radius": self.natural.radius,
             "strength": self.natural.strength,
             "path_kind": self.natural.path_kind.map(NaturalPathKind::name),

@@ -18,7 +18,8 @@ enum class ComponentMode { Vertex, Edge, Face };
 // selection operations. Controls (also listed in Ajuda > Atalhos):
 //   arrows / PageUp / PageDown move, Shift is faster, mouse wheel moves forward/back,
 //   hold the right mouse button to look around AND fly with W A S D Q E,
-//   left click selects or grabs a gizmo handle (or a face, with Push/Pull and Extrude).
+//   left click selects or grabs a gizmo handle (or a face, with Push/Pull and Extrude),
+//   with the terrain tool Space stamps the brush once (no drag: the keyboard path).
 class ViewportWidget : public QOpenGLWidget {
     Q_OBJECT
 
@@ -50,6 +51,8 @@ signals:
 
     void cameraChanged();
     void renderFailed(const QString& message);
+    // One brush stamp applied by the Space key: the window says what it did in the status bar.
+    void terrainStepped(const QJsonObject& result);
     void editModeChanged(bool on);
     void editModeToggleRequested();
     void componentModeChanged(ComponentMode mode);
@@ -90,6 +93,8 @@ private:
     void handleFreeKey(QKeyEvent* event);
     void updateHover(const QPoint& position);
     void cancelGizmoDrag();
+    // The "step" brush: one stamp at `brushPointer_` (or the centre of the view) and one undo step.
+    void applyTerrainStep();
 
     EngineBridge* bridge_;
     QTimer moveTimer_;
@@ -105,6 +110,9 @@ private:
     bool freeMode_ = false;
     QString freeTyped_;
     QPoint lastPointer_;
+    // Where the terrain brush would land: the last pointer position over the view. Invalid while
+    // the pointer has never been here, so the step brush falls back to the centre of the view.
+    QPoint brushPointer_{-1, -1};
     QString hoveredHandle_;
     QJsonValue hoveredEntity_;
     QJsonValue hoveredFace_;

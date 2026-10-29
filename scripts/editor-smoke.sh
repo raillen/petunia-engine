@@ -25,11 +25,21 @@
 #   scripts/editor-smoke.sh [output.png]
 set -euo pipefail
 
-editor="${PETUNIA_EDITOR_BIN:-/tmp/petunia-editor-build/petunia-editor}"
+editor="${PETUNIA_EDITOR_BIN:-}"
+if [[ -z "$editor" ]]; then
+    # One Qt build folder per working copy, named like scripts/editor.sh does.
+    root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    checkout="$(basename "$root")"
+    checkout="${checkout#petunia-engine-}"
+    editor="/tmp/petunia-editor-${checkout:-petunia-engine}/petunia-editor"
+fi
 output="${1:-/tmp/petunia-shot/smoke.png}"
 workdir="$(mktemp -d /tmp/petunia-smoke.XXXXXX)"
-display="${PETUNIA_EDITOR_DISPLAY:-:97}"
 mkdir -p "$(dirname "$output")"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_virtual-display.sh"
+# A display of our own: a run that died can leave an editor window on top of ours and every key
+# would go to it. `choose_display` skips a busy number (or stops when the display was pinned).
+choose_display :97
 
 cleanup() {
     [[ -n "${editor_pid:-}" ]] && kill "$editor_pid" 2>/dev/null || true
@@ -44,9 +54,10 @@ sleep 1
 
 env -u WAYLAND_DISPLAY DISPLAY="$display" XDG_CONFIG_HOME="$workdir/config" XDG_CACHE_HOME="$workdir/cache" \
     QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 QT_LOGGING_RULES='qt.qpa.*=false' \
-    "$editor" --sample "$workdir/sala" --screenshot "$output" --screenshot-delay 62000 2>/dev/null &
+    "$editor" --sample "$workdir/sala" --screenshot "$output" --screenshot-delay 62000 2>"$workdir/editor.log" &
 editor_pid=$!
 sleep 3
+watch_editor "$editor_pid" "$workdir/editor.log"
 
 export DISPLAY="$display"
 xdotool mousemove 835 440 click 1;               sleep 0.6   # select the center of the big crate (#9)

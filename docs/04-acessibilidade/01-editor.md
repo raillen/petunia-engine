@@ -33,6 +33,12 @@ A engine herda tudo isso como **critério de aceite de cada tela**.
 | **Sem exigir gesto complexo** | Nada de pressionar duas teclas e arrastar ao mesmo tempo como única via |
 | **Sem tempo limite** | Nenhuma ação depende de rapidez |
 
+**Pincel "passo" do terreno (2026-10-29).** A regra "esculpir/pintar sem arrastar" já tem uma implementação: com a ferramenta de terreno ativa, a **barra de espaços** aplica **um** carimbo do modo atual (raio e força dos campos da barra) onde o ponteiro estiver, sem segurar botão nem arrastar. Com o ponteiro fora do viewport o carimbo cai no **centro da tela**, então as setas sozinhas bastam para escolher o lugar. O motor expõe `terrain.step` (com `times` para repetir no mesmo ponto) e o resultado inteiro é **um** desfazer. O rodapé diz o que aconteceu — "Passo: Subir, raio 4,00 m. Altura agora 0,83 m. Ctrl+Z desfaz."
+
+**O passo também carimba formas (2026-10-29).** No modo **Carimbo** a mesma barra de espaços aplica a silhueta escolhida no combo **Forma** (Cratera, Monte, Platô, Crista): não existe um gesto separado para desenhar uma cratera sem arrastar. A frase do rodapé passa a nomear a forma — "Passo: Carimbo, raio 4,00 m, Cratera. Altura agora -1,20 m. Ctrl+Z desfaz." Os nomes vêm dos próprios combos, então mudar um rótulo na barra muda a frase junto.
+
+**O que ainda falta aqui:** o mesmo caminho no pincel de esculpir caverna; um campo numérico para as repetições (`times` só existe no protocolo hoje); girar a forma antes de carimbar (hoje a crista corre sempre ao longo do eixo x do mundo); e confirmar que o leitor de tela **anuncia** o texto do rodapé (`HIPÓTESE`: não testado com leitor).
+
 ## Pilar 2 — Leitor de tela, contraste e escala
 
 | Regra | Detalhe |

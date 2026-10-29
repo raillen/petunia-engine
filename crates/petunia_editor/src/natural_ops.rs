@@ -9,8 +9,8 @@ use petunia_commands::{CommandError, CommandRecord, Outcome};
 use petunia_math::{CubicBezierSpline, Vec3};
 use petunia_schema::{CommandSpec, Cost, FailureSpec, ParamKind, ParamSpec, Reversibility, Status};
 use petunia_world::{
-    EntityHandle, HEIGHT_CHUNK_SIZE, HeightChunk, Heightfield, PersistentId, Value, World,
-    WorldError,
+    EntityHandle, HEIGHT_CHUNK_SIZE, HeightChunk, Heightfield, PersistentId, StampShape, Value,
+    World, WorldError,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value as Json, json};
@@ -219,7 +219,7 @@ fn terrain_paint_spec() -> CommandSpec {
         summary: "Aplica carimbos de pincel no terreno, criando blocos quando preciso.".to_string(),
         params: vec![
             ParamSpec::required("terrain", ParamKind::Entity, "Id do terreno."),
-            ParamSpec::required("stamps", ParamKind::Any, "Lista de carimbos {center, radius, strength, mode (raise, lower, smooth, flatten, erode), target_height?}."),
+            ParamSpec::required("stamps", ParamKind::Any, "Lista de carimbos {center, radius, strength, mode (raise, lower, smooth, flatten, noise, erode, stamp), target_height?, stamp?}."),
             ParamSpec::optional("falloff", ParamKind::Float, "Suavidade da borda (0 a 1)."),
         ],
         returns: Some(ParamKind::Int),
@@ -231,7 +231,7 @@ fn terrain_paint_spec() -> CommandSpec {
         cost: Cost::Budgeted,
         reversibility: Reversibility::Undoable,
         status: Status::Provisional,
-        example: r#"{"terrain": 4, "stamps": [{"center": {"x": 0, "y": 0, "z": 0}, "radius": 4, "strength": 0.5, "mode": "raise"}]}"#.to_string(),
+        example: r#"{"terrain": 4, "stamps": [{"center": {"x": 0, "y": 0, "z": 0}, "radius": 4, "strength": 0.5, "mode": "raise"}, {"center": {"x": 12, "y": 0, "z": 0}, "radius": 6, "strength": 2, "mode": "stamp", "stamp": "crater"}]}"#.to_string(),
     }
 }
 
@@ -242,7 +242,10 @@ enum TerrainMode {
     Lower,
     Smooth,
     Flatten,
+    Noise,
     Erode,
+    /// A named shape ([`StampShape`]) instead of a raised or lowered patch.
+    Stamp,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -254,6 +257,8 @@ struct TerrainStamp {
     mode: TerrainMode,
     #[serde(default)]
     target_height: Option<f32>,
+    #[serde(default)]
+    stamp: Option<StampShape>,
 }
 
 #[derive(Deserialize)]
@@ -355,6 +360,13 @@ fn terrain_paint(world: &mut World, payload: &Json) -> Result<Outcome, CommandEr
         }
         let radius = finite_between("radius", stamp.radius, 0.01, 256.0)?;
         let strength = finite_between("strength", stamp.strength, 0.0, 64.0)?;
+        if matches!(stamp.mode, TerrainMode::Stamp) && stamp.stamp.is_none() {
+            return Err(CommandError::InvalidPayload {
+                command: "terrain.paint".to_string(),
+                message: "o modo `stamp` precisa de `stamp` (crater, mound, plateau ou ridge)"
+                    .to_string(),
+            });
+        }
         if matches!(stamp.mode, TerrainMode::Flatten)
             && stamp.target_height.is_some_and(|value| !value.is_finite())
         {
@@ -395,7 +407,14 @@ fn terrain_paint(world: &mut World, payload: &Json) -> Result<Outcome, CommandEr
                     stamp.target_height.unwrap_or(stamp.center.y),
                     strength,
                 ),
+                TerrainMode::Noise => entry.chunk.roughen_region(stamp.center, radius, strength),
                 TerrainMode::Erode => entry.chunk.erode_region(stamp.center, radius, strength),
+                TerrainMode::Stamp => entry.chunk.stamp_region(
+                    stamp.center,
+                    radius,
+                    strength,
+                    stamp.stamp.unwrap_or(StampShape::Mound),
+                ),
             }
         }
     }

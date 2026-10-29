@@ -9,8 +9,12 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-build="${CARGO_TARGET_DIR:-/tmp/petunia-engine-mundo-natural-target}"
-editor_build="${PETUNIA_BUILD_DIR:-/tmp/petunia-editor-build}"
+# Same folder rules as scripts/editor.sh: one per working copy, named after the checkout.
+checkout="${root##*/}"
+checkout="${checkout#petunia-engine-}"
+build="${CARGO_TARGET_DIR:-$(sed -n 's/^target-dir *= *"\(.*\)"/\1/p' "$root/.cargo/config.toml")}"
+build="${build:-$root/target}"
+editor_build="${PETUNIA_BUILD_DIR:-/tmp/petunia-editor-${checkout:-petunia-engine}}"
 mode="${1:-stale}"
 
 free_kib() { df -k --output=avail "$1" | tail -1 | tr -d ' '; }

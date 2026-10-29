@@ -1,25 +1,42 @@
 #!/usr/bin/env bash
 # Smoke test of the natural-world tools in a VIRTUAL display (Xvfb).
 #
-# It drives the real window: paints the terrain with T, erodes part of it, draws a river with Y and a
-# road with U, lowers the ground under the road, asks for the bridges and bueiros and saves. Then it
-# checks the scene file for Terrain, raised TerrainChunk heights, an erosion pass that moved material
-# without losing it, River, Road and Bridge.
+# It drives the real window: paints the terrain with T, erodes part of it, roughens it with the noise
+# brush, applies one keyboard stamp (Space) and undoes it, stamps a crater and a mount with the
+# "Carimbo" mode, draws a river with Y and a road with U, lowers the ground under the road, asks for
+# the bridges and bueiros and saves. Then it checks the scene file for Terrain, raised TerrainChunk
+# heights, an erosion pass, a noise pass that moved material without losing it, a step that raised
+# the ground and an undo that gave it back, a crater that dug a bowl and banked the rim, a mount
+# that only rose, River, Road and Bridge.
 # It never touches your desktop session or your editor settings.
 #
+# The script takes every picture itself and kills the editor at the end. It does not pass
+# `--screenshot` to the editor: that flag makes the editor quit after a fixed delay, and the script
+# outgrew the delay once — the last capture came out black while every assertion still passed.
+#
 # The pointer positions below belong to the 1440x900 screen of this script and to the options bar of
-# each tool (terrain: Modo/Raio/Força, river: Largura/Profundidade, road: Largura/Defensas/button).
+# each tool (terrain: Modo/Raio/Força/Forma, river: Largura/Profundidade, road: Largura/Defensas/button).
 # If the bar changes, re-measure them from the captures the script leaves behind.
 #
 #   scripts/natural-smoke.sh [output.png]
 set -euo pipefail
 
-editor="${PETUNIA_EDITOR_BIN:-/tmp/petunia-editor-build/petunia-editor}"
+editor="${PETUNIA_EDITOR_BIN:-}"
+if [[ -z "$editor" ]]; then
+    # One Qt build folder per working copy, named like scripts/editor.sh does.
+    root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    checkout="$(basename "$root")"
+    checkout="${checkout#petunia-engine-}"
+    editor="/tmp/petunia-editor-${checkout:-petunia-engine}/petunia-editor"
+fi
 output="${1:-/tmp/petunia-shot/natural.png}"
 workdir="$(mktemp -d /tmp/petunia-smoke.XXXXXX)"
-display="${PETUNIA_EDITOR_DISPLAY:-:98}"
-scene="$workdir/mundo/scenes/room.scene.json"
 mkdir -p "$(dirname "$output")"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_virtual-display.sh"
+# A display of our own: a run that died can leave an editor window on top of ours and every key
+# would go to it. `choose_display` skips a busy number (or stops when the display was pinned).
+choose_display :98
+scene="$workdir/mundo/scenes/room.scene.json"
 
 cleanup() {
     [[ -n "${editor_pid:-}" ]] && kill "$editor_pid" 2>/dev/null || true
@@ -42,15 +59,54 @@ stroke() {
     sleep 1.2
 }
 
+# Picks an entry of the "Modo" combo by its position in the list, counted from the first one
+# (Subir, Descer, Suavizar, Nivelar, Ruído, Erosão, Carimbo). Counting from Home on purpose:
+# "End" silently changed meaning the day a new mode was added at the bottom of the list.
+pick_mode() {
+    local steps="$1"
+    local step
+    xdotool mousemove 321 88 click 1;            sleep 0.5
+    xdotool key Home;                            sleep 0.3
+    for step in $(seq 1 "$steps"); do
+        xdotool key Down;                        sleep 0.15
+    done
+    xdotool key Return;                          sleep 0.8
+}
+
+# Saves and waits for the scene file to be rewritten, then keeps a copy. The editor hands the save to
+# the engine and the file appears a moment later; a fixed `sleep` once copied the snapshot of the
+# PREVIOUS action, and every later check then compared the wrong pair of files. The wait is bounded
+# and loud: a save that never lands stops the run instead of feeding the checks stale data.
+save_scene() {
+    local target="$1"
+    local before after="ausente"
+    local attempt
+    before="$(stat -c %y "$scene" 2>/dev/null || echo ausente)"
+    xdotool key ctrl+s
+    for attempt in $(seq 1 40); do
+        sleep 0.15
+        after="$(stat -c %y "$scene" 2>/dev/null || echo ausente)"
+        if [[ "$after" != "$before" ]]; then
+            break
+        fi
+    done
+    if [[ "$after" == "$before" ]]; then
+        echo "erro: a cena não foi regravada antes de $target" >&2
+        return 1
+    fi
+    cp "$scene" "$target"
+}
+
 Xvfb "$display" -screen 0 1440x900x24 +extension GLX >/dev/null 2>&1 &
 xvfb_pid=$!
 sleep 1
 
 env -u WAYLAND_DISPLAY DISPLAY="$display" XDG_CONFIG_HOME="$workdir/config" XDG_CACHE_HOME="$workdir/cache" \
     QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 QT_LOGGING_RULES='qt.qpa.*=false' \
-    "$editor" --sample "$workdir/mundo" --screenshot "$output" --screenshot-delay 45000 2>/dev/null &
+    "$editor" --sample "$workdir/mundo" 2>"$workdir/editor.log" &
 editor_pid=$!
 sleep 3
+watch_editor "$editor_pid" "$workdir/editor.log"
 
 export DISPLAY="$display"
 xdotool mousemove 835 440 click 1;               sleep 0.4   # focus the viewport
@@ -61,16 +117,56 @@ stroke 470 700 720 740 760 780 800 820 840 860 880
 import -window root "$output.terrain.png"
 
 # Baseline for the erosion check: the raised terrain as saved, before the erosion stroke.
-xdotool key ctrl+s;                              sleep 1.2
-cp "$scene" "$workdir/before-erode.json"
+save_scene "$workdir/before-erode.json"
 
-xdotool mousemove 321 88 click 1;                sleep 0.5   # "Modo" combo of the terrain bar
-xdotool key End;                                 sleep 0.3   # last entry: Erosão
-xdotool key Return;                              sleep 0.8
+# The keyboard path of the brush (docs/04-acessibilidade/01-editor.md, "esculpir/pintar sem
+# arrastar"): with the terrain tool active, ONE press of Space stamps where the pointer is. The
+# script only MOVES the pointer (focus stays in the viewport) — no click, no drag, no hold. Then it
+# undoes the step, so the terrain the erosion pass measures is exactly the one saved above.
+xdotool mousemove 780 470;                       sleep 0.4
+xdotool key space;                               sleep 1.2
+import -window root "$output.step.png"                       # the status bar says what the step did
+save_scene "$workdir/after-step.json"
+xdotool key ctrl+z;                              sleep 1.2
+save_scene "$workdir/after-step-undo.json"
+
+pick_mode 5                                                     # Erosão
 import -window root "$output.erode-mode.png"
 stroke 470 700 720 740 760 780 800 820 840 860 880
-xdotool key ctrl+s;                              sleep 1.2
-cp "$scene" "$workdir/after-erode.json"
+save_scene "$workdir/after-erode.json"
+
+# The noise brush adds fractal detail anchored in the world and centred, so the patch keeps its
+# volume.
+pick_mode 4                                                     # Ruído
+xdotool mousemove 573 88 click 1;                sleep 0.4   # "Força" field
+xdotool key ctrl+a;                              sleep 0.2
+# Whole meters on purpose: the decimal separator of the spin box follows the system locale, so a
+# typed "1.5" turns into 15 and buries the patch under spikes.
+xdotool type --delay 80 2;                       sleep 0.3
+xdotool key Return;                              sleep 0.8
+import -window root "$output.noise-mode.png"
+stroke 470 700 720 740 760 780 800 820 840 860 880
+save_scene "$workdir/after-noise.json"
+
+# The terrain stamps ("Carimbo"): a named shape instead of a raise. Strength first, then the mode.
+# One click is one stamp: press and release in the same place, no drag at all.
+xdotool mousemove 573 88 click 1;                sleep 0.4   # "Força" field
+xdotool key ctrl+a;                              sleep 0.2
+xdotool type --delay 80 2;                       sleep 0.3
+xdotool key Return;                              sleep 0.8
+pick_mode 6                                                     # Carimbo (shape "Cratera")
+xdotool mousemove 760 470 click 1;               sleep 1.5   # one stamp of the crater
+import -window root "$output.stamp-crater.png"               # the new "Forma" combo is in the bar
+save_scene "$workdir/after-stamp-crater.json"
+
+# The same mode with the second shape: a mound only lifts the ground.
+xdotool mousemove 700 88 click 1;                sleep 0.5   # "Forma" combo (only in this mode)
+xdotool key Home;                                sleep 0.3   # first entry: Cratera
+xdotool key Down;                                sleep 0.3   # second entry: Monte
+xdotool key Return;                              sleep 0.8
+xdotool mousemove 760 470 click 1;               sleep 1.5
+import -window root "$output.stamp-mound.png"
+save_scene "$workdir/after-stamp-mound.json"
 
 xdotool key y;                                   sleep 0.8   # river tool
 xdotool mousemove 700 560 click 1;               sleep 0.5
@@ -85,16 +181,15 @@ xdotool mousemove 880 490 click 1;               sleep 0.5
 xdotool key Return;                              sleep 1.2
 import -window root "$output.road.png"
 
-# Take the ground away under the road so it ends up on top of a bridge. Two strokes of a 2 m lower
-# brush keep the trench shallow enough to see the deck above it.
+# Take the ground away under the road so it ends up on top of a bridge. Two strokes of a 4 m lower
+# brush clear it by more than the 2 m the detector asks for, even with the roughness the noise pass
+# left behind; the deck stays above the trench and keeps the rails visible. The detector needs two
+# consecutive samples above the threshold, so a marginal trench is not enough.
 xdotool key t;                                   sleep 0.8   # terrain tool
-xdotool mousemove 321 88 click 1;                sleep 0.5   # "Modo" combo
-xdotool key Home;                                sleep 0.3   # first entry: Subir
-xdotool key Down;                                sleep 0.3   # second entry: Descer
-xdotool key Return;                              sleep 0.8
+pick_mode 1                                                     # Descer
 xdotool mousemove 573 88 click 1;                sleep 0.4   # "Força" field
 xdotool key ctrl+a;                              sleep 0.2
-xdotool type --delay 80 2;                       sleep 0.3
+xdotool type --delay 80 4;                       sleep 0.3
 xdotool key Return;                              sleep 0.8
 stroke 490 700 720 740 760 780 800 820 840 860
 stroke 490 860 840 820 800 780 760 740 720 700
@@ -105,14 +200,20 @@ xdotool key u;                                   sleep 0.8   # road tool: the bu
 import -window root "$output.structures.png"
 xdotool mousemove 532 88 click 1;                sleep 1.5   # "Pontes e bueiros"
 import -window root "$output.detected.png"                    # the status bar names what was found
-xdotool key ctrl+s;                              sleep 1.2
-import -window root "$output.natural.png"
+# The raised band fills the original view; the top face of the view cube looks down on the work, so
+# the final capture shows the roughened patch, the river, the road and the bridge at once.
+xdotool mousemove 940 164 click 1;                sleep 1.5
+xdotool key ctrl+s;                              sleep 1.5
+import -window root "$output"                                # the final frame: terrain, river, road, rows
 
-python3 - "$scene" "$workdir/before-erode.json" "$workdir/after-erode.json" <<'PY'
+python3 - "$scene" "$workdir/before-erode.json" "$workdir/after-erode.json" "$workdir/after-noise.json" \
+    "$workdir/after-step.json" "$workdir/after-step-undo.json" \
+    "$workdir/after-stamp-crater.json" "$workdir/after-stamp-mound.json" <<'PY'
 import json
 import sys
 
-scene_path, before_path, after_path = sys.argv[1], sys.argv[2], sys.argv[3]
+(scene_path, before_path, after_path, noise_path, step_path, undo_path, crater_path,
+ mound_path) = sys.argv[1:9]
 
 
 def rows(path):
@@ -128,27 +229,80 @@ def chunks(all_rows):
     }
 
 
+def terrain_change(first_path, second_path):
+    """Whether both signs appeared and how far the total height moved."""
+    first = chunks(rows(first_path))
+    second = chunks(rows(second_path))
+    common = sorted(first.keys() & second.keys())
+    lost = gained = False
+    first_sum = second_sum = 0.0
+    for key in common:
+        old = first[key].get("heights", [])
+        new = second[key].get("heights", [])
+        for old_height, new_height in zip(old, new):
+            lost = lost or new_height < old_height - 1e-6
+            gained = gained or new_height > old_height + 1e-6
+        first_sum += sum(old)
+        second_sum += sum(new)
+    return bool(common), lost and gained, abs(first_sum - second_sum)
+
+
+def total_gain(first_path, second_path):
+    """How much the ground rose in total and whether any cell went down."""
+    first = chunks(rows(first_path))
+    second = chunks(rows(second_path))
+    common = sorted(first.keys() & second.keys())
+    gain = 0.0
+    lowered = False
+    for key in common:
+        for old_height, new_height in zip(first[key].get("heights", []), second[key].get("heights", [])):
+            gain += new_height - old_height
+            lowered = lowered or new_height < old_height - 1e-6
+    return bool(common), gain, lowered
+
+
+def shape_change(first_path, second_path):
+    """Whether a stamp lowered and raised ground, how deep it went and the net height added."""
+    first = chunks(rows(first_path))
+    second = chunks(rows(second_path))
+    common = sorted(first.keys() & second.keys())
+    lowered = raised = False
+    net = 0.0
+    deepest = 0.0
+    for key in common:
+        for old_height, new_height in zip(first[key].get("heights", []), second[key].get("heights", [])):
+            delta = new_height - old_height
+            net += delta
+            deepest = min(deepest, delta)
+            lowered = lowered or delta < -1e-6
+            raised = raised or delta > 1e-6
+    return bool(common), lowered, raised, net, deepest
+
+
 now = rows(scene_path)
 checks = []
 checks.append(("Terrain criado", any("Terrain" in row for row in now)))
 heights = [value for chunk in chunks(now).values() for value in chunk.get("heights", [])]
 checks.append(("alturas pintadas", any(abs(value) > 1e-4 for value in heights)))
 
-before = chunks(rows(before_path))
-after = chunks(rows(after_path))
-common = sorted(before.keys() & after.keys())
-lost = gained = False
-before_sum = after_sum = 0.0
-for key in common:
-    old = before[key].get("heights", [])
-    new = after[key].get("heights", [])
-    for old_height, new_height in zip(old, new):
-        lost = lost or new_height < old_height - 1e-6
-        gained = gained or new_height > old_height + 1e-6
-    before_sum += sum(old)
-    after_sum += sum(new)
-checks.append(("erosão mexeu no terreno", bool(common) and lost and gained))
-checks.append(("erosão conservou o volume", bool(common) and abs(before_sum - after_sum) < 1e-2))
+erosion_shared, erosion_both_signs, erosion_volume = terrain_change(before_path, after_path)
+checks.append(("erosão mexeu no terreno", erosion_shared and erosion_both_signs))
+checks.append(("erosão conservou o volume", erosion_shared and erosion_volume < 1e-2))
+
+noise_shared, noise_both_signs, noise_volume = terrain_change(after_path, noise_path)
+checks.append(("ruído mexeu no terreno", noise_shared and noise_both_signs))
+checks.append(("ruído conservou o volume", noise_shared and noise_volume < 1e-2))
+
+step_shared, step_gain, step_lowered = total_gain(before_path, step_path)
+checks.append(("passo por teclado subiu o terreno", step_shared and step_gain > 0.05 and not step_lowered))
+undo_shared, undo_gain, undo_lowered = total_gain(before_path, undo_path)
+checks.append(("desfazer devolveu o passo", undo_shared and abs(undo_gain) < 1e-6 and not undo_lowered))
+
+crater_shared, crater_lowered, crater_raised, crater_net, crater_deepest = shape_change(noise_path, crater_path)
+checks.append(("carimbo de cratera cavou o meio", crater_shared and crater_lowered and crater_deepest < -1.0))
+checks.append(("carimbo de cratera levantou a borda", crater_shared and crater_raised and crater_net < -0.2))
+mound_shared, mound_lowered, mound_raised, mound_net, _ = shape_change(crater_path, mound_path)
+checks.append(("carimbo de monte subiu sem cavar", mound_shared and mound_raised and not mound_lowered and mound_net > 0.5))
 
 checks.append(("Rio criado", any("River" in row for row in now)))
 checks.append(("Estrada criada", any("Road" in row for row in now)))
@@ -164,4 +318,4 @@ for bridge in bridges:
 sys.exit(1 if failed else 0)
 PY
 
-echo "imagem: $output (e $output.terrain.png, $output.erode-mode.png, $output.road.png, $output.structures.png, $output.detected.png, $output.natural.png)"
+echo "imagem final: $output (passos: $output.tool.png, $output.terrain.png, $output.step.png, $output.erode-mode.png, $output.noise-mode.png, $output.stamp-crater.png, $output.stamp-mound.png, $output.road.png, $output.structures.png, $output.detected.png)"

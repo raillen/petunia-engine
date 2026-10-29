@@ -2,8 +2,10 @@
 //!
 //! Data plus small free operations. Higher-level sculpt logic lives in `petunia_sculpt`.
 
-use petunia_math::Vec3;
+use petunia_math::{Vec3, fractal_noise_2d};
 use serde::{Deserialize, Serialize};
+
+use crate::stamp::StampShape;
 
 /// Cells per chunk side. The world origin of a chunk is `position * HEIGHT_CHUNK_SIZE * cell_size`.
 pub const HEIGHT_CHUNK_SIZE: usize = 64;
@@ -312,6 +314,110 @@ impl HeightChunk {
         }
     }
 
+    /// Add fractal detail inside a brush, without changing the average height.
+    ///
+    /// The noise is anchored in **world space**, so the same place always gets the same ridges and
+    /// neighbouring strokes join seamlessly. The detail is centred before it is applied, so a flat
+    /// patch stays at the same average height: the brush roughens the ground, it does not raise it.
+    pub fn roughen_region(&mut self, world_position: Vec3, radius: f32, strength: f32) {
+        if !world_position.is_finite()
+            || !radius.is_finite()
+            || radius <= 0.0
+            || !strength.is_finite()
+            || strength <= 0.0
+        {
+            return;
+        }
+        let origin = self.world_origin();
+        let center_x = (world_position.x - origin.x) / self.cell_size;
+        let center_z = (world_position.z - origin.z) / self.cell_size;
+        let radius_cells = radius / self.cell_size;
+        let minimum_x = ((center_x - radius_cells).floor() as i32).max(0);
+        let maximum_x = ((center_x + radius_cells).ceil() as i32).min(self.size as i32 - 1);
+        let minimum_z = ((center_z - radius_cells).floor() as i32).max(0);
+        let maximum_z = ((center_z + radius_cells).ceil() as i32).min(self.size as i32 - 1);
+        let mut deltas: Vec<(usize, f32)> = Vec::new();
+        let mut total = 0.0f32;
+        for z in minimum_z..=maximum_z {
+            for x in minimum_x..=maximum_x {
+                let delta_x = (x as f32 - center_x) * self.cell_size;
+                let delta_z = (z as f32 - center_z) * self.cell_size;
+                let distance = (delta_x * delta_x + delta_z * delta_z).sqrt();
+                if distance > radius {
+                    continue;
+                }
+                let weight = ((1.0 - (distance / radius).clamp(0.0, 1.0)).powi(2)) * strength;
+                let world_x = origin.x + x as f32 * self.cell_size;
+                let world_z = origin.z + z as f32 * self.cell_size;
+                let Some(index) = self.index(x as usize, z as usize) else {
+                    continue;
+                };
+                let detail = fractal_noise_2d(world_x, world_z) * weight;
+                total += detail;
+                deltas.push((index, detail));
+            }
+        }
+        if deltas.is_empty() {
+            return;
+        }
+        // Centred, so the brush does not move the patch up or down as a whole.
+        let mean = total / deltas.len() as f32;
+        for (index, detail) in deltas {
+            if let Some(height) = self.heights.get_mut(index) {
+                *height += detail - mean;
+            }
+        }
+    }
+
+    /// Add a named shape ([`StampShape`]) inside the brush disc.
+    ///
+    /// `strength` is how many meters the shape reaches at its strongest point, and every shape
+    /// returns to zero at the edge of the disc, so a stamp never leaves a step for the next one.
+    pub fn stamp_region(
+        &mut self,
+        world_position: Vec3,
+        radius: f32,
+        strength: f32,
+        shape: StampShape,
+    ) {
+        if !world_position.is_finite()
+            || !radius.is_finite()
+            || radius <= 0.0
+            || !strength.is_finite()
+            || strength <= 0.0
+        {
+            return;
+        }
+        let origin = self.world_origin();
+        let center_x = (world_position.x - origin.x) / self.cell_size;
+        let center_z = (world_position.z - origin.z) / self.cell_size;
+        let radius_cells = radius / self.cell_size;
+        let minimum_x = ((center_x - radius_cells).floor() as i32).max(0);
+        let maximum_x = ((center_x + radius_cells).ceil() as i32).min(self.size as i32 - 1);
+        let minimum_z = ((center_z - radius_cells).floor() as i32).max(0);
+        let maximum_z = ((center_z + radius_cells).ceil() as i32).min(self.size as i32 - 1);
+        for z in minimum_z..=maximum_z {
+            for x in minimum_x..=maximum_x {
+                // The shape works in units of the radius, so the same stamp fits any brush size.
+                let offset_x = (x as f32 - center_x) * self.cell_size / radius;
+                let offset_z = (z as f32 - center_z) * self.cell_size / radius;
+                let weight = shape.height_at(offset_x, offset_z);
+                if weight == 0.0 {
+                    continue;
+                }
+                let Some(index) = self.index(x as usize, z as usize) else {
+                    continue;
+                };
+                if let Some(height) = self.heights.get_mut(index) {
+                    let stamped = *height + weight * strength;
+                    if stamped.is_finite() {
+                        *height = stamped;
+                    }
+                }
+            }
+        }
+    }
+
     /// Flatten a region to `target_height` with falloff.
     pub fn flatten_region(
         &mut self,
@@ -533,13 +639,126 @@ mod tests {
     }
 
     #[test]
+    fn noise_brush_adds_detail_and_keeps_the_volume() {
+        let mut chunk = HeightChunk::new([0, 0], 32, 1.0);
+        let before = chunk.heights.iter().sum::<f32>();
+        chunk.roughen_region(Vec3::new(16.0, 0.0, 16.0), 6.0, 2.0);
+        let after = chunk.heights.iter().sum::<f32>();
+        assert!(
+            (before - after).abs() < 1.0e-2,
+            "the brush roughens the ground instead of raising it: {before} -> {after}"
+        );
+        let mut detailed = 0;
+        let mut changed_outside = 0;
+        for z in 0..32 {
+            for x in 0..32 {
+                let height = chunk.get(x, z);
+                let inside = {
+                    let delta_x = x as f32 - 16.0;
+                    let delta_z = z as f32 - 16.0;
+                    (delta_x * delta_x + delta_z * delta_z).sqrt() <= 6.0
+                };
+                if inside && height.abs() > 1.0e-3 {
+                    detailed += 1;
+                }
+                if !inside && height != 0.0 {
+                    changed_outside += 1;
+                }
+            }
+        }
+        assert!(detailed > 20, "only {detailed} cells gained detail");
+        assert_eq!(
+            changed_outside, 0,
+            "{changed_outside} cells outside the brush changed"
+        );
+    }
+
+    #[test]
+    fn the_same_noise_stamp_gives_the_same_terrain() {
+        let mut first = HeightChunk::new([0, 0], 32, 1.0);
+        let mut second = HeightChunk::new([0, 0], 32, 1.0);
+        first.roughen_region(Vec3::new(16.0, 0.0, 16.0), 5.0, 1.5);
+        second.roughen_region(Vec3::new(16.0, 0.0, 16.0), 5.0, 1.5);
+        assert_eq!(first.heights, second.heights);
+    }
+
+    #[test]
+    fn a_second_stroke_deepens_the_same_ridges() {
+        let mut chunk = HeightChunk::new([0, 0], 32, 1.0);
+        chunk.roughen_region(Vec3::new(16.0, 0.0, 16.0), 6.0, 1.0);
+        let after_first = chunk.heights.clone();
+        chunk.roughen_region(Vec3::new(16.0, 0.0, 16.0), 6.0, 1.0);
+        // The detail is a field of the world, so painting the same place again reinforces the
+        // ridges that are already there instead of inventing a new pattern.
+        let reinforced = chunk
+            .heights
+            .iter()
+            .zip(&after_first)
+            .filter(|(now, before)| now.abs() > before.abs() + 1.0e-4)
+            .count();
+        assert!(reinforced > 20, "only {reinforced} cells were deepened");
+    }
+
+    #[test]
     fn hostile_brush_arguments_are_ignored() {
         let mut chunk = HeightChunk::new([0, 0], 8, 1.0);
         chunk.set(4, 4, 5.0);
         chunk.apply_brush(Vec3::new(4.0, 0.0, 4.0), 0.0, 1.0, true);
         chunk.apply_brush(Vec3::new(f32::NAN, 0.0, 4.0), 2.0, 1.0, true);
         chunk.flatten_region(Vec3::new(4.0, 0.0, 4.0), 2.0, f32::INFINITY, 1.0);
+        chunk.roughen_region(Vec3::new(4.0, 0.0, 4.0), 0.0, 1.0);
+        chunk.roughen_region(Vec3::new(f32::NAN, 0.0, 4.0), 2.0, 1.0);
+        chunk.roughen_region(Vec3::new(4.0, 0.0, 4.0), 2.0, f32::NAN);
+        chunk.roughen_region(Vec3::new(4.0, 0.0, 4.0), 2.0, -3.0);
         assert_eq!(chunk.get(4, 4), 5.0);
+    }
+
+    #[test]
+    fn a_crater_stamp_lowers_the_middle_and_banks_the_rim() {
+        let mut chunk = HeightChunk::new([0, 0], 16, 1.0);
+        let flat = chunk.heights.clone();
+        chunk.stamp_region(Vec3::new(8.0, 0.0, 8.0), 6.0, 2.0, StampShape::Crater);
+        assert!(
+            chunk.get(8, 8) < -1.5,
+            "the middle is a bowl: {}",
+            chunk.get(8, 8)
+        );
+        assert!(
+            chunk.get(12, 8) > 0.1,
+            "the rim is a bank: {}",
+            chunk.get(12, 8)
+        );
+        assert_eq!(chunk.get(0, 0), flat[0], "the corner is outside the brush");
+    }
+
+    #[test]
+    fn a_mound_stamp_never_lowers_the_ground() {
+        let mut chunk = HeightChunk::new([0, 0], 16, 1.0);
+        chunk.stamp_region(Vec3::new(8.0, 0.0, 8.0), 5.0, 1.5, StampShape::Mound);
+        assert!((chunk.get(8, 8) - 1.5).abs() < 1.0e-3);
+        assert!(chunk.heights.iter().all(|height| *height >= 0.0));
+    }
+
+    #[test]
+    fn the_same_stamp_gives_the_same_terrain() {
+        let mut first = HeightChunk::new([0, 0], 16, 1.0);
+        let mut second = HeightChunk::new([0, 0], 16, 1.0);
+        for chunk in [&mut first, &mut second] {
+            chunk.stamp_region(Vec3::new(8.0, 0.0, 8.0), 6.0, 1.0, StampShape::Ridge);
+        }
+        assert_eq!(first.heights, second.heights);
+    }
+
+    #[test]
+    fn hostile_stamp_arguments_are_ignored() {
+        let mut chunk = HeightChunk::new([0, 0], 8, 1.0);
+        chunk.set(4, 4, 5.0);
+        let flat = chunk.heights.clone();
+        chunk.stamp_region(Vec3::new(4.0, 0.0, 4.0), 0.0, 1.0, StampShape::Crater);
+        chunk.stamp_region(Vec3::new(f32::NAN, 0.0, 4.0), 2.0, 1.0, StampShape::Crater);
+        chunk.stamp_region(Vec3::new(4.0, 0.0, 4.0), 2.0, f32::NAN, StampShape::Crater);
+        chunk.stamp_region(Vec3::new(4.0, 0.0, 4.0), 2.0, -3.0, StampShape::Crater);
+        assert_eq!(chunk.heights, flat);
     }
 
     #[test]
