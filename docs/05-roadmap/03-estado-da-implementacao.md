@@ -37,7 +37,9 @@ Segundo slice, na branch `feat/sistemas-de-mundo`. Checklist vivo: [sistema de m
 
 **Ferramentas avançadas (2026-10-28):** `terrain.stamp` (heightmap) e `terrain.stamp_mesh` (malha 3D), erosão hidráulica determinística, furos automáticos dos túneis (`terrain.holes_from_caves`), `surface.set` + `surface.follow` automático com **um** desfazer, plano de corte no shader e na barra, espelhamento X, **preencher/oco/ruído**, **booleano de cavernas** (`sculpt.boolean`) e **carimbo de malha na caverna** (`sculpt.stamp_mesh`, tabela `SculptStamp`). **485 testes, 0 falhas** no workspace (medido em 2026-10-28).
 
-**Falta:** rios/estradas (outro agent) e ajuste fino do plano de corte.
+**Caverna por dentro (2026-10-28, display virtual):** a câmera dentro do volume mostra a rocha, a boca de um túnel e as salas — o interior renderiza. Com **Raio X + Corte** ligados, porém, a caverna **desaparece**: o plano de corte usa a altura do cursor do pincel de terreno (`terrain.section` sem `height`), que fica no piso, e descarta tudo acima dela. Não há campo para escolher a altura do plano. Fica na fila como item 1.
+
+**Falta:** altura do plano de corte escolhível na janela, rios/estradas (outro agent) e ajuste fino do corte.
 
 **Carimbo de malha na caverna (2026-10-28):** `sculpt.stamp_mesh` imprime a superfície de um objeto com malha no campo SDF da caverna selecionada, com a transformação do objeto assada no espaço da caverna. `add` põe rocha atrás de cada face, `carve` tira. Um desfazer. Limites: 4096 triângulos por carimbo, 8 carimbos por caverna, banda de 2 células. **Não é um sólido**: uma malha fechada vira casca (para volume, `sculpt.boolean`). Testes: 3 de distância ponto-triângulo + 1 de forma no crate, 1 de editor com desfazer; ação **Operações › Carimbar malha na caverna…** compila no Qt 6.4.2, **não olhada em imagem**.
 

@@ -25,6 +25,22 @@ Este documento é a lista viva do que foi implementado e do que falta no sistema
 
 ## Implementado
 
+### 2026-10-28 — caverna vista por dentro: o que a captura mostra
+
+Capturas no display virtual (janela 1880×1120, `Caverna aleatória`, terreno gerado, câmera em y = 4,0, z = -12,2):
+
+| Cena | O que se vê |
+|---|---|
+| Câmera **dentro** da caverna, sem os sinalizadores | as paredes de rocha em volta e a passagem adiante; o interior renderiza e é legível |
+| **Raio X + Corte** ligados, corte na altura do cursor do terreno (≈0,5 m) | o terreno vira arame e **a caverna some inteira**: o plano descarta tudo acima da altura dele e a caverna vive de 0 a 8 m |
+| **Raio X + Corte**, corte alto (monte com força 8) | o arame do terreno aparece; a caverna continua sem leitura, porque a altura do monte não cai dentro dela |
+
+Arquivos: `/tmp/petunia-shot-smoke/cave-inside.png` (interior) e `/tmp/petunia-shot-smoke/cave-inside-xray-cut.png` (os dois sinalizadores ligados, caverna fora do quadro).
+
+**Achado:** o plano de corte usa **sempre a altura do cursor do pincel de terreno** (`terrain.section` sem `height` cai no `terrain.cursor`, e a caixa **Corte** não manda altura). Não existe hoje, na janela, como escolher a altura do plano. Por isso o par “arame + corte” ainda **não** serve para olhar dentro de uma caverna: ou corta abaixo do piso dela (e ela desaparece) ou corta na altura de um monte (que não é onde a caverna está).
+
+Consequência para a fila: antes de prometer “ver o interior da caverna pelo corte”, a janela precisa de uma **altura de corte escolhível** (campo numérico ou arrastar o plano), com a caverna selecionada como sugestão de altura.
+
 ### 2026-10-28 — raio X em arame e teste de fumaça repetível
 
 | Item | Evidência |
@@ -94,7 +110,8 @@ As três causas da instabilidade eram do harness e da janela, não de tempo de e
 
 | # | Item | Depende de | Critério de pronto |
 |---|---|---|---|
-| 1 | Rios e estradas | outro agent | — |
+| 1 | Altura do plano de corte escolhível na janela (hoje só a do cursor do terreno) | — | o corte atravessar uma caverna sem subir um monte |
+| 2 | Rios e estradas | outro agent | — |
 
 Itens concluídos nesta rodada: **teste de fumaça estável** (12/12 em quatro execuções) e **arame no raio X** (captura no display virtual).
 
@@ -107,7 +124,8 @@ Itens concluídos nesta rodada: **teste de fumaça estável** (12/12 em quatro e
 | LOD sem costura visível | **não visto**; as saias existem, mas não foram olhadas em imagem |
 | Cores das 8 camadas | **não vistas**; os testes conferem contagem e furos, não a aparência |
 | Personagem andando no heightfield pela janela | **não rodou**; o teste de física prova a colisão, não o jogo |
-| Raio X | **visto em captura**: superfície a 35 % com arestas; a caverna em si não foi olhada por dentro nesta captura |
+| Raio X | **visto em captura**: superfície a 35 % com arestas |
+| Caverna por dentro com Raio X **e** Corte | **não obtido**: com o corte na altura do cursor do terreno a caverna some inteira; a captura boa do interior é sem os dois sinalizadores (ver a seção acima) |
 | Teste de fumaça | **estável** em sete execuções seguidas (12/12); uma execução isolada em máquina carregada ainda pode falhar por tempo |
 | Erosão em terreno grande | **não medida**; o teste usa 8×8 |
 | Carimbo de malha na caverna | **sem lugar sólido**: imprime a superfície numa banda (2 células); uma malha fechada vira casca, não volume; limite de 4096 triângulos e 8 carimbos por caverna; **não olhado em imagem** |
