@@ -32,6 +32,7 @@ fn generation_is_deterministic() {
             persistence: 0.5,
         },
         base_height: 2.0,
+        biome: None,
     };
     let mut first = Terrain::new(1.0, 16).unwrap();
     let mut second = Terrain::new(1.0, 16).unwrap();
@@ -53,6 +54,7 @@ fn generated_height_matches_the_settings() {
             persistence: 0.5,
         },
         base_height: -1.0,
+        biome: None,
     };
     let mut terrain = Terrain::new(1.0, 16).unwrap();
     terrain.generate(ChunkCoord::new(0, 0), &settings).unwrap();
@@ -439,6 +441,7 @@ fn stamp_replaces_a_rectangular_patch() {
                     ..FractalSettings::default()
                 },
                 base_height: 0.0,
+                biome: None,
             },
         )
         .unwrap();
@@ -573,4 +576,75 @@ fn hydraulic_erosion_rejects_bad_parameters() {
     assert!(terrain.hydraulic_erode(100_001, 0.5, 0.3, 0.02, 1).is_err());
     assert!(terrain.hydraulic_erode(10, 2.0, 0.3, 0.02, 1).is_err());
     assert!(terrain.hydraulic_erode(10, 0.5, f32::NAN, 0.02, 1).is_err());
+}
+
+#[test]
+fn a_biome_paints_the_generated_samples() {
+    let settings = Biome::Desert.settings(5);
+    let mut terrain = Terrain::new(1.0, 16).unwrap();
+    terrain.generate(ChunkCoord::new(0, 0), &settings).unwrap();
+    let chunk = terrain.chunk(ChunkCoord::new(0, 0)).expect("bloco gerado");
+    // Every sample is one of the desert's own layers, never a stray value.
+    for material in chunk.materials() {
+        assert!(
+            *material == LAYER_SAND || *material == LAYER_ROCK,
+            "camada inesperada {material} no deserto"
+        );
+    }
+    // And the painted layer agrees with the height of each sample.
+    for local_z in 0..16 {
+        for local_x in 0..16 {
+            let height = terrain.sample(local_x, local_z).expect("amostra");
+            let material = terrain.sample_material(local_x, local_z).expect("amostra");
+            assert_eq!(
+                material,
+                Biome::Desert.material_at(height, settings.base_height, settings.fractal.amplitude)
+            );
+        }
+    }
+}
+
+#[test]
+fn without_a_biome_every_sample_stays_on_the_first_layer() {
+    let settings = TerrainGeneration {
+        fractal: FractalSettings {
+            seed: 3,
+            amplitude: 5.0,
+            ..FractalSettings::default()
+        },
+        base_height: 0.0,
+        biome: None,
+    };
+    let mut terrain = Terrain::new(1.0, 16).unwrap();
+    terrain.generate(ChunkCoord::new(0, 0), &settings).unwrap();
+    let chunk = terrain.chunk(ChunkCoord::new(0, 0)).expect("bloco gerado");
+    assert!(
+        chunk
+            .materials()
+            .iter()
+            .all(|material| *material == LAYER_GRASS)
+    );
+}
+
+#[test]
+fn two_biomes_paint_the_same_seed_differently() {
+    let plains = Biome::Plains.settings(1);
+    let snow = Biome::Snow.settings(1);
+    let mut plains_terrain = Terrain::new(1.0, 16).unwrap();
+    let mut snow_terrain = Terrain::new(1.0, 16).unwrap();
+    plains_terrain
+        .generate(ChunkCoord::new(0, 0), &plains)
+        .unwrap();
+    snow_terrain.generate(ChunkCoord::new(0, 0), &snow).unwrap();
+    let plains_layers: Vec<u8> = plains_terrain
+        .chunk(ChunkCoord::new(0, 0))
+        .expect("bloco")
+        .materials()
+        .to_vec();
+    let snow_layers: Vec<u8> = snow_terrain
+        .chunk(ChunkCoord::new(0, 0))
+        .expect("bloco")
+        .materials()
+        .to_vec();
+    assert_ne!(plains_layers, snow_layers);
 }

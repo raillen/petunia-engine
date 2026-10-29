@@ -182,7 +182,8 @@ xdotool mousemove 990 431 click 1;               sleep 0.4   # pick component
 xdotool key alt+e; sleep 0.6; xdotool key Home Down Down Down Down Down Down Return; sleep 0.8   # exit Edit Mode
 # Terrain last: it covers the room, so create it only after the mesh steps. Criar > Terreno from
 # the command palette, generate it, focus it and drag the terrain brush across the surface.
-xdotool key alt+o; sleep 0.7; xdotool key Return; sleep 1.6   # Operações > Gerar terreno (the shortcut activates the first item)
+xdotool key alt+o; sleep 0.7; xdotool key Return; sleep 1.0   # Operações > Gerar terreno (the shortcut activates the first item)
+xdotool key Return;                              sleep 1.2   # the biome dialog: keep "Pela semente"
 xdotool key f;                                   sleep 0.8   # focus the selected terrain
 xdotool mousemove 600 400 mousedown 1
 for x in 620 640 660 680; do xdotool mousemove "$x" 400; sleep 0.2; done

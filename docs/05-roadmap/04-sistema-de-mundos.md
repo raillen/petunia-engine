@@ -9,7 +9,7 @@ Este documento é a lista viva do que foi implementado e do que falta no sistema
 | Sistema | Implementado | Falta | % |
 |---|---|---:|---:|
 | Terreno (dados) | `petunia_terrain`: chunks, amostras, materiais, furos, consultas, limites | — | 90% |
-| Terreno (geração) | fBm determinístico próprio; parâmetros validados; **heightmap em arquivo** (`terrain.heights`, importar/exportar `.pthm`) | Biomas | 88% |
+| Terreno (geração) | fBm determinístico próprio; parâmetros validados; **heightmap em arquivo** (`terrain.heights`, importar/exportar `.pthm`); **5 biomas** que escolhem relevo e camadas pela semente | — | 96% |
 | Terreno (edição) | Brushes 3D, 4 falloffs, 6 operações, erosão térmica e hidráulica, espelhamento x/z, *stamp* de heightmap e de malha 3D | Brushes plano/caminho, máscaras | 92% |
 | Terreno (render) | Malha por chunk, cores por camada (8), LOD 1/2/4, saias, furos, plano de corte, **culling por chunk** pelo volume de visão do viewport | Materiais por textura, verificação visual do LOD | 92% |
 | Terreno (física) | Heightfield no Rapier; trimesh nos chunks com furo | Terreno com transformação não-identidade | 80% |
@@ -24,6 +24,21 @@ Este documento é a lista viva do que foi implementado e do que falta no sistema
 | Água (render) | — (outro agent) | Flow map, Gerstner 4–8, refração, espuma | 0% |
 
 ## Implementado
+
+### 2026-10-29 — biomas
+
+| Item | Evidência |
+|---|---|
+| **`Biome`** é dado puro: relevo (tamanho da feição, amplitude, oitavas, persistência, altura base) e as faixas de camada que a altura pinta | **6 testes de crate**: nomes que vão e voltam (incluindo `planície`), a mesma semente escolhe o mesmo bioma, 80 sementes alcançam os 5, o relevo da neve é mais alto e mais estreito que o da planície, as faixas de camada (incluindo amplitude zero e altura não finita) |
+| **A semente escolhe o bioma** (`Biome::from_seed`), com mistura do valor de ruído, então sementes vizinhas não caem no mesmo bioma | teste acima |
+| **`terrain.generate` recebe `biome`** (`plains`, `forest`, `desert`, `snow`, `volcano` ou `none`); sem o campo, a semente escolhe; nome desconhecido é recusado **sem tocar no terreno**; a resposta traz o bioma usado | **2 testes de comando**: gera deserto (só areia e rocha), a mesma semente devolve o mesmo bioma nas duas chamadas, `none` deixa tudo na primeira camada; `tundra` volta erro nomeando o valor, e o terreno fica igual |
+| **Relevo do bioma, com o payload por cima**: os parâmetros de ruído passaram a opcionais, então a amplitude que um script manda continua vencendo a do bioma | testes acima (`amplitude: 0` + `biome: none` = chão plano) |
+| **Na janela**: Operações > Gerar terreno abre a lista de biomas (**Pela semente**, Planície, Floresta, Deserto, Neve, Vulcão) e a barra de estado diz qual foi usado | **teste de fumaça 12/12** com o diálogo e capturas no display virtual: deserto em areia e neve com dunas altas, a mesma cena do projeto de exemplo |
+| Nada de terceiros: o ruído continua sendo o nosso, e a escolha do bioma também | código |
+
+**O que a captura mostra:** no deserto o chão é areia (0,78; 0,70; 0,50) e praticamente plano, como o relevo de 3,5 m de amplitude pede; na neve o mesmo comando gera dunas de 22 m de amplitude e superfície quase branca. As duas capturas foram feitas com a mesma câmera e o mesmo projeto de exemplo — muda o bioma escolhido na lista.
+
+**Limites:** o bioma é escolhido **na geração**; trocar o bioma de um terreno já esculpido é gerar de novo (que desfaz escultura, com um passo de desfazer). Não há transição entre biomas num mesmo mundo — o relevo e as camadas são função da altura, sem variação horizontal.
 
 ### 2026-10-29 — culling por chunk
 

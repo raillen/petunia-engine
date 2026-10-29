@@ -732,6 +732,7 @@ mod tests {
                         ..FractalSettings::default()
                     },
                     base_height: 0.0,
+                    biome: None,
                 },
             )
             .unwrap();

@@ -9,7 +9,7 @@ use petunia_schema::{
     CommandSpec, Cost, FailureSpec, ParamKind, ParamSpec, QuerySpec, Reversibility, Status,
 };
 use petunia_terrain::{
-    Brush, BrushShape, ChunkCoord, Falloff, FractalSettings, Heightmap, MAX_BRUSH_SAMPLES,
+    Biome, Brush, BrushShape, ChunkCoord, Falloff, FractalSettings, Heightmap, MAX_BRUSH_SAMPLES,
     MAX_HEIGHTMAP_SIDE, Stamp, StampMode, Terrain, TerrainChunk, TerrainError, TerrainGeneration,
     TerrainHole, TerrainOperation,
 };
@@ -220,24 +220,8 @@ fn default_strength() -> f32 {
     1.0
 }
 
-fn default_feature_size() -> f32 {
+fn default_noise_feature_size() -> f32 {
     64.0
-}
-
-fn default_amplitude() -> f32 {
-    12.0
-}
-
-fn default_octaves() -> u32 {
-    5
-}
-
-fn default_lacunarity() -> f32 {
-    2.0
-}
-
-fn default_persistence() -> f32 {
-    0.5
 }
 
 fn default_noise_amplitude() -> f32 {
@@ -269,18 +253,22 @@ struct GeneratePayload {
     max_z: i32,
     #[serde(default)]
     seed: u64,
-    #[serde(default = "default_feature_size")]
-    feature_size: f32,
-    #[serde(default = "default_amplitude")]
-    amplitude: f32,
-    #[serde(default = "default_octaves")]
-    octaves: u32,
-    #[serde(default = "default_lacunarity")]
-    lacunarity: f32,
-    #[serde(default = "default_persistence")]
-    persistence: f32,
+    /// Every relief parameter is optional: a biome supplies its own, and a value sent here wins.
     #[serde(default)]
-    base_height: f32,
+    feature_size: Option<f32>,
+    #[serde(default)]
+    amplitude: Option<f32>,
+    #[serde(default)]
+    octaves: Option<u32>,
+    #[serde(default)]
+    lacunarity: Option<f32>,
+    #[serde(default)]
+    persistence: Option<f32>,
+    #[serde(default)]
+    base_height: Option<f32>,
+    /// `plains`, `forest`, `desert`, `snow`, `volcano` or `none`. Missing: the seed picks.
+    #[serde(default)]
+    biome: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -304,7 +292,7 @@ struct BrushPayload {
     target_height: Option<f32>,
     #[serde(default)]
     noise_seed: u64,
-    #[serde(default = "default_feature_size")]
+    #[serde(default = "default_noise_feature_size")]
     noise_feature_size: f32,
     #[serde(default = "default_noise_amplitude")]
     noise_amplitude: f32,
@@ -822,6 +810,11 @@ fn generate_spec() -> CommandSpec {
             ParamSpec::optional("lacunarity", ParamKind::Float, "Frequência entre oitavas (padrão 2)."),
             ParamSpec::optional("persistence", ParamKind::Float, "Amplitude entre oitavas (padrão 0,5)."),
             ParamSpec::optional("base_height", ParamKind::Float, "Altura base em metros (padrão 0)."),
+            ParamSpec::optional(
+                "biome",
+                ParamKind::Text,
+                "Bioma: plains, forest, desert, snow, volcano ou none. Sem ele, a semente escolhe.",
+            ),
         ],
         returns: None,
         failures: vec![
@@ -841,17 +834,52 @@ fn generate(world: &mut World, payload: &Json) -> Result<Outcome, CommandError> 
     let (minimum, maximum) = region_of(&request)?;
     let mut terrain = read_terrain(world, request.entity)?;
     let previous = region_chunks(&terrain, minimum, maximum);
-    let settings = TerrainGeneration {
-        fractal: FractalSettings {
-            seed: request.seed,
-            feature_size: request.feature_size,
-            amplitude: request.amplitude,
-            octaves: request.octaves,
-            lacunarity: request.lacunarity,
-            persistence: request.persistence,
-        },
-        base_height: request.base_height,
+    // Without a biome the seed picks one, so the same seed always paints the same world; `none`
+    // keeps a plain heightfield (every sample on the first layer). The biome brings the relief
+    // (amplitude, feature size, octaves) and the layers; a parameter sent in the payload wins over
+    // it, which is how a script can ask for a flatter desert.
+    let biome = match request.biome.as_deref() {
+        Some("none") => None,
+        Some(name) => Some(Biome::parse(name).ok_or_else(|| {
+            invalid(
+                "terrain.generate",
+                format!(
+                    "bioma desconhecido `{name}`; use plains, forest, desert, snow, volcano ou none"
+                ),
+            )
+        })?),
+        None => Some(Biome::from_seed(request.seed)),
     };
+    let mut settings = match biome {
+        Some(biome) => biome.settings(request.seed),
+        None => TerrainGeneration {
+            fractal: FractalSettings {
+                seed: request.seed,
+                ..FractalSettings::default()
+            },
+            base_height: 0.0,
+            biome: None,
+        },
+    };
+    settings.fractal.seed = request.seed;
+    if let Some(value) = request.feature_size {
+        settings.fractal.feature_size = value;
+    }
+    if let Some(value) = request.amplitude {
+        settings.fractal.amplitude = value;
+    }
+    if let Some(value) = request.octaves {
+        settings.fractal.octaves = value;
+    }
+    if let Some(value) = request.lacunarity {
+        settings.fractal.lacunarity = value;
+    }
+    if let Some(value) = request.persistence {
+        settings.fractal.persistence = value;
+    }
+    if let Some(value) = request.base_height {
+        settings.base_height = value;
+    }
     terrain
         .generate_region(minimum, maximum, &settings)
         .map_err(|error| terrain_error("terrain.generate", error))?;
@@ -860,7 +888,10 @@ fn generate(world: &mut World, payload: &Json) -> Result<Outcome, CommandError> 
     let count = (i64::from(maximum.x) - i64::from(minimum.x) + 1)
         * (i64::from(maximum.z) - i64::from(minimum.z) + 1);
     Ok(Outcome {
-        result: json!({ "chunks": count }),
+        result: json!({
+            "chunks": count,
+            "biome": biome.map(|biome| biome.name()),
+        }),
         inverse: Some(terrain_inverse(request.entity, previous, follow_inverse)),
     })
 }
@@ -1835,6 +1866,7 @@ mod tests {
     use crate::Dispatcher;
     use crate::query::{QueryRecord, run_query};
     use petunia_math::{Color, PolygonMesh};
+    use petunia_terrain::{LAYER_ROCK, LAYER_SAND};
     use petunia_world::{TableSpec, ValueKind};
 
     fn world() -> World {
@@ -2523,5 +2555,91 @@ mod tests {
             .capture_chunk(ChunkCoord::new(0, 0))
             .expect("chunk back");
         assert_eq!(restored, chunk);
+    }
+
+    #[test]
+    fn generate_paints_the_biome_and_reports_it() {
+        let mut world = world();
+        let mut dispatcher = dispatcher();
+        let made = run(&mut world, &mut dispatcher, "terrain.create", json!({}));
+        let entity = made["entity"].as_u64().expect("entity");
+        let result = run(
+            &mut world,
+            &mut dispatcher,
+            "terrain.generate",
+            json!({
+                "entity": entity, "min_x": 0, "min_z": 0, "max_x": 0, "max_z": 0,
+                "seed": 4, "amplitude": 6.0, "biome": "desert"
+            }),
+        );
+        assert_eq!(result["biome"], json!("desert"));
+        let terrain = terrain_of(&world, entity);
+        let chunk = terrain.capture_chunk(ChunkCoord::new(0, 0)).expect("chunk");
+        assert!(
+            chunk
+                .materials()
+                .iter()
+                .all(|material| *material == LAYER_SAND || *material == LAYER_ROCK),
+            "o deserto só pinta areia e rocha"
+        );
+
+        // Without a biome the seed chooses one, and the same seed always chooses the same.
+        let first = run(
+            &mut world,
+            &mut dispatcher,
+            "terrain.generate",
+            json!({
+                "entity": entity, "min_x": 0, "min_z": 0, "max_x": 0, "max_z": 0, "seed": 9
+            }),
+        );
+        let second = run(
+            &mut world,
+            &mut dispatcher,
+            "terrain.generate",
+            json!({
+                "entity": entity, "min_x": 0, "min_z": 0, "max_x": 0, "max_z": 0, "seed": 9
+            }),
+        );
+        assert!(first["biome"].is_string());
+        assert_eq!(first["biome"], second["biome"]);
+
+        // `none` keeps a plain heightfield: every sample on the first layer.
+        run(
+            &mut world,
+            &mut dispatcher,
+            "terrain.generate",
+            json!({
+                "entity": entity, "min_x": 0, "min_z": 0, "max_x": 0, "max_z": 0,
+                "seed": 9, "biome": "none"
+            }),
+        );
+        let chunk = terrain_of(&world, entity)
+            .capture_chunk(ChunkCoord::new(0, 0))
+            .expect("chunk");
+        assert!(chunk.materials().iter().all(|material| *material == 0));
+    }
+
+    #[test]
+    fn an_unknown_biome_is_rejected_without_touching_the_terrain() {
+        let mut world = world();
+        let mut dispatcher = dispatcher();
+        let made = run(&mut world, &mut dispatcher, "terrain.create", json!({}));
+        let entity = made["entity"].as_u64().expect("entity");
+        let before = terrain_of(&world, entity);
+        let error = dispatcher
+            .execute(
+                &mut world,
+                &CommandRecord::new(
+                    "terrain.generate",
+                    json!({
+                        "entity": entity, "min_x": 0, "min_z": 0, "max_x": 0, "max_z": 0,
+                        "biome": "tundra"
+                    }),
+                ),
+            )
+            .expect_err("bioma desconhecido");
+        let message = format!("{error:?}");
+        assert!(message.contains("tundra"), "{message}");
+        assert_eq!(terrain_of(&world, entity), before);
     }
 }

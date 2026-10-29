@@ -1,3 +1,4 @@
+use crate::biome::{Biome, LAYER_GRASS};
 use crate::chunk::{ChunkCoord, TerrainChunk};
 use crate::error::TerrainError;
 use crate::noise::{FractalSettings, fractal};
@@ -9,6 +10,9 @@ pub struct TerrainGeneration {
     pub fractal: FractalSettings,
     /// Height of the flat reference plane, in meters.
     pub base_height: f32,
+    /// Which world this is: it paints the materials. `None` leaves every sample on the first
+    /// layer, which is what a plain heightfield (or an imported map) has.
+    pub biome: Option<Biome>,
 }
 
 impl Default for TerrainGeneration {
@@ -16,6 +20,7 @@ impl Default for TerrainGeneration {
         Self {
             fractal: FractalSettings::default(),
             base_height: 0.0,
+            biome: None,
         }
     }
 }
@@ -62,6 +67,12 @@ pub fn generate_chunk(
             let world_z = origin_z + local_z as f32 * cell_size;
             let height = settings.height_at(world_x, world_z);
             chunk.set_height(local_x, local_z, height)?;
+            // The layer depends on this sample's height alone, so two chunks never disagree on
+            // the border they share.
+            let layer = settings.biome.map_or(LAYER_GRASS, |biome| {
+                biome.material_at(height, settings.base_height, settings.fractal.amplitude)
+            });
+            chunk.set_material(local_x, local_z, layer)?;
         }
     }
     Ok(chunk)

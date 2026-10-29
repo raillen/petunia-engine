@@ -14,7 +14,7 @@ O Petunia3D já tem as peças centrais (`LOCAL`): spline Bézier com quadros por
 
 | Parte | Onde | O que faz |
 |---|---|---|
-| Dados e edição | `crates/petunia_terrain` | Heightmap em chunks, brushes 3D (esfera, caixa, cápsula, cilindro), 4 falloffs, subir/baixar/suavizar/aplainar/ruído/terraço, erosão térmica, furos, geração fBm determinística |
+| Dados e edição | `crates/petunia_terrain` | Heightmap em chunks, brushes 3D (esfera, caixa, cápsula, cilindro), 4 falloffs, subir/baixar/suavizar/aplainar/ruído/terraço, erosão térmica, furos, geração fBm determinística, **biomas** |
 | Armazenamento | `ValueKind::Terrain` + tabela `Terrain` | O terreno inteiro é um valor da cena, com alturas, materiais e furos; uma linha por cena |
 | Comandos | `terrain.*` e `surface.follow` | `create`, `generate`, `brush` (com `mirror_x`/`mirror_z`), `paint`, `patch`, `holes`, `erode`, `surface.follow`; todos com desfazer |
 | Consultas | `terrain.height`, `terrain.info` | Altura e normal numa posição; resumo de blocos e amostras |
@@ -74,6 +74,22 @@ Um intervalo do terreno sai e volta como arquivo, sem depender de ferramenta ext
 | Na janela | Operações > **Exportar heightmap…** / **Importar heightmap…** | Diálogo com o filtro `.pthm`; a barra de estado diz quantas amostras |
 
 Limites: 2048 amostras por lado e 4 milhões no total (16 MB), altura dentro de ±10000 m, origem alinhada à grade do terreno (a mesma amostra no mesmo lugar na volta), amostras sem bloco valem 0 m e a importação só escreve onde já existe bloco. O caminho tem de terminar em `.pthm`.
+
+### Biomas
+
+Um bioma é **dado**, não código de geração: nome, relevo (tamanho da feição, amplitude, oitavas, persistência, altura base) e as **faixas de altura** que escolhem a camada de cada amostra. Nada de aleatório além da escolha, que vem da semente — o mesmo seed gera sempre o mesmo mundo.
+
+| Bioma | Relevo (feição / amplitude) | Camadas por altura |
+|---|---|---|
+| `plains` | 96 m / 6 m | grama, rocha no topo |
+| `forest` | 48 m / 14 m | grama, terra na encosta, rocha no topo |
+| `desert` | 72 m / 3,5 m | areia, rocha nos montes |
+| `snow` | 56 m / 22 m | neve, rocha nos cumes |
+| `volcano` | 40 m / 18 m | rocha, cinza (camada de lama) no alto |
+
+A camada de uma amostra depende **só da altura dela**, então dois chunks nunca discordam na borda que compartilham. `terrain.generate` aceita `biome`; sem o campo a semente escolhe, e `none` mantém um heightfield puro (tudo na primeira camada). Os parâmetros de ruído do payload são opcionais e **vencem** os do bioma, o que permite achatar um deserto ou erguer uma planície sem sair do bioma.
+
+Trocar o bioma de um terreno já esculpido significa gerar de novo sobre ele (um passo de desfazer). Não existe transição entre biomas num mesmo mundo: o relevo e as camadas são função da altura, sem variação horizontal.
 
 ### Objetos que acompanham a superfície (`surface_follow`)
 

@@ -12,6 +12,7 @@
 //! Generation uses the crate's own deterministic value noise and fractal Brownian motion, so the
 //! same seed gives the same terrain on every machine. No GPU, no third-party noise library.
 
+mod biome;
 mod brush;
 mod chunk;
 mod error;
@@ -20,6 +21,9 @@ mod heightmap;
 mod noise;
 mod terrain;
 
+pub use biome::{
+    BIOMES, Biome, LAYER_DIRT, LAYER_GRASS, LAYER_MUD, LAYER_ROCK, LAYER_SAND, LAYER_SNOW,
+};
 pub use brush::{Brush, BrushShape, Falloff, TerrainOperation};
 pub use chunk::{
     ChunkCoord, MAX_CELL_SIZE, MAX_CHUNK_CELLS, MAX_CHUNKS, MAX_HEIGHT, MIN_CELL_SIZE, TerrainChunk,

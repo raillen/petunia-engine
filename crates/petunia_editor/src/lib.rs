@@ -563,7 +563,7 @@ mod tests {
             json!({
                 "op": "terrain.generate", "entity": entity,
                 "min_x": -1, "min_z": -1, "max_x": 0, "max_z": 0,
-                "seed": 1, "amplitude": 0.0
+                "seed": 1, "amplitude": 0.0, "biome": "none"
             }),
         );
         call(
@@ -668,7 +668,7 @@ mod tests {
             json!({
                 "op": "terrain.generate", "entity": terrain,
                 "min_x": 0, "min_z": 0, "max_x": 0, "max_z": 0,
-                "seed": 1, "amplitude": 0.0
+                "seed": 1, "amplitude": 0.0, "biome": "none"
             }),
         );
 
@@ -741,7 +741,7 @@ mod tests {
             json!({
                 "op": "terrain.generate", "entity": terrain,
                 "min_x": -1, "min_z": -1, "max_x": 0, "max_z": 0,
-                "seed": 1, "amplitude": 0.0
+                "seed": 1, "amplitude": 0.0, "biome": "none"
             }),
         );
         call(
@@ -808,7 +808,7 @@ mod tests {
             &mut session,
             json!({ "op": "terrain.generate", "entity": terrain,
                     "min_x": 20, "min_z": 20, "max_x": 20, "max_z": 20,
-                    "seed": 2, "amplitude": 0.0 }),
+                    "seed": 2, "amplitude": 0.0, "biome": "none" }),
         );
         let count_terrain = |session: &EditorSession, viewport: (u32, u32)| {
             session

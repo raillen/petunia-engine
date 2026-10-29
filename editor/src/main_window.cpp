@@ -737,6 +737,35 @@ void MainWindow::buildActions() {
                                  10000);
     });
     connect(generateTerrainAction_, &QAction::triggered, this, [this] {
+        // The biome picks the relief and the layers, so it is asked before anything is created.
+        // "Pela semente" keeps the choice deterministic: the same seed always generates the same
+        // world, which is what makes a terrain reproducible.
+        static const QList<QPair<QString, QString>> biomeChoices{
+            {QStringLiteral("Pela semente"), QString()},
+            {QStringLiteral("Planície"), QStringLiteral("plains")},
+            {QStringLiteral("Floresta"), QStringLiteral("forest")},
+            {QStringLiteral("Deserto"), QStringLiteral("desert")},
+            {QStringLiteral("Neve"), QStringLiteral("snow")},
+            {QStringLiteral("Vulcão"), QStringLiteral("volcano")},
+        };
+        QStringList labels;
+        for (const auto& choice : biomeChoices) {
+            labels.append(choice.first);
+        }
+        bool accepted = false;
+        const QString label = QInputDialog::getItem(this, QStringLiteral("Gerar terreno"),
+                                                    QStringLiteral("Bioma"), labels, 0, false,
+                                                    &accepted);
+        if (!accepted) {
+            return;
+        }
+        QString biome;
+        for (const auto& choice : biomeChoices) {
+            if (choice.first == label) {
+                biome = choice.second;
+                break;
+            }
+        }
         const quint32 seed = QRandomGenerator::global()->generate();
         const Reply made = perform(QStringLiteral("create.terrain"), QJsonObject{}, false);
         if (!made.ok) {
@@ -750,12 +779,25 @@ void MainWindow::buildActions() {
             {"entity", entity},
             {"min_x", -1}, {"min_z", -1}, {"max_x", 1}, {"max_z", 1},
             {"seed", static_cast<double>(seed)},
-            {"amplitude", 8.0},
-            {"base_height", 0.0},
+            // No amplitude here: the biome brings its own relief, so a desert is flat and the snow
+            // is mountainous without the user tuning anything.
+            {"biome", biome.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(biome)},
         }, false);
         if (reply.ok) {
             perform(QStringLiteral("tool.set"), QJsonObject{{"tool", QStringLiteral("terrain")}}, false);
-            statusBar()->showMessage(QStringLiteral("Terreno gerado (semente %1). Arraste para esculpir; Z desfaz.").arg(seed), 8000);
+            // The generator answers which biome was used, including when the seed chose it.
+            const QString painted = reply.result.toObject().value(QStringLiteral("biome")).toString();
+            QString shown = QStringLiteral("sem bioma");
+            for (const auto& choice : biomeChoices) {
+                if (!choice.second.isEmpty() && choice.second == painted) {
+                    shown = choice.first;
+                    break;
+                }
+            }
+            statusBar()->showMessage(QStringLiteral("Terreno gerado (semente %1, bioma: %2). Arraste para esculpir; Z desfaz.")
+                                         .arg(seed)
+                                         .arg(shown),
+                                     8000);
         } else {
             fprintf(stderr, "terrain.generate failed: %s / %s (entity=%f)\n",
                     reply.code.toUtf8().constData(), reply.message.toUtf8().constData(), entity);
