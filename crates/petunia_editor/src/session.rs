@@ -765,10 +765,13 @@ impl EditorSession {
         if self.terrain.section {
             frame.section_height = Some(self.terrain.section_height);
         }
+        // X-ray: the terrain keeps a faint surface and gains its edges, so the tunnels inside it
+        // and the cut plane stay visible while the surface still reads as a shape.
         if self.terrain_xray && self.tool.is_terrain() {
             for item in &mut frame.items {
                 if item.shape == Shape::Terrain {
                     item.color.a = 0.35;
+                    item.wireframe = true;
                 }
             }
         }

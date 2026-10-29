@@ -1013,6 +1013,16 @@ void MainWindow::buildAppBar() {
         auto* shortcut = new QShortcut(mnemonic, this);
         connect(shortcut, &QShortcut::activated, this, [this, menu] {
             menu->popup(hamburger_->mapToGlobal(QPoint(0, hamburger_->height() + 2)));
+            // The shortcut opened it: the keyboard must drive it from the first item on, as a
+            // menu bar would. A popup without an active action ignores the arrow keys.
+            const QList<QAction*> entries = menu->actions();
+            for (QAction* entry : entries) {
+                if (!entry->isSeparator() && entry->isEnabled() && entry->isVisible()) {
+                    menu->setActiveAction(entry);
+                    break;
+                }
+            }
+            menu->setFocus(Qt::PopupFocusReason);
         });
         menuShortcuts_.append(shortcut);
     }

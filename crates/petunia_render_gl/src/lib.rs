@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use glow::HasContext;
+use petunia_math::Color;
 use petunia_render::{
     DrawItem, Mat4, MeshData, OverlayItem, RenderFrame, SculptItem, Shape, axis_lines, build_mesh,
     grid_lines, model_matrix,
@@ -427,7 +428,36 @@ impl GlRenderer {
     }
 
     /// Draws one object with the main program (bound by the caller), building its mesh once.
+    ///
+    /// A wireframe item (the editor's X-ray) draws its faint surface and then its edges from both
+    /// sides: the shape stays readable and whatever it holds inside shows through.
     fn draw_item(&mut self, item: &DrawItem) -> Result<(), RenderError> {
+        if !item.wireframe {
+            return self.draw_item_surface(item);
+        }
+        self.draw_item_surface(item)?;
+        let edges = DrawItem {
+            color: Color {
+                a: (item.color.a * 2.5).min(0.9),
+                ..item.color
+            },
+            wireframe: false,
+            ..item.clone()
+        };
+        unsafe {
+            self.gl.polygon_mode(glow::FRONT_AND_BACK, glow::LINE);
+            self.gl.disable(glow::CULL_FACE);
+        }
+        let drawn = self.draw_item_surface(&edges);
+        unsafe {
+            self.gl.polygon_mode(glow::FRONT_AND_BACK, glow::FILL);
+            self.gl.enable(glow::CULL_FACE);
+        }
+        drawn
+    }
+
+    /// Draws the triangles of one object; the caller chose the polygon mode and the culling.
+    fn draw_item_surface(&mut self, item: &DrawItem) -> Result<(), RenderError> {
         if item.shape == Shape::Mesh || item.shape == Shape::Terrain {
             let terrain = item.shape == Shape::Terrain;
             if terrain {

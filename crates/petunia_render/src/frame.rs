@@ -52,6 +52,8 @@ pub struct DrawItem {
     pub detail: u32,
     pub transform: Transform,
     pub color: Color,
+    /// Drawn as edges only (the editor's X-ray): the surface stops hiding what is inside it.
+    pub wireframe: bool,
     /// For [`Shape::Mesh`]: the triangles to draw (in the object's own coordinates) and the
     /// fingerprint of the polygon mesh they came from (renderers key GPU buffers by it).
     pub mesh: Option<Arc<MeshData>>,
@@ -208,6 +210,7 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
             color,
             mesh: None,
             mesh_fingerprint: 0,
+            wireframe: false,
         });
     }
     for handle in world.entities_with_table("Mesh").unwrap_or_default() {
@@ -233,6 +236,7 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
             color,
             mesh: Some(cache.drawing(fingerprint, geometry)),
             mesh_fingerprint: fingerprint,
+            wireframe: false,
         });
     }
     for handle in world.entities_with_table("Terrain").unwrap_or_default() {
@@ -266,6 +270,7 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
                 color: Color::WHITE,
                 mesh: Some(mesh),
                 mesh_fingerprint: fingerprint,
+                wireframe: false,
             });
         }
     }

@@ -1,9 +1,11 @@
 #include "hierarchy_panel.h"
 
+#include <QEvent>
 #include <QHBoxLayout>
 #include <QHash>
 #include <QHeaderView>
 #include <QJsonObject>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
@@ -71,6 +73,7 @@ HierarchyPanel::HierarchyPanel(EngineBridge* bridge, QWidget* parent)
     layout->addWidget(summary_);
 
     connect(filter_, &QLineEdit::textChanged, this, &HierarchyPanel::applyFilter);
+    filter_->installEventFilter(this);
     connect(tree_, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem* current) {
         if (syncing_ || current == nullptr || current == root_) {
             return;
@@ -182,6 +185,40 @@ void HierarchyPanel::applyFilter() {
         }
         item->setHidden(!any);
     }
+}
+
+bool HierarchyPanel::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == filter_ && event->type() == QEvent::KeyPress) {
+        const auto* key = static_cast<QKeyEvent*>(event);
+        const bool go_down = key->key() == Qt::Key_Down;
+        const bool confirm = key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter;
+        if ((go_down || confirm) && selectFirstVisibleObject()) {
+            return true;
+        }
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+// Picks the first object the filter left visible (the project row is not an object) and hands the
+// keyboard to the tree, so the arrows keep walking the list.
+bool HierarchyPanel::selectFirstVisibleObject() {
+    if (root_ == nullptr) {
+        return false;
+    }
+    for (int row = 0; row < root_->childCount(); ++row) {
+        QTreeWidgetItem* item = root_->child(row);
+        if (item == nullptr || item->isHidden()) {
+            continue;
+        }
+        if (tree_->currentItem() == item) {
+            emit selectionRequested(item->data(0, kEntityRole).toULongLong());
+        } else {
+            tree_->setCurrentItem(item);
+        }
+        tree_->setFocus(Qt::OtherFocusReason);
+        return true;
+    }
+    return false;
 }
 
 void HierarchyPanel::syncSelection() {

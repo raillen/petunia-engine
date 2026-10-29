@@ -243,6 +243,7 @@ mod tests {
             color: Color::WHITE,
             mesh: None,
             mesh_fingerprint: 0,
+            wireframe: false,
         }
     }
 

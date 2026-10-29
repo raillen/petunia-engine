@@ -27,8 +27,14 @@ public:
 signals:
     void selectionRequested(quint64 entity);
 
+protected:
+    // Down or Enter inside the filter picks the first object still visible, so the search has a
+    // keyboard path (typing a name is not a reason to reach for the mouse).
+    bool eventFilter(QObject* watched, QEvent* event) override;
+
 private:
     void applyFilter();
+    bool selectFirstVisibleObject();
     void syncSelection();
     void refreshIcons();
 

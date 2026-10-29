@@ -28,25 +28,113 @@ set -euo pipefail
 editor="${PETUNIA_EDITOR_BIN:-/tmp/petunia-editor-build/petunia-editor}"
 output="${1:-/tmp/petunia-shot/smoke.png}"
 workdir="$(mktemp -d /tmp/petunia-smoke.XXXXXX)"
-display="${PETUNIA_EDITOR_DISPLAY:-:97}"
 mkdir -p "$(dirname "$output")"
 
 cleanup() {
-    [[ -n "${editor_pid:-}" ]] && kill "$editor_pid" 2>/dev/null || true
-    [[ -n "${xvfb_pid:-}" ]] && kill "$xvfb_pid" 2>/dev/null || true
+    if [[ -n "${editor_pid:-}" ]]; then
+        kill "$editor_pid" 2>/dev/null || true
+        wait "$editor_pid" 2>/dev/null || true
+    fi
+    if [[ -n "${xvfb_pid:-}" ]]; then
+        kill "$xvfb_pid" 2>/dev/null || true
+        wait "$xvfb_pid" 2>/dev/null || true
+    fi
     rm -rf "$workdir"
 }
 trap cleanup EXIT
 
-Xvfb "$display" -screen 0 1440x900x24 +extension GLX >/dev/null 2>&1 &
-xvfb_pid=$!
-sleep 1
+# Our own virtual display. The asked number is used when free; otherwise the next one, so two
+# runs back to back (or another agent) can never fight over :97.
+start_display() {
+    local first="${1#:}" candidate number
+    for number in $(seq "$first" $((first + 30))); do
+        candidate=":$number"
+        if [[ -e "/tmp/.X11-unix/X$number" ]]; then
+            continue
+        fi
+        Xvfb "$candidate" -screen 0 1440x900x24 +extension GLX >/dev/null 2>&1 &
+        xvfb_pid=$!
+        for _ in $(seq 1 60); do
+            if DISPLAY="$candidate" xdpyinfo >/dev/null 2>&1; then
+                display="$candidate"
+                return 0
+            fi
+            sleep 0.1
+        done
+        kill "$xvfb_pid" 2>/dev/null || true
+        wait "$xvfb_pid" 2>/dev/null || true
+        xvfb_pid=""
+    done
+    return 1
+}
+
+if ! start_display "${PETUNIA_EDITOR_DISPLAY:-:97}"; then
+    echo "falha: nenhum display virtual livre a partir de ${PETUNIA_EDITOR_DISPLAY:-:97}" >&2
+    exit 1
+fi
+
+# The "+" of a panel opens a name dialog. The workspace may still be laying out, so click, wait
+# for the dialog BY NAME and only then type. A modal blocks stray clicks, so retrying is safe.
+new_named_item() {
+    local title="$1" name="$2" attempt
+    for attempt in 1 2 3; do
+        xdotool mousemove 186 53 click 1
+        for _ in $(seq 1 12); do
+            # Anchored: the button's tooltip ("Novo script a partir do modelo") is a window too,
+            # and an unanchored regex would take it for the dialog.
+            if xdotool search --onlyvisible --name "^${title}$" >/dev/null 2>&1; then
+                xdotool type --delay 40 "$name"
+                xdotool key Return
+                for _ in $(seq 1 20); do
+                    xdotool search --onlyvisible --name "^${title}$" >/dev/null 2>&1 || break
+                    sleep 0.15
+                done
+                sleep 0.6
+                return 0
+            fi
+            sleep 0.25
+        done
+    done
+    echo "falha: o diálogo \"$title\" não abriu" >&2
+    return 1
+}
+
+# Saves and waits for the file to land on disk (the write is asynchronous).
+save_until() {
+    local path="$1" attempt
+    for attempt in 1 2 3; do
+        xdotool key ctrl+s
+        for _ in $(seq 1 12); do
+            [[ -f "$path" ]] && return 0
+            sleep 0.2
+        done
+    done
+    return 1
+}
 
 env -u WAYLAND_DISPLAY DISPLAY="$display" XDG_CONFIG_HOME="$workdir/config" XDG_CACHE_HOME="$workdir/cache" \
     QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 QT_LOGGING_RULES='qt.qpa.*=false' \
     "$editor" --sample "$workdir/sala" --screenshot "$output" --screenshot-delay 80000 2>/dev/null &
 editor_pid=$!
-sleep 10
+
+# Wait for the window, not for a guessed number of seconds.
+window_ready=""
+for _ in $(seq 1 160); do
+    if ! kill -0 "$editor_pid" 2>/dev/null; then
+        echo "falha: o editor terminou antes de abrir a janela" >&2
+        exit 1
+    fi
+    if DISPLAY="$display" xdotool search --onlyvisible --name "Sala de exemplo" >/dev/null 2>&1; then
+        window_ready="yes"
+        break
+    fi
+    sleep 0.25
+done
+if [[ -z "$window_ready" ]]; then
+    echo "falha: a janela do editor não apareceu" >&2
+    exit 1
+fi
+sleep 1.5   # the first frame drawn
 
 export DISPLAY="$display"
 xdotool mousemove 835 440 click 1;               sleep 0.6   # select the center of the big crate (#9)
@@ -82,8 +170,9 @@ xdotool key Return;                              sleep 0.8
 
 xdotool mousemove 130 78 click 1;                sleep 0.4   # hierarchy search: pick the crate by name
 xdotool type --delay 20 "Caixa grande";          sleep 0.6
-xdotool key Down Down;                           sleep 0.5   # search -> root -> the only child
-xdotool key alt+e; sleep 0.6; xdotool key Home Down Down Down Down Down Down Return; sleep 0.8   # Editar > Modo de edição
+xdotool key Down;                                sleep 0.5   # Down in the filter picks the first object left visible
+# The command palette finds the action by name: no menu row counting.
+xdotool key ctrl+k; sleep 0.6; xdotool type --delay 30 "modo de edicao"; sleep 0.6; xdotool key Return; sleep 0.9
 xdotool key 1;                                   sleep 0.4   # switch to vertex mode
 xdotool mousemove 990 431 click 1;               sleep 0.4   # pick component
 xdotool key 2;                                   sleep 0.4   # switch to edge mode
@@ -93,7 +182,7 @@ xdotool mousemove 990 431 click 1;               sleep 0.4   # pick component
 xdotool key alt+e; sleep 0.6; xdotool key Home Down Down Down Down Down Down Return; sleep 0.8   # exit Edit Mode
 # Terrain last: it covers the room, so create it only after the mesh steps. Criar > Terreno from
 # the command palette, generate it, focus it and drag the terrain brush across the surface.
-xdotool key alt+o; sleep 0.6; xdotool key Home Return; sleep 1.6   # Operações > Gerar terreno (first item)
+xdotool key alt+o; sleep 0.7; xdotool key Return; sleep 1.6   # Operações > Gerar terreno (the shortcut activates the first item)
 xdotool key f;                                   sleep 0.8   # focus the selected terrain
 xdotool mousemove 600 400 mousedown 1
 for x in 620 640 660 680; do xdotool mousemove "$x" 400; sleep 0.2; done
@@ -101,17 +190,16 @@ xdotool mouseup 1;                               sleep 0.8
 xdotool key ctrl+s;                              sleep 0.6   # save the scene
 xdotool mousemove 385 649 click 1;               sleep 0.4   # open the history tab
 xdotool key F4;                                  sleep 1.2   # the Código workspace opens
-xdotool mousemove 186 53 click 1;                sleep 1.0   # + (new script) in the Scripts list
-xdotool type --delay 40 smoke; xdotool key Return; sleep 1.0
+new_named_item "Novo script" smoke                          # + (new script) in the Scripts list
+xdotool mousemove 600 300 click 1;               sleep 0.3   # focus the code editor
 xdotool key ctrl+a; xdotool key Delete;          sleep 0.3
 xdotool type --delay 25 "fn on_update(entity, dt) {"; xdotool key Return
 xdotool type --delay 25 "log.info(\"oi\", entity)"; xdotool key Return
 xdotool type --delay 25 "}";                     sleep 0.6
-xdotool key ctrl+s;                              sleep 1.0   # saves the script to scripts/smoke.aipo
+save_until "$workdir/sala/scripts/smoke.aipo" || true            # saves the script to scripts/smoke.aipo
 xdotool mousemove 632 17 click 1;                sleep 1.2   # the Lógica workspace tab (node graphs as an outline; F7 on the keyboard,
                                                               # but xdotool's typing remaps keys, so the test clicks)
-xdotool mousemove 186 53 click 1;                sleep 1.0   # + (new graph)
-xdotool type --delay 40 gira; xdotool key Return; sleep 1.0
+new_named_item "Novo grafo" gira                             # + (new graph)
 xdotool mousemove 252 51 click 1;                sleep 1.0   # Evento: the palette
 xdotool type --delay 40 quadro;                  sleep 0.6
 xdotool key Return;                              sleep 1.0   # A cada quadro
@@ -139,7 +227,9 @@ xdotool keydown w; sleep 1.0; xdotool keyup w;   sleep 0.3   # walk
 xdotool key Escape;                              sleep 1.0   # Parar: the copy is thrown away
 xdotool key ctrl+s;                              sleep 0.8   # save the scene again: it must not contain the hero
 
-wait "$editor_pid"
+editor_status=0
+wait "$editor_pid" || editor_status=$?
+echo "editor terminou com código $editor_status"
 cp "$workdir/sala/scenes/room.scene.json" "$output.scene.json"
 cp "$workdir/sala/scripts/smoke.aipo" "$output.script.aipo" 2>/dev/null || true
 cp "$workdir/sala/scripts/gira.graph.json" "$output.graph.json" 2>/dev/null || true
@@ -211,3 +301,7 @@ print("verificação: Jogar (F6) e parar (Esc) não deixaram o herói de reserva
 sys.exit(0 if (moved and added and on_cursor and built_up and carved and dug and terrain_ok and scripted and graph_ok and moved_box and converted_to_mesh and hero_free) else 1)
 PY
 echo "imagem: $output (e $output.viewport.png, $output.canvas.png, $output.playing.png); cena salva: $output.scene.json"
+if [[ "$editor_status" -ne 0 ]]; then
+    echo "falha: o editor saiu com código $editor_status" >&2
+    exit 1
+fi

@@ -58,7 +58,7 @@ O brush vive no **espaço do mundo**, então não depende da câmera. No modo de
 | Recurso | Efeito |
 |---|---|
 | Prévia fantasma | Volume do brush translúcido + superfície resultante em cor de prévia; **nada é gravado até soltar/Enter** |
-| Raio X | Terreno em volta a 30 % de opacidade ou arame na região do brush |
+| Raio X | Terreno translúcido (35 % de opacidade) **mais as arestas em arame**, desenhadas sem *culling*: a superfície continua legível e o que está dentro (túneis, plano de corte) aparece |
 | Plano de corte | Secção opcional revela o interior sem alterar a superfície |
 | Máscara de profundidade | Mostra por onde o pincel está passando |
 

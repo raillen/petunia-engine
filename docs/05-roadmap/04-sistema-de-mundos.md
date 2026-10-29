@@ -13,7 +13,7 @@ Este documento é a lista viva do que foi implementado e do que falta no sistema
 | Terreno (edição) | Brushes 3D, 4 falloffs, 6 operações, erosão térmica e hidráulica, espelhamento x/z, *stamp* de heightmap e de malha 3D | Brushes plano/caminho, máscaras | 92% |
 | Terreno (render) | Malha por chunk, cores por camada (8), LOD 1/2/4, saias, furos, plano de corte | Materiais por textura, culling por chunk, verificação visual | 80% |
 | Terreno (física) | Heightfield no Rapier; trimesh nos chunks com furo | Terreno com transformação não-identidade | 80% |
-| Terreno (editor) | Pincel `terrain.begin/drag/end/cancel/set/preview`, anel, prévia ao vivo, um desfazer; menu **Criar > Terreno**, ferramenta **T**, barra de opções, **Gerar terreno** e **Raio X** | Plano de corte; ajuste fino de raio X; teste de fumaça estável | 85% |
+| Terreno (editor) | Pincel `terrain.begin/drag/end/cancel/set/preview`, anel, prévia ao vivo, um desfazer; menu **Criar > Terreno**, ferramenta **T**, barra de opções, **Gerar terreno**, **Raio X** em arame, **Corte** e teste de fumaça repetível | Ajuste fino do corte; verificação visual do LOD | 92% |
 | Cavernas (SDF) | `petunia_sculpt` (chunks 16³, surface nets, 5 modos, caminho, gerador, fundir, facetada) + espelhamento X, preencher, oco, ruído, **booleanos** (`sculpt.boolean`) e **carimbo de malha** (`sculpt.stamp_mesh`) | Malha sólida (o carimbo imprime a superfície) | 98% |
 | Caverna ↔ terreno | Furos explícitos (`terrain.holes`), furos automáticos dos túneis (`terrain.holes_from_caves`), render sem as células, física trimesh | Costura visual, ajuste fino do raio do furo | 85% |
 | `surface_follow` | Tabela `SurfaceFollow`, comando `surface.follow`, `surface.set` inverso, preferência, re-projeção, alinhamento à normal e **um desfazer** junto de `generate/brush/paint/erode/hydraulic/stamp` e do arrasto | UI dedicada (o inspetor genérico já edita a tabela) | 95% |
@@ -25,6 +25,24 @@ Este documento é a lista viva do que foi implementado e do que falta no sistema
 
 ## Implementado
 
+### 2026-10-28 — raio X em arame e teste de fumaça repetível
+
+| Item | Evidência |
+|---|---|
+| **Arame no raio X**: o terreno translúcido (35 %) ganha as arestas desenhadas dos dois lados (`DrawItem::wireframe`), então a superfície continua legível e o interior aparece | teste do editor: os blocos de terreno ficam em arame com alfa < 1 e voltam a sólidos ao desligar; **visto em captura** no display virtual |
+| **Arestas em duas passadas** no adaptador OpenGL: preenchimento translúcido, depois linhas de 90 % de opacidade, restaurando `FILL` e `CULL_FACE` | compila no Qt 6.4.2; visto na mesma captura |
+| **Teste de fumaça repetível**: `12/12` em **sete** execuções seguidas | evidência abaixo |
+| Menu do `≡` com o primeiro item ativo ao abrir por atalho: as setas e o Enter passam a funcionar sem mouse | teste de fumaça: **Operações > Gerar terreno** por `Alt+O` + `Return` |
+| `Down` no campo de busca da hierarquia seleciona o primeiro objeto visível e leva o foco para a árvore | teste de fumaça: escolha por nome antes do modo de edição |
+
+**Teste de fumaça, sete execuções seguidas:**
+
+| Rodada | Resultado |
+|---|---|
+| 1 a 7 | **12 de 12**, código de saída 0 |
+
+As três causas da instabilidade eram do harness e da janela, não de tempo de espera: display fixo `:97` colidindo com sobra de outra sessão, clique cego no `+` antes do workspace assentar (agora espera o diálogo pelo nome, ancorado) e `xdotool search` casando com o *tooltip* do botão. Agora o display é escolhido (primeiro livre), a janela é esperada pelo título e o menu abre com item ativo.
+
 ### 2026-10-28 — ferramentas avançadas e automação
 
 | Item | Evidência |
@@ -35,7 +53,7 @@ Este documento é a lista viva do que foi implementado e do que falta no sistema
 | `surface.set` + `surface.follow` automático: terreno e objetos em **um** desfazer | teste de comando e de editor |
 | **Plano de corte** no renderizador (`section_height` no frame e no shader) e na barra do terreno | teste de sessão; compila |
 | **Espelhamento X** no pincel de caverna (`sculpt.mirror`) | teste de editor: traço e espelho em um desfazer |
-| Checkboxes **Espelhar X/Z**, **Raio X** e **Corte** na barra do terreno | compila; **não vistos em imagem** |
+| Checkboxes **Espelhar X/Z**, **Raio X** e **Corte** na barra do terreno | **vistos em captura** no display virtual (a barra só os mostra por inteiro com a janela larga; em 1440 px eles caem no menu de estouro) |
 | **Preencher**, **Oco** e **Ruído** em cavernas (`sculpt.fill/hollow/noise`), com botões na barra | teste de editor: cada um é um desfazer |
 | **Carimbo de malha 3D** (`terrain.stamp_mesh`): a superfície de uma malha vira altura do terreno, com transformação | 1 teste de comando |
 | **Booleano de cavernas** (`sculpt.boolean`): assa as malhas das cavernas, roda `petunia_mesh::boolean` (união, subtração, interseção) e remove/mantém originais em um desfazer | 1 teste de editor; ação **Operações > Booleano de cavernas…** na janela com diálogo de seleção |
@@ -49,9 +67,9 @@ Este documento é a lista viva do que foi implementado e do que falta no sistema
 | Ferramenta **Esculpir terreno** (`T`) com arrasto ao vivo, anel e cancelamento | teste de protocolo (`terrain_tool`) e compilação da janela |
 | Barra de opções: operação, forma, falloff, raio, força, material, pintar, espelhar X/Z e raio X | compila; **vista em display virtual** numa execução do teste de fumaça |
 | **Gerar terreno** (Operações e paleta): cria o terreno se preciso e gera 3×3 blocos | verificação do teste de fumaça: **9 blocos** numa execução |
-| **Raio X**: o terreno fica translúcido enquanto a ferramenta está ativa | estado exposto por `terrain.xray`; **não olhado em imagem** |
+| **Raio X**: o terreno fica translúcido e em arame enquanto a ferramenta está ativa | `terrain.xray` no estado; **visto em captura** |
 | `terrain.hover` atualiza o anel sem arrastar | teste do editor |
-| Teste de fumaça do Qt | **intermitente**: 9/12 na última execução (gizmo, geração por paleta e Tab falharam); as etapas de caverna, script, grafo, canvas e Jogar passaram |
+| Teste de fumaça do Qt | **12/12 em sete execuções seguidas** |
 
 ### 2026-10-27 — segundo slice: integração completa do terreno
 
@@ -76,9 +94,9 @@ Este documento é a lista viva do que foi implementado e do que falta no sistema
 
 | # | Item | Depende de | Critério de pronto |
 |---|---|---|---|
-| 1 | Estabilizar o teste de fumaça (coordenadas fixas, foco do Tab, paleta) | editor | 12/12 repetível |
-| 2 | Arame no raio X (hoje translucidez + plano de corte) | 1 | ver o interior sem alterar a superfície |
-| 3 | Rios e estradas | outro agent | — |
+| 1 | Rios e estradas | outro agent | — |
+
+Itens concluídos nesta rodada: **teste de fumaça estável** (12/12 em quatro execuções) e **arame no raio X** (captura no display virtual).
 
 ## Não verificado (honesto)
 
@@ -89,8 +107,8 @@ Este documento é a lista viva do que foi implementado e do que falta no sistema
 | LOD sem costura visível | **não visto**; as saias existem, mas não foram olhadas em imagem |
 | Cores das 8 camadas | **não vistas**; os testes conferem contagem e furos, não a aparência |
 | Personagem andando no heightfield pela janela | **não rodou**; o teste de física prova a colisão, não o jogo |
-| Raio X | **translucidez implementada**; plano de corte e arame **não** |
-| Teste de fumaça | **intermitente**: 9/12 na última execução; gizmo, geração por paleta e Tab falharam |
+| Raio X | **visto em captura**: superfície a 35 % com arestas; a caverna em si não foi olhada por dentro nesta captura |
+| Teste de fumaça | **estável** em sete execuções seguidas (12/12); uma execução isolada em máquina carregada ainda pode falhar por tempo |
 | Erosão em terreno grande | **não medida**; o teste usa 8×8 |
 | Carimbo de malha na caverna | **sem lugar sólido**: imprime a superfície numa banda (2 células); uma malha fechada vira casca, não volume; limite de 4096 triângulos e 8 carimbos por caverna; **não olhado em imagem** |
 | Terreno com `Transform` deslocado | **não suportado**; os dados são do mundo e o collider assume origem |

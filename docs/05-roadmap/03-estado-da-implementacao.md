@@ -29,15 +29,15 @@ Segundo slice, na branch `feat/sistemas-de-mundo`. Checklist vivo: [sistema de m
 
 **Gates:** `cargo fmt --check` e `cargo clippy --workspace --all-targets -D warnings` ok; **462 testes, 0 falhas** (2 threads).
 
-**Janela Qt (2026-10-28):** menu **Criar > Terreno**, ferramenta **Esculpir terreno (T)**, barra de opções (operação, forma, falloff, raio, força, material, pintar, espelhar, raio X), ação **Gerar terreno** e **raio X** translúcido. O editor compila no Qt 6.4.2.
+**Janela Qt (2026-10-28):** menu **Criar > Terreno**, ferramenta **Esculpir terreno (T)**, barra de opções (operação, forma, falloff, raio, força, material, pintar, espelhar, raio X, corte), ação **Gerar terreno** e **raio X** em arame sobre superfície translúcida (35 %), visto em captura no display virtual. O editor compila no Qt 6.4.2.
 
-**Teste de fumaça:** **instável**. As melhores execuções deram **10 de 12**; nas seguintes o harness falhou já nos primeiros cliques (a janela sob Xvfb não recebeu foco/tempo). A criação/geração do terreno e o *stamp* estão cobertos por testes de protocolo; o caminho da janela não é confiável. Não declaro o teste verde. O `cargo fmt --all` também tenta formatar o projeto externo `aipo-lang` e falha por formatação dele; os crates desta workspace foram checados individualmente e passam.
+**Teste de fumaça:** **estável**, `12/12` em **sete** execuções seguidas (2026-10-28). As falhas anteriores vinham do harness: display fixo `:97` colidindo com sobra de outra sessão, clique cego no `+` antes do workspace assentar e `xdotool search` casando com o *tooltip* do botão. O separador de `Alt+letra` também deixava o menu sem item ativo e o campo de busca da hierarquia não tinha caminho de teclado; ambos foram corrigidos na janela, não no teste. O `cargo fmt --all` também tenta formatar o projeto externo `aipo-lang` e falha por formatação dele; os crates desta workspace foram checados individualmente e passam.
 
 **Não verificado:** a aparência do terreno, o LOD sem costura e as cores em imagem; o arrasto da ferramenta de terreno pela janela (só pelos testes de protocolo); o personagem andando no heightfield pela janela; erosão em terreno grande.
 
 **Ferramentas avançadas (2026-10-28):** `terrain.stamp` (heightmap) e `terrain.stamp_mesh` (malha 3D), erosão hidráulica determinística, furos automáticos dos túneis (`terrain.holes_from_caves`), `surface.set` + `surface.follow` automático com **um** desfazer, plano de corte no shader e na barra, espelhamento X, **preencher/oco/ruído**, **booleano de cavernas** (`sculpt.boolean`) e **carimbo de malha na caverna** (`sculpt.stamp_mesh`, tabela `SculptStamp`). **485 testes, 0 falhas** no workspace (medido em 2026-10-28).
 
-**Falta:** estabilizar o teste de fumaça, arame no raio X e rios/estradas (outro agent).
+**Falta:** rios/estradas (outro agent) e ajuste fino do plano de corte.
 
 **Carimbo de malha na caverna (2026-10-28):** `sculpt.stamp_mesh` imprime a superfície de um objeto com malha no campo SDF da caverna selecionada, com a transformação do objeto assada no espaço da caverna. `add` põe rocha atrás de cada face, `carve` tira. Um desfazer. Limites: 4096 triângulos por carimbo, 8 carimbos por caverna, banda de 2 células. **Não é um sólido**: uma malha fechada vira casca (para volume, `sculpt.boolean`). Testes: 3 de distância ponto-triângulo + 1 de forma no crate, 1 de editor com desfazer; ação **Operações › Carimbar malha na caverna…** compila no Qt 6.4.2, **não olhada em imagem**.
 

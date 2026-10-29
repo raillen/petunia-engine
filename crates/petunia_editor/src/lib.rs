@@ -762,6 +762,30 @@ mod tests {
         assert_eq!(preview["result"]["xray"], true);
         let snapshot = call(&mut session, json!({ "op": "editor.snapshot" }));
         assert_eq!(snapshot["result"]["terrain_xray"], true);
+        // X-ray draws the terrain as a wireframe: the surface keeps its shape and stops hiding
+        // the tunnels and the cut plane inside it.
+        let frame = session.frame().expect("frame");
+        let chunks: Vec<_> = frame
+            .items
+            .iter()
+            .filter(|item| item.shape == petunia_render::Shape::Terrain)
+            .collect();
+        assert!(!chunks.is_empty(), "o terreno gerado tem blocos");
+        assert!(chunks.iter().all(|item| item.wireframe));
+        assert!(chunks.iter().all(|item| item.color.a < 1.0));
+        call(
+            &mut session,
+            json!({ "op": "terrain.xray", "enabled": false }),
+        );
+        let frame = session.frame().expect("frame");
+        assert!(
+            frame
+                .items
+                .iter()
+                .filter(|item| item.shape == petunia_render::Shape::Terrain)
+                .all(|item| !item.wireframe),
+            "sem raio X o terreno volta a ser sólido"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
