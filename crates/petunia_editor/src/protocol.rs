@@ -224,6 +224,36 @@ impl EditorSession {
             "graph.group" => self.graph_group(text(request, "label")?, &node_list(request)?),
             "graph.ungroup" => self.graph_ungroup(Self::graph_request_node(request, "group")?),
 
+            "create.terrain" => self.create_terrain(),
+            "terrain.mode" => self.set_terrain_options(
+                request.get("mode").and_then(Json::as_str),
+                optional_number(request, "radius"),
+                optional_number(request, "strength"),
+                request.get("stamp").and_then(Json::as_str),
+                optional_number(request, "rotation"),
+            ),
+            "terrain.begin" => self.terrain_begin(pointer(request)?),
+            "terrain.drag" => self.terrain_drag(pointer(request)?),
+            "terrain.end" => self.terrain_end(),
+            // One stamp without a drag (the keyboard "step" brush); `times` repeats it as ONE undo
+            // step. The engine clamps it again to its own ceiling.
+            "terrain.step" => self.terrain_step(
+                pointer(request)?,
+                request
+                    .get("times")
+                    .and_then(Json::as_u64)
+                    .map_or(1, |times| times.min(64) as u32),
+            ),
+            "terrain.cancel" => Ok(self.terrain_cancel()),
+            "natural.point" => self.natural_point(pointer(request)?),
+            "natural.pop" => Ok(self.natural_pop()),
+            "natural.commit" => self.natural_commit(),
+            "natural.cancel" => Ok(self.natural_cancel()),
+            "natural.width" => self.natural_width(
+                optional_number(request, "width"),
+                optional_number(request, "depth"),
+            ),
+
             "editor.snapshot" => Ok(self.snapshot()),
             "entity.describe" => self.describe(entity(request)?),
             "diagnostics.get" => Ok(self.diagnostics()),

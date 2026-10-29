@@ -8,6 +8,7 @@ description = "Sculpted volumes (caves): strokes that add or carve rock, meshed 
 
 [dependencies]
 petunia_math.workspace = true
+petunia_world.workspace = true
 
 [lints]
 workspace = true

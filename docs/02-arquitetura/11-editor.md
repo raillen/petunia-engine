@@ -73,7 +73,7 @@ Se algo falha, a resposta explica o que fazer:
 | `camera.look` · `camera.advance` | movimento | Gira e anda |
 | `camera.get` · `camera.reset` · `camera.focus` | — | Lê, volta ao início, aproxima da seleção |
 | `camera.view` | `name` (`front`, `back`, `left`, `right`, `top`, `bottom`) | Olha para a seleção ou a cena nessa direção |
-| `tool.set` | `tool` (`select`, `move`, `rotate`, `scale`, `push_pull`, `extrude`, `sculpt`, `sculpt_path`) | Escolhe a ferramenta |
+| `tool.set` | `tool` (`select`, `move`, `rotate`, `scale`, `push_pull`, `extrude`, `sculpt`, `sculpt_path`, `terrain`, `river_path`, `road_path`) | Escolhe a ferramenta |
 | `snap.set` | `enabled`, `translate`, `rotate_degrees`, `scale`, `target` (`smart`, `grid`, `increment`, `point`, `face`), `align_to_slope` | Liga o snap, muda os passos e o alvo |
 | `gizmo.hover` · `gizmo.begin` | `x`, `y`, `width`, `height` (pixels) | Qual alça está sob o mouse; começa o arrasto |
 | `gizmo.drag` · `gizmo.end` · `gizmo.cancel` | idem (`invert_snap` opcional) | Move ao vivo; **um** passo no histórico ao soltar |
@@ -148,6 +148,19 @@ No canvas (**Caixas e fios**): arraste uma caixa para mover; arraste de uma **sa
 | `play.stop` | — | Descarta a cópia e devolve a câmera do editor |
 | `camera.view_direction` · `camera.yaw` · `camera.orbit` · `camera.projection` | `x`, `y`, `z` / `degrees` / `dx`, `dy` / `mode`, `height` | Usados pelo cubo de navegação e menus de projeção |
 
+### Terreno, rios e estradas (2026-10-28)
+
+Só aparecem para as ferramentas `terrain`, `river_path` e `road_path`, e cada ferramenta mostra **só os controles dela** (terreno: modo, raio e força; rio: largura e profundidade; estrada: largura, defensas e **Pontes e bueiros**). A barra com todos os controles de uma vez não cabia na janela e empurrava o botão das estruturas para fora da área visível. Detalhes do domínio em [terreno, rios e estradas](04-terreno-rios-estradas.md).
+
+| Operação | Campos | O que faz |
+|---|---|---|
+| `terrain.mode` | `mode` (`raise`, `lower`, `smooth`, `flatten`, `noise`, `erode`, `stamp`), `radius`, `strength`, `stamp` (`crater`, `mound`, `plateau`, `ridge`), `rotation` (graus) | Modo, raio, força, forma e giro do pincel de terreno (os campos da barra); forma e giro só aparecem no modo carimbo |
+| `terrain.begin` · `terrain.drag` · `terrain.end` · `terrain.cancel` | pixels | Pincelada: a primeira **cria** o terreno, cada ponto empilha um carimbo e soltar vira **um** `terrain.paint` (um desfazer) |
+| `terrain.step` | pixels, `times` | Passo por teclado (barra de espaços): um carimbo do modo atual no ponteiro, **sem arrastar**; responde com modo, forma e giro do carimbo, raio, força, ponto e a altura dali; `times` repete no mesmo ponto e tudo vira **um** `terrain.paint` |
+| `natural.point` · `natural.pop` · `natural.commit` · `natural.cancel` | pixels | Pontos do rio (`Y`) ou da estrada (`U`); `Enter` vira `path.create` e `Backspace` tira o último ponto |
+| `natural.width` | `width`, `depth` | Largura da estrada e profundidade do rio nos passos seguintes |
+| Botão **Pontes e bueiros** | — | Envia `road.detect_structures` para a estrada selecionada e escreve no rodapé quantas pontes e bueiros saíram; sem estrada selecionada, fica desabilitado |
+
 ## Layout da janela
 
 As regras de tamanho, cor e texto estão em [design da interface](15-design-da-interface.md) ([DR-26](../06-decisoes/registro-de-decisoes.md)).
@@ -168,7 +181,7 @@ As regras de tamanho, cor e texto estão em [design da interface](15-design-da-i
 | **Barra de cima** | `≡` com todos os menus (`F10`; `Alt+letra` abre um menu direto); o projeto (`•` = não salvo); os workspaces **Cena** (`F3`) e **Código** (`F4`); **Buscar comando** (`Ctrl+K`); desfazer, refazer, salvar |
 | **Faixa da cena** | Eixos Global/Local, pivô (menu), editar pivô, **snap** (o botão mostra o passo; `⌄` abre passos, alvo e inclinação) e o andar |
 | **Coluna de ferramentas** | No canto do viewport: transformar · faces · esculpir · primitivas (a lista abre ao lado) |
-| **Opções da ferramenta** | Só com Esculpir ou Túnel, sob a faixa; quando falta espaço, o resto vai para `⋯` |
+| **Opções da ferramenta** | Só com Esculpir, Túnel, Terreno, Rio ou Estrada, sob a faixa; mostra apenas os controles da ferramenta ativa (não depende do canto `⋯`, que não alcança widgets) |
 | **Hierarquia** | Árvore com o projeto na raiz, ícone por tipo, número em cinza; busca e `+` (criar) |
 | **Inspetor** | Ícone, nome e número; uma seção por tabela, com nome em português, que **recolhe**; `⋯` remove; **Adicionar tabela** no fim |
 | **Workspace Código** | Lista de scripts (`+` cria), editor, Problemas e Console, e a **Referência da API** (funções do script primeiro) |

@@ -17,6 +17,8 @@
 #include <QDockWidget>
 #include <QColorDialog>
 #include <QDialog>
+#include <QEvent>
+#include <QKeyEvent>
 #include <QFormLayout>
 #include <QFrame>
 #include <QSlider>
@@ -73,6 +75,34 @@ static QString componentModeName(ComponentMode mode) {
     return QStringLiteral("face");
 }
 
+namespace {
+
+// A spin box steps by its singleStep. The stamp angle uses 15° so a quarter turn is six presses, and
+// 1° while Ctrl is held so a bank can be aimed without typing a number (DR-37).
+class FineStepFilter : public QObject {
+public:
+    FineStepFilter(QDoubleSpinBox* box, double fine_step) : QObject(box), box_(box), fine_step_(fine_step) {}
+
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        if (watched == box_ && event->type() == QEvent::KeyPress) {
+            auto* key = static_cast<QKeyEvent*>(event);
+            const bool vertical = key->key() == Qt::Key_Up || key->key() == Qt::Key_Down;
+            if (vertical && key->modifiers().testFlag(Qt::ControlModifier)) {
+                box_->setValue(box_->value() + (key->key() == Qt::Key_Up ? fine_step_ : -fine_step_));
+                box_->selectAll();
+                return true;
+            }
+        }
+        return QObject::eventFilter(watched, event);
+    }
+
+private:
+    QDoubleSpinBox* box_;
+    double fine_step_;
+};
+
+} // namespace
+
 MainWindow::MainWindow() : bridge_(std::make_unique<EngineBridge>()) {
     setWindowTitle(QStringLiteral("Petunia Editor[*]"));
     resize(1360, 820);
@@ -102,6 +132,7 @@ MainWindow::MainWindow() : bridge_(std::make_unique<EngineBridge>()) {
     buildToolPalette();
     buildSculptBar();
     buildMeshBar();
+    buildNaturalBar();
     buildDocks();
 
     cameraLabel_ = new QLabel(this);
@@ -297,7 +328,7 @@ void MainWindow::buildActions() {
         Qt::Key key;
         Qt::KeyboardModifier modifier = Qt::NoModifier;
     };
-    const ToolInfo tools[8] = {
+    const ToolInfo tools[11] = {
         {"select", "Selecionar e transformar", "Seleciona com um clique; o gizmo universal move, gira e escala (V)", "select", Qt::Key_V},
         {"move", "Mover", "Setas movem num eixo, quadrados num plano, o centro no plano da tela (G)", "move", Qt::Key_G},
         {"rotate", "Girar", "Anéis giram num eixo, o anel externo em volta da vista, o centro livre (R)", "rotate", Qt::Key_R},
@@ -306,9 +337,12 @@ void MainWindow::buildActions() {
         {"extrude", "Extrudar", "Pressione numa face e arraste: um brush novo cresce dela (E)", "tool_extrude", Qt::Key_E},
         {"sculpt", "Esculpir caverna", "Arraste sobre uma caverna; o modo está na barra de cima, Ctrl faz o oposto. [ e ] mudam o raio (B)", "paint_brush", Qt::Key_B},
         {"sculpt_path", "Túnel por caminho", "Clique pontos na rocha e confirme com Enter: um túnel suave passa por eles. Backspace tira o último ponto (Shift+B)", "paint_path", Qt::Key_B, Qt::ShiftModifier},
+        {"terrain", "Pintar terreno", "Arraste para levantar, baixar, suavizar, nivelar ou erodir o terreno; o modo está na barra de cima (T)", "paint_3d", Qt::Key_T},
+        {"river_path", "Desenhar rio", "Clique pontos no chão e confirme com Enter: a água segue a curva. Backspace tira o último ponto (Y)", "paint_path", Qt::Key_Y},
+        {"road_path", "Desenhar estrada", "Clique pontos no chão e confirme com Enter: a estrada nasce na curva (U)", "paint_line", Qt::Key_U},
     };
     auto* toolGroup = new QActionGroup(this);
-    for (int index = 0; index < 8; ++index) {
+    for (int index = 0; index < 11; ++index) {
         toolActions_[index] = make(QString::fromUtf8(tools[index].label), QString::fromUtf8(tools[index].tip));
         toolActions_[index]->setCheckable(true);
         toolActions_[index]->setActionGroup(toolGroup);
@@ -371,6 +405,8 @@ void MainWindow::buildActions() {
     connect(playAction_, &QAction::triggered, this, &MainWindow::togglePlay);
     caveAction_ = make(QStringLiteral("Caverna"), QStringLiteral("Um bloco de rocha com um primeiro túnel; esculpa com a ferramenta Esculpir (B)"));
     caveAction_->setProperty("iconName", QStringLiteral("generate_volume"));
+    terrainAction_ = make(QStringLiteral("Terreno"), QStringLiteral("Um mapa de altura plano para pintar com a ferramenta Terreno (T)"));
+    terrainAction_->setProperty("iconName", QStringLiteral("paint_3d"));
     importModelAction_ = make(QStringLiteral("Importar modelo 3D…"), QStringLiteral("Traz um modelo .glb ou .gltf como objetos editáveis (uma cópia fica em assets/)"));
     importModelAction_->setProperty("iconName", QStringLiteral("cube"));
     connect(importModelAction_, &QAction::triggered, this, &MainWindow::chooseImportModel);
@@ -557,6 +593,12 @@ void MainWindow::buildActions() {
             palette_->open();
         }
     });
+    connect(terrainAction_, &QAction::triggered, this, [this] {
+        const Reply reply = perform(QStringLiteral("create.terrain"), {}, true);
+        if (reply.ok) {
+            statusBar()->showMessage(QStringLiteral("Terreno criado. Pinte com T; o modo está na barra de cima."), 8000);
+        }
+    });
     connect(caveAction_, &QAction::triggered, this, [this] {
         perform(QStringLiteral("create.cave"), QJsonObject{});
         statusBar()->showMessage(QStringLiteral("Caverna criada. Escolha Esculpir (B) e arraste sobre ela; Ctrl adiciona rocha."), 8000);
@@ -633,6 +675,7 @@ void MainWindow::buildMenus() {
         create->addAction(action);
     }
     create->addSeparator();
+    create->addAction(terrainAction_);
     create->addAction(caveAction_);
     create->addAction(randomCaveAction_);
     create->addSeparator();
@@ -666,6 +709,9 @@ void MainWindow::buildMenus() {
     operations->addAction(toolActions_[5]);
     operations->addAction(toolActions_[6]);
     operations->addAction(toolActions_[7]);
+    operations->addAction(toolActions_[8]);
+    operations->addAction(toolActions_[9]);
+    operations->addAction(toolActions_[10]);
     operations->addAction(sculptLargerAction_);
     operations->addAction(sculptSmallerAction_);
     operations->addSeparator();
@@ -925,6 +971,7 @@ void MainWindow::buildAppBar() {
     setActionIcon(newAction_, QStringLiteral("new_file"));
     setActionIcon(openAction_, QStringLiteral("open_project"));
     setActionIcon(caveAction_, QStringLiteral("generate_volume"));
+    setActionIcon(terrainAction_, QStringLiteral("paint_3d"));
     setActionIcon(importModelAction_, QStringLiteral("cube"));
     for (QAction* action : std::as_const(prefabActions_)) {
         setActionIcon(action, action->property("iconName").toString());
@@ -972,8 +1019,8 @@ void MainWindow::buildToolPalette() {
         layout->addWidget(line);
     };
     // Transform · faces · sculpting, then the primitives.
-    for (int index = 0; index < 8; ++index) {
-        if (index == 4 || index == 6) {
+    for (int index = 0; index < 11; ++index) {
+        if (index == 4 || index == 6 || index == 8) {
             rule();
         }
         auto* tool = new QToolButton(palette);
@@ -1251,6 +1298,242 @@ void MainWindow::syncSculptBar(const QJsonObject& snapshot) {
     sculptForceBox_->setEnabled(tool == QLatin1String("sculpt"));
 }
 
+
+void MainWindow::buildNaturalBar() {
+    naturalBar_ = new QToolBar(QStringLiteral("Terreno e caminhos"), this);
+    naturalBar_->setObjectName(QStringLiteral("PetuniaToolOptions"));
+    naturalBar_->setMovable(false);
+    naturalBar_->setFloatable(false);
+    naturalBar_->setAccessibleName(QStringLiteral("Opções de terreno, rio e estrada"));
+    sceneLayout_->insertWidget(1, naturalBar_);
+    naturalBar_->hide();
+
+    naturalTerrainItems_.append(naturalBar_->addWidget(new QLabel(QStringLiteral("Modo"))));
+    naturalMode_ = new QComboBox;
+    naturalMode_->setAccessibleName(QStringLiteral("Modo do pincel de terreno"));
+    naturalMode_->setToolTip(QStringLiteral("O que o arrasto faz no terreno"));
+    naturalMode_->addItem(QStringLiteral("Subir"), QStringLiteral("raise"));
+    naturalMode_->addItem(QStringLiteral("Descer"), QStringLiteral("lower"));
+    naturalMode_->addItem(QStringLiteral("Suavizar"), QStringLiteral("smooth"));
+    naturalMode_->addItem(QStringLiteral("Nivelar"), QStringLiteral("flatten"));
+    naturalMode_->addItem(QStringLiteral("Ruído"), QStringLiteral("noise"));
+    naturalMode_->addItem(QStringLiteral("Erosão"), QStringLiteral("erode"));
+    naturalMode_->addItem(QStringLiteral("Carimbo"), QStringLiteral("stamp"));
+    WheelGuard::protect(naturalMode_);
+    naturalTerrainItems_.append(naturalBar_->addWidget(naturalMode_));
+    connect(naturalMode_, &QComboBox::activated, this, [this](int index) {
+        perform(QStringLiteral("terrain.mode"), QJsonObject{{"mode", naturalMode_->itemData(index).toString()}}, false);
+    });
+
+    naturalTerrainItems_.append(naturalBar_->addWidget(new QLabel(QStringLiteral("Raio"))));
+    naturalRadiusBox_ = new QDoubleSpinBox;
+    naturalRadiusBox_->setRange(0.25, 128.0);
+    naturalRadiusBox_->setSingleStep(0.5);
+    naturalRadiusBox_->setSuffix(QStringLiteral(" m"));
+    naturalRadiusBox_->setAccessibleName(QStringLiteral("Raio do pincel de terreno"));
+    naturalTerrainItems_.append(naturalBar_->addWidget(naturalRadiusBox_));
+    connect(naturalRadiusBox_, &QDoubleSpinBox::editingFinished, this, [this] {
+        perform(QStringLiteral("terrain.mode"), QJsonObject{{"radius", naturalRadiusBox_->value()}}, false);
+    });
+
+    naturalTerrainItems_.append(naturalBar_->addWidget(new QLabel(QStringLiteral("Força"))));
+    naturalStrengthBox_ = new QDoubleSpinBox;
+    naturalStrengthBox_->setRange(0.0, 32.0);
+    naturalStrengthBox_->setSingleStep(0.25);
+    naturalStrengthBox_->setSuffix(QStringLiteral(" m"));
+    naturalStrengthBox_->setAccessibleName(QStringLiteral("Força do pincel de terreno"));
+    naturalTerrainItems_.append(naturalBar_->addWidget(naturalStrengthBox_));
+    connect(naturalStrengthBox_, &QDoubleSpinBox::editingFinished, this, [this] {
+        perform(QStringLiteral("terrain.mode"), QJsonObject{{"strength", naturalStrengthBox_->value()}}, false);
+    });
+
+    // The shape of a "Carimbo". It only shows while that mode is chosen, so the bar keeps the same
+    // width for the everyday brushes.
+    naturalStampItems_.append(naturalBar_->addWidget(new QLabel(QStringLiteral("Forma"))));
+    naturalTerrainItems_.append(naturalStampItems_.last());
+    naturalStampBox_ = new QComboBox;
+    naturalStampBox_->setAccessibleName(QStringLiteral("Forma do carimbo de terreno"));
+    naturalStampBox_->setToolTip(QStringLiteral("A silhueta que o carimbo grava no terreno"));
+    naturalStampBox_->addItem(QStringLiteral("Cratera"), QStringLiteral("crater"));
+    naturalStampBox_->addItem(QStringLiteral("Monte"), QStringLiteral("mound"));
+    naturalStampBox_->addItem(QStringLiteral("Platô"), QStringLiteral("plateau"));
+    naturalStampBox_->addItem(QStringLiteral("Crista"), QStringLiteral("ridge"));
+    WheelGuard::protect(naturalStampBox_);
+    naturalStampItems_.append(naturalBar_->addWidget(naturalStampBox_));
+    naturalTerrainItems_.append(naturalStampItems_.last());
+    connect(naturalStampBox_, &QComboBox::activated, this, [this](int index) {
+        perform(QStringLiteral("terrain.mode"), QJsonObject{{"stamp", naturalStampBox_->itemData(index).toString()}}, false);
+    });
+
+    // The turn belongs to the shape, so it only shows next to it. 15° per step and 1° with Ctrl
+    // (`FineStepFilter`); keyboardTracking is off so a typed number is sent once, on Enter.
+    naturalStampItems_.append(naturalBar_->addWidget(new QLabel(QStringLiteral("Girar"))));
+    naturalTerrainItems_.append(naturalStampItems_.last());
+    naturalRotationBox_ = new QDoubleSpinBox;
+    naturalRotationBox_->setRange(0.0, 360.0);
+    naturalRotationBox_->setSingleStep(15.0);
+    naturalRotationBox_->setKeyboardTracking(false);
+    naturalRotationBox_->setSuffix(QStringLiteral(" °"));
+    naturalRotationBox_->setAccessibleName(QStringLiteral("Giro do carimbo de terreno"));
+    naturalRotationBox_->setToolTip(QStringLiteral("Ângulo da forma: 15° por passo, Ctrl para 1°"));
+    naturalRotationBox_->installEventFilter(new FineStepFilter(naturalRotationBox_, 1.0));
+    naturalStampItems_.append(naturalBar_->addWidget(naturalRotationBox_));
+    naturalTerrainItems_.append(naturalStampItems_.last());
+    connect(naturalRotationBox_, &QDoubleSpinBox::valueChanged, this, [this](double degrees) {
+        perform(QStringLiteral("terrain.mode"), QJsonObject{{"rotation", degrees}}, false);
+    });
+
+    // The step brush (Space) says what it did. The mode label comes from this combo, so it is the
+    // same word the creator sees in the bar, and the height confirms the result without looking.
+    connect(viewport_, &ViewportWidget::terrainStepped, this, [this](const QJsonObject& result) {
+        QString mode = QStringLiteral("pincel");
+        const int index = naturalMode_->findData(result.value(QStringLiteral("mode")).toString());
+        if (index >= 0) {
+            mode = naturalMode_->itemText(index);
+        }
+        const int steps = result.value(QStringLiteral("steps")).toInt();
+        QString text = steps > 1 ? QStringLiteral("Passo: %1 ×%2").arg(mode).arg(steps)
+                                 : QStringLiteral("Passo: %1").arg(mode);
+        if (result.value(QStringLiteral("stamp")).isString()) {
+            const int shape = naturalStampBox_->findData(result.value(QStringLiteral("stamp")).toString());
+            if (shape >= 0) {
+                const QString angle =
+                    QLocale().toString(result.value(QStringLiteral("rotation")).toDouble(), 'f', 0);
+                text += QStringLiteral(" (%1, %2°)").arg(naturalStampBox_->itemText(shape)).arg(angle);
+            }
+        }
+        text += QStringLiteral(", raio %1 m")
+                    .arg(QLocale().toString(result.value(QStringLiteral("radius")).toDouble(), 'f', 2));
+        if (result.value(QStringLiteral("height")).isDouble()) {
+            text += QStringLiteral(". Altura agora %1 m")
+                        .arg(QLocale().toString(result.value(QStringLiteral("height")).toDouble(), 'f', 2));
+        }
+        text += QStringLiteral(". Ctrl+Z desfaz.");
+        statusBar()->showMessage(text, 6000);
+    });
+
+    naturalPathItems_.append(naturalBar_->addWidget(new QLabel(QStringLiteral("Largura"))));
+    naturalWidthBox_ = new QDoubleSpinBox;
+    naturalWidthBox_->setRange(0.1, 256.0);
+    naturalWidthBox_->setSingleStep(0.5);
+    naturalWidthBox_->setSuffix(QStringLiteral(" m"));
+    naturalWidthBox_->setAccessibleName(QStringLiteral("Largura do rio ou da estrada"));
+    naturalPathItems_.append(naturalBar_->addWidget(naturalWidthBox_));
+    connect(naturalWidthBox_, &QDoubleSpinBox::editingFinished, this, [this] {
+        perform(QStringLiteral("natural.width"), QJsonObject{{"width", naturalWidthBox_->value()}}, false);
+    });
+
+    naturalRiverItems_.append(naturalBar_->addWidget(new QLabel(QStringLiteral("Profundidade"))));
+    naturalDepthBox_ = new QDoubleSpinBox;
+    naturalDepthBox_->setRange(0.05, 64.0);
+    naturalDepthBox_->setSingleStep(0.25);
+    naturalDepthBox_->setSuffix(QStringLiteral(" m"));
+    naturalDepthBox_->setAccessibleName(QStringLiteral("Profundidade do rio"));
+    naturalRiverItems_.append(naturalBar_->addWidget(naturalDepthBox_));
+    connect(naturalDepthBox_, &QDoubleSpinBox::editingFinished, this, [this] {
+        perform(QStringLiteral("natural.width"), QJsonObject{{"depth", naturalDepthBox_->value()}}, false);
+    });
+
+    naturalRoadItems_.append(naturalBar_->addSeparator());
+    naturalGuardrailBox_ = new QCheckBox(QStringLiteral("Defensas"));
+    naturalGuardrailBox_->setAccessibleName(QStringLiteral("Defensas da estrada"));
+    naturalGuardrailBox_->setToolTip(QStringLiteral("Desenha duas defensas ao longo da estrada selecionada"));
+    naturalRoadItems_.append(naturalBar_->addWidget(naturalGuardrailBox_));
+    connect(naturalGuardrailBox_, &QCheckBox::toggled, this, [this](bool on) {
+        const QJsonValue selection = bridge_->snapshot().value(QStringLiteral("selection"));
+        if (!selection.isDouble()) {
+            return;
+        }
+        perform(QStringLiteral("command.execute"),
+                QJsonObject{{"command", QStringLiteral("path.set")},
+                            {"payload", QJsonObject{{"entity", selection.toInt()}, {"guardrail", on}}}},
+                false);
+    });
+
+    naturalStructuresButton_ = new QPushButton(QStringLiteral("Pontes e bueiros"));
+    naturalStructuresButton_->setAccessibleName(QStringLiteral("Detectar pontes e bueiros"));
+    naturalStructuresButton_->setToolTip(QStringLiteral("Compara a estrada selecionada com o terreno e cria as pontes e os bueiros"));
+    naturalRoadItems_.append(naturalBar_->addWidget(naturalStructuresButton_));
+    connect(naturalStructuresButton_, &QPushButton::clicked, this, [this] {
+        const QJsonValue selection = bridge_->snapshot().value(QStringLiteral("selection"));
+        if (!selection.isDouble()) {
+            return;
+        }
+        const Reply reply = perform(QStringLiteral("command.execute"),
+                                    QJsonObject{{"command", QStringLiteral("road.detect_structures")},
+                                                {"payload", QJsonObject{{"road", selection.toInt()}}}},
+                                    true);
+        if (reply.ok) {
+            const QJsonObject result = reply.result.toObject();
+            statusBar()->showMessage(QStringLiteral("%1 pontes e %2 bueiros encontrados.")
+                                         .arg(result.value(QStringLiteral("bridges")).toInt())
+                                         .arg(result.value(QStringLiteral("culverts")).toInt()), 8000);
+        }
+    });
+}
+
+void MainWindow::syncNaturalBar(const QJsonObject& snapshot) {
+    if (!naturalBar_) {
+        return;
+    }
+    const QString tool = snapshot.value(QStringLiteral("tool")).toString();
+    const bool natural = snapshot.value(QStringLiteral("project")).isObject() &&
+                         (tool == QLatin1String("terrain") || tool == QLatin1String("river_path") ||
+                          tool == QLatin1String("road_path"));
+    naturalBar_->setVisible(natural);
+    const QJsonObject state = snapshot.value(QStringLiteral("natural")).toObject();
+    const QSignalBlocker a(naturalMode_);
+    const QSignalBlocker b(naturalRadiusBox_);
+    const QSignalBlocker c(naturalStrengthBox_);
+    const QSignalBlocker d(naturalWidthBox_);
+    const QSignalBlocker e(naturalDepthBox_);
+    const QSignalBlocker g(naturalStampBox_);
+    const QSignalBlocker h(naturalRotationBox_);
+    naturalMode_->setCurrentIndex(qMax(0, naturalMode_->findData(state.value(QStringLiteral("mode")).toString())));
+    naturalStampBox_->setCurrentIndex(
+        qMax(0, naturalStampBox_->findData(state.value(QStringLiteral("stamp")).toString())));
+    if (!naturalRotationBox_->hasFocus()) {
+        naturalRotationBox_->setValue(state.value(QStringLiteral("rotation")).toDouble(0.0));
+    }
+    if (!naturalRadiusBox_->hasFocus()) {
+        naturalRadiusBox_->setValue(state.value(QStringLiteral("radius")).toDouble(4.0));
+    }
+    if (!naturalStrengthBox_->hasFocus()) {
+        naturalStrengthBox_->setValue(state.value(QStringLiteral("strength")).toDouble(0.5));
+    }
+    if (!naturalWidthBox_->hasFocus()) {
+        naturalWidthBox_->setValue(state.value(QStringLiteral("path_width")).toDouble(6.0));
+    }
+    if (!naturalDepthBox_->hasFocus()) {
+        naturalDepthBox_->setValue(state.value(QStringLiteral("path_depth")).toDouble(1.0));
+    }
+    // Each tool shows only the controls it uses: the whole set at once does not fit in the bar, and
+    // the bridge button used to end up out of reach behind the toolbar's overflow corner.
+    const bool terrainTool = tool == QLatin1String("terrain");
+    const bool riverTool = tool == QLatin1String("river_path");
+    const bool roadTool = tool == QLatin1String("road_path");
+    const bool pathTool = riverTool || roadTool;
+    const bool stampMode = state.value(QStringLiteral("mode")).toString() == QLatin1String("stamp");
+    const auto showItems = [](const QList<QAction*>& items, bool visible) {
+        for (QAction* item : items) {
+            item->setVisible(visible);
+        }
+    };
+    showItems(naturalTerrainItems_, terrainTool);
+    // The shape belongs to the stamp mode only; the rest of the bar keeps its place either way.
+    showItems(naturalStampItems_, terrainTool && stampMode);
+    showItems(naturalPathItems_, pathTool);
+    showItems(naturalRiverItems_, riverTool);
+    showItems(naturalRoadItems_, roadTool);
+    // `selected_road` is the id of the road or null, never a boolean: testing it against a boolean
+    // kept the bridge button and the guardrail box disabled for every selection.
+    const bool hasRoad = state.value(QStringLiteral("selected_road")).isDouble();
+    naturalGuardrailBox_->setEnabled(hasRoad);
+    naturalStructuresButton_->setEnabled(hasRoad);
+    const QSignalBlocker f(naturalGuardrailBox_);
+    naturalGuardrailBox_->setChecked(state.value(QStringLiteral("guardrail")).toBool());
+}
+
 void MainWindow::buildDocks() {
     auto addDock = [this](const QString& title, QWidget* widget, Qt::DockWidgetArea area) {
         auto* dock = new QDockWidget(title, this);
@@ -1303,6 +1586,7 @@ void MainWindow::buildDocks() {
         createMenu->addAction(action);
     }
     createMenu->addSeparator();
+    createMenu->addAction(terrainAction_);
     createMenu->addAction(caveAction_);
     createMenu->addAction(randomCaveAction_);
     createMenu->addSeparator();
@@ -1464,7 +1748,7 @@ void MainWindow::onSnapshot() {
     for (QAction* action : shapeActions_) {
         action->setEnabled(project);
     }
-    for (QAction* action : {caveAction_, randomCaveAction_, importModelAction_, pointLightAction_, sunLightAction_, sculptLargerAction_, sculptSmallerAction_}) {
+    for (QAction* action : {terrainAction_, caveAction_, randomCaveAction_, importModelAction_, pointLightAction_, sunLightAction_, sculptLargerAction_, sculptSmallerAction_}) {
         action->setEnabled(project);
     }
     for (QAction* action : std::as_const(prefabActions_)) {
@@ -1472,6 +1756,7 @@ void MainWindow::onSnapshot() {
     }
     sculptRadius_ = snapshot.value("sculpt").toObject().value(QStringLiteral("radius")).toDouble(sculptRadius_);
     syncSculptBar(snapshot);
+    syncNaturalBar(snapshot);
     resetCameraAction_->setEnabled(project);
     for (QAction* action : toolActions_) {
         action->setEnabled(project);
@@ -1798,6 +2083,7 @@ void MainWindow::showShortcuts() {
             "P empurrar/puxar uma face · E extrudar · Ctrl+Alt+C cavar · Ctrl+Alt+H tornar oco · Alt+P editar pivô<br>"
             "Ctrl+PageUp / Ctrl+PageDown: subir e descer um andar · Shift+A menu de primitivas<br>"
             "B esculpir caverna (arraste cava; com Ctrl adiciona rocha) · [ e ] raio do pincel<br>"
+            "T terreno · Y rio · U estrada · com o terreno, a barra de espaços aplica um carimbo sem arrastar<br>"
             "No gizmo: seta = eixo, quadrado = plano, centro = tela; Ctrl inverte o snap; Esc cancela<br><br>"
             "<b>Edição</b><br>"
             "Tab modo edição de malha · 1 vértice · 2 aresta · 3 face<br>"

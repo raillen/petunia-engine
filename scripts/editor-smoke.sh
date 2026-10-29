@@ -25,11 +25,21 @@
 #   scripts/editor-smoke.sh [output.png]
 set -euo pipefail
 
-editor="${PETUNIA_EDITOR_BIN:-/tmp/petunia-editor-build/petunia-editor}"
+editor="${PETUNIA_EDITOR_BIN:-}"
+if [[ -z "$editor" ]]; then
+    # One Qt build folder per working copy, named like scripts/editor.sh does.
+    root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    checkout="$(basename "$root")"
+    checkout="${checkout#petunia-engine-}"
+    editor="/tmp/petunia-editor-${checkout:-petunia-engine}/petunia-editor"
+fi
 output="${1:-/tmp/petunia-shot/smoke.png}"
 workdir="$(mktemp -d /tmp/petunia-smoke.XXXXXX)"
-display="${PETUNIA_EDITOR_DISPLAY:-:97}"
 mkdir -p "$(dirname "$output")"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_virtual-display.sh"
+# A display of our own: a run that died can leave an editor window on top of ours and every key
+# would go to it. `choose_display` skips a busy number (or stops when the display was pinned).
+choose_display :97
 rm -f "$output" "$output.viewport.png" "$output.canvas.png" "$output.playing.png" \
       "$output.scene.json" "$output.script.aipo" "$output.graph.json" "$output.layout.json"
 
@@ -46,9 +56,10 @@ sleep 1
 
 env -u WAYLAND_DISPLAY DISPLAY="$display" XDG_CONFIG_HOME="$workdir/config" XDG_CACHE_HOME="$workdir/cache" \
     QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 QT_LOGGING_RULES='qt.qpa.*=false' \
-    "$editor" --sample "$workdir/sala" --screenshot "$output" --screenshot-delay 62000 2>/dev/null &
+    "$editor" --sample "$workdir/sala" --screenshot "$output" --screenshot-delay 62000 2>"$workdir/editor.log" &
 editor_pid=$!
 sleep 3
+watch_editor "$editor_pid" "$workdir/editor.log"
 
 export DISPLAY="$display"
 xdotool mousemove 835 440 click 1;               sleep 0.6   # select the center of the big crate (#9)
@@ -61,7 +72,10 @@ xdotool mouseup 1;                               sleep 0.6
 # button's menu. Deleting a widget inside its own signal used to crash Qt (SIGSEGV).
 xdotool mousemove 1185 600; for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do xdotool click 5; sleep 0.05; done; sleep 0.4
 xdotool mousemove 1185 457 click 1;              sleep 0.6   # open the "Adicionar tabela" menu
-xdotool key Down Down Down Down Down Return;     sleep 0.8   # choose PlayerStart (list: Character, Floor, Light, Mesh, PlayerStart)
+# The menu lists the tables the object still lacks, in alphabetical order, so this count follows the
+# schema: Bridge, Character, Floor, Light, Mesh, PlayerStart... Adding a table that sorts before
+# PlayerStart (or removing one) means changing the number of Downs here.
+xdotool key Down Down Down Down Down Down Return; sleep 0.8   # choose PlayerStart (6th)
 xdotool mousemove 600 450; xdotool key shift+a;  sleep 0.8   # radial menu of primitives
 xdotool key 2;                                   sleep 0.8   # item 2: a ramp, on the current floor
 xdotool key ctrl+d;                              sleep 0.6   # duplicate it (the copy is selected)

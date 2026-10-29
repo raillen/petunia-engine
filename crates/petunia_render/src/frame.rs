@@ -6,6 +6,9 @@ use petunia_world::{EntityHandle, Value, World};
 use crate::camera::Camera;
 use crate::fly::FlyCamera;
 use crate::mesh::{MeshCache, MeshData};
+use crate::natural::{
+    bridge_mesh_data, rail_pair_mesh_data, road_mesh_data, terrain_mesh_data, water_mesh_data,
+};
 use crate::sculpt::SculptItem;
 
 /// The solid shapes a brush can take.
@@ -230,6 +233,218 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
             mesh_fingerprint: fingerprint,
         });
     }
+    // Terrain chunks: one draw item per chunk, in world coordinates.
+    for handle in world
+        .entities_with_table("TerrainChunk")
+        .unwrap_or_default()
+    {
+        let owner = match world.get(handle, "TerrainChunk", "owner") {
+            Ok(Value::Int(owner)) => *owner,
+            _ => continue,
+        };
+        let chunk_x = match world.get(handle, "TerrainChunk", "chunk_x") {
+            Ok(Value::Int(value)) => *value as i32,
+            _ => continue,
+        };
+        let chunk_z = match world.get(handle, "TerrainChunk", "chunk_z") {
+            Ok(Value::Int(value)) => *value as i32,
+            _ => continue,
+        };
+        let size = match world.get(handle, "TerrainChunk", "size") {
+            Ok(Value::Int(value)) => *value as usize,
+            _ => continue,
+        };
+        let cell_size = match world.get(handle, "TerrainChunk", "cell_size") {
+            Ok(Value::Float(value)) => *value as f32,
+            _ => continue,
+        };
+        let Ok(Value::Floats(heights)) = world.get(handle, "TerrainChunk", "heights") else {
+            continue;
+        };
+        let color = world
+            .handle_of(petunia_world::PersistentId(owner.max(0) as u64))
+            .ok()
+            .and_then(
+                |owner_handle| match world.get(owner_handle, "Terrain", "color") {
+                    Ok(Value::Color(color)) => Some(*color),
+                    _ => None,
+                },
+            )
+            .unwrap_or_else(|| Color::rgb(0.36, 0.46, 0.28));
+        let origin = Vec3::new(
+            chunk_x as f32 * size as f32 * cell_size,
+            0.0,
+            chunk_z as f32 * size as f32 * cell_size,
+        );
+        let entity = world.persistent_id(handle).map_or(0, |id| id.0);
+        let center = Vec3::new(
+            origin.x + size as f32 * cell_size * 0.5,
+            0.0,
+            origin.z + size as f32 * cell_size * 0.5,
+        );
+        let distance = (center - camera.position).length();
+        let lod_step = if distance > 256.0 {
+            21
+        } else if distance > 128.0 {
+            7
+        } else if distance > 64.0 {
+            3
+        } else {
+            1
+        };
+        let Some((mesh, fingerprint)) = terrain_mesh_data(
+            heights,
+            size,
+            cell_size,
+            origin,
+            crate::natural::hash_bits(0xcbf2_9ce4_8422_2325, entity),
+            lod_step,
+        ) else {
+            continue;
+        };
+        items.push(DrawItem {
+            entity,
+            selected: false,
+            hovered: false,
+            shape: Shape::Mesh,
+            size: Vec3::new(size as f32 * cell_size, 0.0, size as f32 * cell_size),
+            detail: 0,
+            transform: Transform::IDENTITY,
+            color,
+            mesh: Some(cache.store_drawing(fingerprint, mesh)),
+            mesh_fingerprint: fingerprint,
+        });
+    }
+
+    // Rivers: a translucent water ribbon following the spline.
+    for handle in world.entities_with_table("River").unwrap_or_default() {
+        let Ok(Value::Spline(spline)) = world.get(handle, "River", "spline") else {
+            continue;
+        };
+        let Some((mesh, fingerprint)) = water_mesh_data(spline, 1.0) else {
+            continue;
+        };
+        items.push(DrawItem {
+            entity: world.persistent_id(handle).map_or(0, |id| id.0),
+            selected: false,
+            hovered: false,
+            shape: Shape::Mesh,
+            size: Vec3::ZERO,
+            detail: 0,
+            transform: Transform::IDENTITY,
+            color: Color::new(0.18, 0.42, 0.72, 0.55),
+            mesh: Some(cache.store_drawing(fingerprint, mesh)),
+            mesh_fingerprint: fingerprint,
+        });
+    }
+
+    // Roads: an opaque ribbon with the road's width and shoulder.
+    for handle in world.entities_with_table("Road").unwrap_or_default() {
+        let Ok(Value::Spline(spline)) = world.get(handle, "Road", "spline") else {
+            continue;
+        };
+        let width = match world.get(handle, "Road", "width") {
+            Ok(Value::Float(value)) => *value as f32,
+            _ => 6.0,
+        };
+        let shoulder = match world.get(handle, "Road", "shoulder") {
+            Ok(Value::Float(value)) => *value as f32,
+            _ => 0.0,
+        };
+        let Some((mesh, fingerprint)) = road_mesh_data(spline, width, shoulder, 1.0) else {
+            continue;
+        };
+        items.push(DrawItem {
+            entity: world.persistent_id(handle).map_or(0, |id| id.0),
+            selected: false,
+            hovered: false,
+            shape: Shape::Mesh,
+            size: Vec3::ZERO,
+            detail: 0,
+            transform: Transform::IDENTITY,
+            color: Color::rgb(0.42, 0.39, 0.35),
+            mesh: Some(cache.store_drawing(fingerprint, mesh)),
+            mesh_fingerprint: fingerprint,
+        });
+    }
+
+    // Guardrails on roads that ask for them.
+    for handle in world.entities_with_table("Road").unwrap_or_default() {
+        let Ok(Value::Bool(true)) = world.get(handle, "Road", "guardrail") else {
+            continue;
+        };
+        let Ok(Value::Spline(spline)) = world.get(handle, "Road", "spline") else {
+            continue;
+        };
+        let width = match world.get(handle, "Road", "width") {
+            Ok(Value::Float(value)) => *value as f32,
+            _ => 6.0,
+        };
+        let Some((mesh, fingerprint)) = rail_pair_mesh_data(spline, width, 1.0) else {
+            continue;
+        };
+        items.push(DrawItem {
+            entity: world.persistent_id(handle).map_or(0, |id| id.0),
+            selected: false,
+            hovered: false,
+            shape: Shape::Mesh,
+            size: Vec3::ZERO,
+            detail: 0,
+            transform: Transform::IDENTITY,
+            color: Color::rgb(0.62, 0.60, 0.56),
+            mesh: Some(cache.store_drawing(fingerprint, mesh)),
+            mesh_fingerprint: fingerprint,
+        });
+    }
+
+    // Bridges draw rails along their span; culverts are only data.
+    for handle in world.entities_with_table("Bridge").unwrap_or_default() {
+        let Ok(Value::Text(kind)) = world.get(handle, "Bridge", "kind") else {
+            continue;
+        };
+        if kind != "bridge" {
+            continue;
+        }
+        let road = match world.get(handle, "Bridge", "road") {
+            Ok(Value::Int(value)) => *value,
+            _ => continue,
+        };
+        let Ok(road_handle) = world.handle_of(petunia_world::PersistentId(road.max(0) as u64))
+        else {
+            continue;
+        };
+        let Ok(Value::Spline(spline)) = world.get(road_handle, "Road", "spline") else {
+            continue;
+        };
+        let start = match world.get(handle, "Bridge", "start_parameter") {
+            Ok(Value::Float(value)) => *value as f32,
+            _ => 0.0,
+        };
+        let end = match world.get(handle, "Bridge", "end_parameter") {
+            Ok(Value::Float(value)) => *value as f32,
+            _ => 1.0,
+        };
+        let width = match world.get(handle, "Bridge", "width") {
+            Ok(Value::Float(value)) => *value as f32,
+            _ => 6.0,
+        };
+        let Some((mesh, fingerprint)) = bridge_mesh_data(spline, start, end, width, 1.0) else {
+            continue;
+        };
+        items.push(DrawItem {
+            entity: world.persistent_id(handle).map_or(0, |id| id.0),
+            selected: false,
+            hovered: false,
+            shape: Shape::Mesh,
+            size: Vec3::ZERO,
+            detail: 0,
+            transform: Transform::IDENTITY,
+            color: Color::rgb(0.66, 0.62, 0.55),
+            mesh: Some(cache.store_drawing(fingerprint, mesh)),
+            mesh_fingerprint: fingerprint,
+        });
+    }
+
     let lighting = extract_lighting(world, camera.position);
     RenderFrame {
         camera,
@@ -340,6 +555,9 @@ pub fn solid_shapes(world: &World) -> std::collections::BTreeMap<u64, petunia_ma
     let mut found = std::collections::BTreeMap::new();
     let frame = extract_frame(world, Camera::default());
     for item in &frame.items {
+        if item.color.a < 0.9 {
+            continue;
+        }
         let Ok(mesh) = crate::mesh::item_mesh(item) else {
             continue;
         };

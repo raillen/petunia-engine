@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use petunia_world::{Value, World};
+use petunia_math::CubicBezierSpline;
+use petunia_world::{PersistentId, Value, World};
 
 use crate::diagnostics::{Diagnostic, Report, Severity};
 use crate::error::ProjectError;
@@ -185,6 +186,161 @@ fn io_diagnostic(target: &str, error: &ProjectError) -> Diagnostic {
 }
 
 /// Checks that make sense once the entities are loaded.
+fn maximum_ascent(spline: &CubicBezierSpline) -> f32 {
+    let segments = spline.segments();
+    if segments == 0 {
+        return 0.0;
+    }
+    let samples = 64;
+    let mut maximum = 0.0f32;
+    let mut previous = spline.evaluate_position(0.0).map_or(0.0, |point| point.y);
+    for index in 1..=samples {
+        let parameter = (index as f32 / samples as f32) * segments as f32;
+        if let Some(position) = spline.evaluate_position(parameter) {
+            maximum = maximum.max(position.y - previous);
+            previous = position.y;
+        }
+    }
+    maximum
+}
+
+fn check_terrain(world: &World, report: &mut Report) {
+    for handle in world.entities_with_table("Terrain").unwrap_or_default() {
+        let id = world.persistent_id(handle).map_or(0, |id| id.0);
+        let target = format!("terreno #{id}");
+        if let Ok(Value::Float(cell_size)) = world.get(handle, "Terrain", "cell_size")
+            && *cell_size <= 0.0
+        {
+            report.push(Diagnostic::error(
+                "scene.terrain.cell_size_invalid",
+                &target,
+                "o tamanho da célula do terreno precisa ser maior que zero",
+                "Use um valor em metros, por exemplo 1,0.",
+            ));
+        }
+    }
+    let mut seen: std::collections::BTreeSet<(u64, i64, i64)> = std::collections::BTreeSet::new();
+    for handle in world
+        .entities_with_table("TerrainChunk")
+        .unwrap_or_default()
+    {
+        let id = world.persistent_id(handle).map_or(0, |id| id.0);
+        let target = format!("bloco de terreno #{id}");
+        let owner = match world.get(handle, "TerrainChunk", "owner") {
+            Ok(Value::Int(owner)) => *owner,
+            _ => -1,
+        };
+        if owner <= 0
+            || world
+                .handle_of(PersistentId(owner as u64))
+                .ok()
+                .is_none_or(|owner_handle| !world.has_row(owner_handle, "Terrain"))
+        {
+            report.push(Diagnostic::warning(
+                "scene.terrain_chunk.orphan",
+                &target,
+                "o bloco não aponta para um terreno existente e não será desenhado",
+                "Corrija `owner` ou apague o bloco.",
+            ));
+        }
+        let chunk_x = match world.get(handle, "TerrainChunk", "chunk_x") {
+            Ok(Value::Int(value)) => *value,
+            _ => 0,
+        };
+        let chunk_z = match world.get(handle, "TerrainChunk", "chunk_z") {
+            Ok(Value::Int(value)) => *value,
+            _ => 0,
+        };
+        if !seen.insert((owner.max(0) as u64, chunk_x, chunk_z)) {
+            report.push(Diagnostic::warning(
+                "scene.terrain_chunk.duplicate",
+                &target,
+                "dois blocos do mesmo terreno ocupam a mesma coordenada",
+                "Apague um dos blocos duplicados.",
+            ));
+        }
+        let size = match world.get(handle, "TerrainChunk", "size") {
+            Ok(Value::Int(value)) => *value,
+            _ => 0,
+        };
+        if !(2..=256).contains(&size) {
+            report.push(Diagnostic::error(
+                "scene.terrain_chunk.size_invalid",
+                &target,
+                "o bloco precisa ter entre 2 e 256 células por lado",
+                "Corrija `size`.",
+            ));
+            continue;
+        }
+        if let Ok(Value::Floats(heights)) = world.get(handle, "TerrainChunk", "heights")
+            && heights.len() != (size as usize) * (size as usize)
+        {
+            report.push(Diagnostic::error(
+                "scene.terrain_chunk.heights_size",
+                &target,
+                &format!(
+                    "o bloco tem {} alturas, mas precisa de {}",
+                    heights.len(),
+                    (size as usize) * (size as usize)
+                ),
+                "Reconstrua o bloco com a ferramenta de terreno.",
+            ));
+        }
+    }
+}
+
+fn check_paths(world: &World, report: &mut Report) {
+    for handle in world.entities_with_table("River").unwrap_or_default() {
+        let id = world.persistent_id(handle).map_or(0, |id| id.0);
+        let target = format!("rio #{id}");
+        if let Ok(Value::Spline(spline)) = world.get(handle, "River", "spline") {
+            let ascent = maximum_ascent(spline);
+            if ascent > 1.0e-4 {
+                report.push(Diagnostic::warning(
+                    "scene.river.ascends",
+                    &target,
+                    &format!("o rio sobe {ascent:.3} m em algum trecho"),
+                    "Abra o rio e use \"Baixar o leito\", ou ajuste os pontos para descer.",
+                ));
+            }
+        }
+        if let Ok(Value::Float(speed)) = world.get(handle, "River", "flow_speed")
+            && *speed < 0.0
+        {
+            report.push(Diagnostic::warning(
+                "scene.river.flow_negative",
+                &target,
+                "a velocidade do fluxo é negativa",
+                "Use zero ou um valor positivo.",
+            ));
+        }
+    }
+    for handle in world.entities_with_table("Road").unwrap_or_default() {
+        let id = world.persistent_id(handle).map_or(0, |id| id.0);
+        let target = format!("estrada #{id}");
+        if let Ok(Value::Float(width)) = world.get(handle, "Road", "width")
+            && *width <= 0.0
+        {
+            report.push(Diagnostic::error(
+                "scene.road.width_invalid",
+                &target,
+                "a largura da estrada precisa ser maior que zero",
+                "Aumente `width` (em metros).",
+            ));
+        }
+        if let Ok(Value::Float(shoulder)) = world.get(handle, "Road", "shoulder")
+            && *shoulder < 0.0
+        {
+            report.push(Diagnostic::warning(
+                "scene.road.shoulder_negative",
+                &target,
+                "o acostamento é negativo",
+                "Use zero ou uma fração positiva da meia largura.",
+            ));
+        }
+    }
+}
+
 fn check_world(world: &World, report: &mut Report) {
     for handle in world.entities_with_table("Brush").unwrap_or_default() {
         let id = world.persistent_id(handle).map_or(0, |id| id.0);
@@ -261,6 +417,9 @@ fn check_world(world: &World, report: &mut Report) {
             ));
         }
     }
+
+    check_terrain(world, report);
+    check_paths(world, report);
 
     let starts = world.entities_with_table("PlayerStart").unwrap_or_default();
     if starts.is_empty() {

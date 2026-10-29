@@ -4,7 +4,7 @@
 
 ## Resumo (TL;DR)
 
-São **34 decisões**. Estados possíveis:
+São **37 decisões**. Estados possíveis:
 
 - **HERDADA:** já decidida na especificação anterior (10/10/2026). Esta documentação **mantém**; só reabre com um ADR.
 - **PROPOSTA:** recomendação minha, aguardando você ou um experimento.
@@ -49,6 +49,9 @@ São **34 decisões**. Estados possíveis:
 | **DR-24** | Workspaces e prioridades antes da API | **EM PARTE ACEITA** (andares, cavernas B) | Mapa (com Jogar), Pintura sem UV, Animação, Efeitos por nós; antes da API: andares, cavernas, terreno, prefabs, Jogar ([análise](../02-arquitetura/14-workspaces-e-prioridades.md)) |
 | **DR-33** | Vários scripts por objeto | **ACEITA** (2026-10-27, "prossiga") | Primeiro script na linha legada; os seguintes são entidades-filhas com `owner` e `order`; todos rodam |
 | **DR-34** | Intercâmbio Aipo ⇄ IR | **EM IMPLEMENTAÇÃO** (2026-10-28, "continue") | IR com subconjunto explícito; recusa o resto com diagnóstico; uma VM por anexo |
+| **DR-35** | Schema de grafo v2 e migração | **DECIDIDA** (2026-10-28, "continue") | `SCHEMA_VERSION` 2; grafos v1 são lidos e migrados ao abrir; nós de laço e `with_index` |
+| **DR-36** | Terreno, rios e estradas | **ACEITA e MESCLADA** (2026-10-29) | Spline Bézier por comprimento de arco, perfis varridos, escavação/aplainamento/aterro, descida do rio, cruzamentos, lagos, quedas, confluências e grafo de navegação; comandos e consultas, barra no editor, gravação na cena, convés de ponte, leito sólido na física, erosão, ruído, passo por teclado e carimbos. Terreno em `petunia_world`. **Faltam** decals (`DR-12` é proposta), LOD em quadtree, tubo de bueiro e partículas ([arquitetura](../02-arquitetura/04-terreno-rios-estradas.md)) |
+| **DR-37** | Giro do carimbo de terreno | **ACEITA** (2026-10-29; 15° por passo, `Ctrl` para 1°) | Ângulo por carimbo (`rotation`, em graus) aplicado ao deslocamento dentro do disco, campo **Girar** só no modo Carimbo e o mesmo estado no passo por teclado |
 
 ---
 
@@ -713,6 +716,75 @@ Se uma biblioteca for necessária mais tarde, passa no checklist de admissão an
 
 ---
 
+## DR-36 — Terreno, rios e estradas: protótipo de domínio · ACEITA (2026-10-28, mesclada na `main` em 2026-10-29)
+
+**Pedido:** "prossiga com a implementação completa" dos rios, estradas e água, sem bibliotecas novas e em worktree isolada (`feat/mundo-natural-rios-estradas`, a partir da `main` @ `3db1c42`).
+
+**Numeração:** esta linha nasceu como `DR-33`/`DR-34`, números que na `main` já eram de outras decisões (scripts por objeto e intercâmbio Aipo ⇄ IR). Na mesclagem de 2026-10-29 ela virou **`DR-36`** e o giro do carimbo virou **`DR-37`**.
+
+**Decisão:** implementar primeiro o **domínio puro**, com dados serializáveis e funções pequenas; a integração com comandos, editor e render fica declarada como etapa seguinte.
+
+1. **Uma curva só.** `CubicBezierSpline` mora em `petunia_math` (parâmetro em unidades de segmento, handles, largura/profundidade/extra por ponto). A amostragem é **por comprimento de arco** e cada quadro carrega o parâmetro da curva, para largura/profundidade não dependerem de adivinhação. Limites: `MAX_SPLINE_POINTS` e `MAX_CURVE_SAMPLES`. `petunia_world` **não** redefine a curva; importa a de `petunia_math`.
+2. **Perfil normalizado.** `offset_x` é múltiplo da meia largura e `offset_y` do raio/profundidade. O perfil de **água** é plano (a superfície não afunda); o leito é escavado no terreno por outro caminho. A varredura devolve `Result<PathMesh, PathMeshError>` com orçamento de vértices e perfis de 2 a `MAX_PROFILE_POINTS` pontos; o fluxo e a máscara de margem vão nos vértices.
+3. **Terreno em `petunia_world`.** `Heightfield` com blocos de `HEIGHT_CHUNK_SIZE`, pincel com falloff, aplainamento com patamar interno (o resultado não depende de quantos carimbos se sobrepõem) e `chunks_touching`, para um caminho que cruza a borda do bloco continuar contínuo. `petunia_sculpt` escava, achata e aterra ao longo da spline; a escavação de rio usa largura e profundidade **por ponto**.
+4. **Rios.** `validate_river_descent` devolve relatório (`descends`, `maximum_ascent`) e `lower_river_bed` baixa o leito; confluências entre pontas de splines, lago por leque de triângulos, queda como fita vertical e `water_volume_for_spline` para flutuação/nado/correnteza.
+5. **Estradas.** Interseção por busca grossa + refino local determinístico, divisão por **de Casteljau** preservando os dois lados da curva, polígono de cruzamento ordenado por ângulo e aviso de cruzamento agudo. Faixas de **ponte** (estrada acima do terreno) e **bueiro/corte** (terreno acima da estrada) são detectadas quando a diferença de altura passa de um limite; a malha da ponte em si não entra nesta etapa.
+6. **Navegação em `petunia_graph`.** A rede vira grafo por arestas compartilhadas; o Project Doctor recebe pontas soltas, ilhas desconectadas e arestas com menos de dois extremos.
+7. **Sem dependência nova.** Tudo é matemática própria, determinística e sem `unwrap` em produção.
+
+**Fora desta etapa (declarado):** comandos e consultas (`petunia_commands`), interface no editor Qt, armazenamento do terreno e das redes no arquivo de cena, malha de pontes e bueiros, decals, colisão de água na física, sombreadores de fluxo/espuma e desfazer de pinceladas.
+
+**Complemento (2026-10-28, mesma data, depois da aceitação):** a etapa seguinte foi implementada nesta branch, e a lista acima fica **cumprida** assim:
+
+1. **Comandos e consultas:** `terrain.create`, `terrain.paint`, `path.create`, `path.set`, `road.detect_structures`; `terrain.sample` e `path.report`. Cada pincelada é **um** comando, logo **um** passo de desfazer: não houve código novo de desfazer por pincelada.
+2. **Editor Qt:** barra do terreno/rio/estrada (modo, raio, força, largura, profundidade), ferramentas `T`, `Y` e `U`, botão **Pontes e bueiros** e caixa de defensas. O **modo erosão** entrou no combo como `erode`. A barra mostra **só os controles da ferramenta ativa**, e o botão só habilita com uma estrada selecionada.
+3. **Gravação:** `Terrain`, `TerrainChunk`, `River`, `Road` e `Bridge` são tabelas normais da cena e sobrevivem a salvar e reabrir.
+4. **Malha da ponte:** laje fechada de 0,6 m sob a estrada mais as duas defensas, com **normal plana por triângulo** (a varredura dava a normal "para cima" a todas as faces, e o lado de baixo da laje ficava iluminado como céu). O **bueiro/corte continua só dado**: dentro de um corte é o terreno que faz a estrutura, e um tubo visível pertence a drenagem, não a esta etapa.
+5. **Colisão de água:** cada `TerrainChunk` vira `TriMesh` sólida (com passo reduzido quando o bloco passaria de `MAX_SOLID_TRIANGLES`), então o **leito** escavado do rio é chão andável. A água **não** vira parede: continua meio, com empuxo, nado e correnteza. A colisão que faltava era a do fundo.
+6. **Sombreadores de fluxo e espuma:** já estavam no `petunia_render_gl` (ondulação e espuma pela máscara de margem gravada nos vértices).
+7. **Pincel de erosão:** uma passada de erosão térmica em `HeightChunk::erode_region` — cada célula lê a cópia do início, cede material ao vizinho mais baixo, e o pé ganha exatamente o que o pico perdeu (determinístico).
+8. **Dois defeitos da janela, achados ao ligar o teste de fumaça aos botões de verdade (2026-10-28):** a barra de opções mostrava tudo de uma vez e empurrava o botão **Pontes e bueiros** para fora da área visível (o canto `⋯` da barra só alcança ações, não widgets); e a pergunta "há estrada selecionada?" comparava o **número** de `selected_road` com booleano, então o botão e a caixa **Defensas** nunca habilitavam. Os dois estão corrigidos e o teste de fumaça passa por eles (**7/7**, com erosão e ponte).
+9. **Pincel de ruído (2026-10-29):** `petunia_math::noise` traz ruído de valor e fractal **próprios** — retículo de 1,5 m, três oitavas e hash de coordenada inteira —, porque ruído é determinismo-crítico e não pode vir de biblioteca. `HeightChunk::roughen_region` soma o ruído com falloff e **desconta a média** do que carimbou, então a pincelada detalha a superfície sem criar nem sumir com material; o teste de fumaça aplica o mesmo critério de volume da erosão. O modo entrou no combo como `noise` (**Ruído**) e o teste de fluxo do editor confere altura, sinal e desfazer. O teste de fumaça foi de 7/7 para **9/9**.
+10. **Passo por teclado (2026-10-29):** a regra de acessibilidade "esculpir/pintar sem arrastar" (`docs/04-acessibilidade/01-editor.md`, pilar 1) virou `terrain.step`: **um** carimbo com o modo, o raio e a força da barra, sem `terrain.begin`/`drag`/`end` no meio do caminho, e sempre **um** `terrain.paint`, logo um desfazer. `times` repete o carimbo no mesmo ponto (teto de 32 no motor, 64 na porta) sem transformar o gesto em N passos de histórico. A resposta carrega `mode`, `radius`, `strength`, `point` e `height` (esta por `terrain.sample`), e a janela usa esses campos para escrever a frase do rodapé; o rótulo do modo vem do próprio combo, para não existirem duas listas de nomes. No viewport, a **barra de espaços** com a ferramenta de terreno e sem arrasto em curso dispara o passo, e o carimbo cai no **centro da tela** quando o ponteiro está fora dela — as setas bastam. O teste de fumaça foi de 9/9 para **11/11** (subiu + desfazer devolveu).
+11. **Carimbos de terreno (2026-10-29):** um **carimbo** é uma **silhueta nomeada** aplicada com o pincel — não um pincel novo. `petunia_world::stamp::StampShape` traz quatro formas (`crater`, `mound`, `plateau`, `ridge`) como **função fechada** do afastamento em unidades do raio dentro do disco, de `±1` no ponto mais forte a **zero na borda**: dois carimbos vizinhos se encontram sem degrau, e a mesma forma no mesmo lugar dá sempre o mesmo terreno (nada de ruído, nada de biblioteca). A **força é em metros**: é o quanto a forma desloca o chão no seu ponto mais forte. No motor, `HeightChunk::stamp_region` percorre só as células do disco e soma `forma × força`. No comando, `terrain.paint` aceita `mode: "stamp"` com `stamp: "<forma>"` e **recusa** o modo sem forma (nome desconhecido já era recusado pelo `serde`); a forma viaja por carimbo, então uma pincelada pode misturar modos. Na barra, o combo **Modo** ganhou **Carimbo** e um combo **Forma** aparece **só** nesse modo — a barra não muda de largura nos pincéis do dia a dia. O passo por teclado funciona com carimbo sem nenhuma mudança, porque lê o mesmo estado. O teste de fumaça foi de 11/11 para **14/14** (cratera com meio afundado e borda alta, monte que só sobe).
+
+**Continua fora:** decals (bloqueados pelo `DR-12`, que é proposta), LOD em quadtree, tubo visível de bueiro e partículas na queda.
+
+**Não verificado:** a janela na sessão real do usuário; a evidência de janela é o teste de fumaça no display virtual (terreno, alturas pintadas, erosão, ruído, **passo por teclado e desfazer**, **carimbo de cratera e de monte**, rio, estrada e **ponte**), nenhuma imagem foi tirada na sessão real. O convés da ponte é provado pelo teste de malha e pelo quadro entregue à janela, não pela captura do teste de fumaça, cuja câmera fica atrás do barranco levantado. O passo por teclado **não** foi testado com leitor de tela: o texto do rodapé existe, não se sabe se é anunciado. Os carimbos **não** giram sozinhos: o ângulo é digitado e vale **só** para carimbos (o `DR-37` entregou o campo **Girar** com 15° por passo e 1° com `Ctrl`); a previsualização da silhueta antes do clique não existe e a forma **platô** só tem teste no domínio, não na janela.
+
+**Reabrir se:** a integração com o editor precisar de outro formato de dados, ou se o custo de amostragem por comprimento de arco pesar em rios muito longos.
+
+---
+
+## DR-37 — Giro do carimbo de terreno · ACEITA (2026-10-29)
+
+**Pedido:** fechar o último limite declarado do carimbo do `DR-36`. Hoje a forma é sempre aplicada **alinhada ao mundo** — a crista corre ao longo do eixo x —, então não há como levantar uma crista perpendicular a um rio ou a uma estrada sem girar o terreno inteiro.
+
+**Opções**
+1. **Ângulo por carimbo**, em graus, no próprio registro do carimbo (`rotation`, padrão `0`). O motor gira o deslocamento antes de avaliar a forma, então a silhueta continua sendo a mesma função de antes, apenas orientada: a força segue em metros e a borda segue zerando, o que mantém a emenda invisível entre carimbos vizinhos. Na barra, um campo **Girar** aparece no modo Carimbo ao lado de **Forma**; o passo por teclado lê o mesmo estado e a frase do rodapé ganha o ângulo. Cenas antigas continuam válidas (`serde(default)`), não há comando novo e uma pincelada inteira continua sendo **um** desfazer.
+2. **Giro pela direção da pincelada:** a crista segue o traço. Não custa campo na barra, mas o resultado deixa de ser previsível — o mesmo clique em pontos diferentes gira sem aviso, um carimbo parado não tem direção e o passo por teclado, que não tem traço, não teria o que seguir.
+3. **Sem giro:** entregar mais formas fixas (vala, degrau, encosta) e considerar a orientação resolvida por composição de formas.
+
+**Recomendação:** **1.** É o menor acréscimo que resolve o problema real (crista perpendicular a um rio ou a uma estrada, encosta virada para o vale), cabe no formato de dados que já vai para a cena e mantém a regra "carimbo é dado, não gesto". A opção 2 não tem como ser testada com firmeza: depende do ponteiro, que é justamente o que a regra de acessibilidade quer tornar opcional.
+
+**Detalhes a decidir junto**
+1. **Passo do campo:** 15° com `Ctrl` para 1°, ou ângulo livre digitado.
+2. **Alcance:** recomendo que o giro valha **só para carimbos**. Um pincel radial (subir, descer, suavizar, erosão, ruído) não tem orientação, e um campo que não muda nada ensina a interface errada.
+
+**Fora desta proposta:** espelhar a forma (a crista é simétrica; o espelho só faria diferença numa forma assimétrica futura) e pré-visualizar a silhueta no viewport antes do clique.
+
+**Decisão (2026-10-29, "o giro do carimbo: ângulo por carimbo", "15°, com Ctrl para 1°"):** opção **1**, com o campo **Girar** a 15° por passo e 1° com `Ctrl` segurado. O giro vale **só** para carimbos; os pincéis radiais continuam sem ângulo, e o campo nem aparece neles.
+
+**Escolha:** opção 1 (ângulo por carimbo), passo de 15° e ajuste fino de 1° com `Ctrl`.
+**Motivo:** é o menor acréscimo que resolve o problema real (crista perpendicular a um rio ou a uma estrada, encosta virada para o vale), mantém "carimbo é dado, não gesto" e deixa o caminho sem ponteiro (o passo por teclado) com o mesmo resultado do caminho com mouse.
+**Reabrir se:** aparecer necessidade de espelhar a forma, de girar por eixo diferente do vertical, ou de orientar a silhueta pela direção de uma estrada ou de um rio (aí o giro passaria a ser derivado, não digitado).
+
+**Como ficou (LOCAL, verificado):** `StampShape::height_at_rotated` gira o deslocamento antes de avaliar a forma, então a borda continua zerando e a força continua em metros; `HeightChunk::stamp_region` recebe o ângulo e descarta um ângulo não finito. No comando, cada carimbo aceita `rotation` (padrão `0`, recusado se não for finito), então uma pincelada pode misturar ângulos. Na barra, o campo **Girar** aparece ao lado de **Forma**, só no modo Carimbo; `Ctrl`+seta dá 1° e a digitação é enviada ao soltar o campo ou apertar Enter. A frase do passo por teclado passa a dizer o ângulo — "Passo: Carimbo (Crista, 90°), raio 4,00 m…".
+
+**Verificação:** 2 testes novos em `petunia_world::stamp` (a crista vira 90° e troca os eixos; 0°/360° dão a mesma altura e um ângulo hostil não escreve nada), 1 no `heightfield` (a crista girada levanta ao longo de z e o pico não muda) e 1 de fluxo no `petunia_editor` (mesma forma, duas medidas, um desfazer entre elas). No teste de fumaça o mesmo carimbo de crista é aplicado reto e girado 90°: **16/16** (a medida ao longo de x cai e a ao longo de z cresce).
+
+---
+
 ## Como registrar uma decisão
 
 Ao decidir, troque o estado por `DECIDIDA` e acrescente:
@@ -726,4 +798,4 @@ Reabrir se:  condição objetiva
 
 ## Próximo passo
 
-**Responder `DR-11`, pergunta 1** (esta pasta é a retomada do `petunia-game-engine`?) e **`DR-01`** (direitos autorais do Petunia3D). Elas destravam as outras.
+**Responder `DR-11`, pergunta 1** (esta pasta é a retomada do `petunia-game-engine`?), que destrava as outras. Dos itens declarados do `DR-33` ficam decals (bloqueado pelo `DR-12`, que é proposta), LOD em quadtree, tubo de bueiro e partículas na queda — cada um precisa de proposta antes do código.

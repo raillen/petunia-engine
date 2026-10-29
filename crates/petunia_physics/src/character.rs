@@ -174,7 +174,29 @@ impl Simulation {
             let description = state.description;
             let mut vertical = state.vertical_speed;
             let coyote = state.grounded || state.air_seconds <= description.coyote_seconds;
-            if state.jump_requested && coyote {
+            let position = self
+                .bodies
+                .get(&entity)
+                .and_then(|handle| self.world.bodies.get(*handle))
+                .map(|body| crate::from_vector(body.translation()));
+            let water = position.and_then(|position| self.water_moment(position));
+            let mut intent = state.intent;
+            let jump_requested = state.jump_requested;
+            state.jump_requested = false;
+            if let Some(moment) = water {
+                intent = intent + moment.flow;
+                if intent.length() > moment.swim_force {
+                    intent = intent.normalized_or_zero() * moment.swim_force;
+                }
+                if jump_requested {
+                    vertical = description.jump_speed * 0.7;
+                    state.air_seconds = description.coyote_seconds + 1.0;
+                } else {
+                    vertical = (vertical
+                        + (moment.float_force - gravity * description.gravity_scale) * dt)
+                        * 0.85;
+                }
+            } else if jump_requested && coyote {
                 vertical = description.jump_speed;
                 state.air_seconds = description.coyote_seconds + 1.0;
             } else if state.grounded && vertical < 0.0 {
@@ -182,13 +204,8 @@ impl Simulation {
             } else {
                 vertical -= gravity * description.gravity_scale * dt;
             }
-            state.jump_requested = false;
 
-            let desired = vector(Vec3::new(
-                state.intent.x * dt,
-                vertical * dt,
-                state.intent.z * dt,
-            ));
+            let desired = vector(Vec3::new(intent.x * dt, vertical * dt, intent.z * dt));
             let outcome = self.move_character_shape(entity, &description, desired, dt);
             if let Some((translation, grounded, sliding)) = outcome {
                 if let Some(handle) = self.bodies.get(&entity).copied()

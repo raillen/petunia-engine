@@ -9,6 +9,7 @@ mod fly;
 mod frame;
 mod grid;
 mod mesh;
+mod natural;
 mod pick;
 mod sculpt;
 
@@ -20,6 +21,10 @@ pub use frame::{
 };
 pub use grid::{GRID_LIFT, GridLine, axis_lines, grid_lines};
 pub use mesh::{MeshCache, MeshData, MeshError, build_mesh, item_mesh, polygon_mesh_data};
+pub use natural::{
+    bridge_mesh_data, hash_spline, rail_pair_mesh_data, road_mesh_data, terrain_mesh_data,
+    water_mesh_data,
+};
 pub use petunia_sculpt::{ChunkMesh, SurfaceMesh};
 pub use pick::{Ray, SurfaceHit, mesh_points, pick_entity, pick_surface, ray_through};
 pub use sculpt::{SculptCache, SculptItem, SculptVolume, extract_sculpt_volumes, hit_sculpt};

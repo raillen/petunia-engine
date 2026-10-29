@@ -1,6 +1,6 @@
 # Estado da implementação
 
-**Revisão:** 2026-10-27 (integridade de dados) · **Fase atual:** 1 (esqueleto) concluída no código; **fase 2 (editor e construção de mapas) começou**
+**Revisão:** 2026-10-29 (protótipo de rios e estradas, branch) · **Fase atual:** 1 (esqueleto) concluída no código; **fase 2 (editor e construção de mapas) começou**
 
 ## Resumo (TL;DR)
 
@@ -12,7 +12,50 @@ Três análises novas pedem a sua decisão: [paridade da interface](../02-arquit
 
 **Consolidação de 2026-10-27:** os PRs #2 a #7 foram mesclados na `main` (personagem e Jogar, luzes e GLB, grafo de nós N1–N5, prefabs). A `main` tinha **397 testes** antes destas correções; com elas, tem **441 testes, 0 falhas** (2026-10-28), e o editor compila no Qt 6.4.2.
 
-## Etapa atual: intercâmbio Aipo ⇄ IR e isolamento por objeto (2026-10-28)
+## Etapa atual: rios, estradas, água e terreno no editor (2026-10-29)
+
+Decisão: [DR-36](../06-decisoes/registro-de-decisoes.md) e o complemento dela ([DR-37](../06-decisoes/registro-de-decisoes.md)). A interface existe (barra do terreno/rio/estrada no viewport) e o teste de fumaça a exercita no display virtual; nada foi visto na sua sessão real.
+
+| Entrega | Evidência |
+|---|---|
+| Spline Bézier com amostragem por comprimento de arco, quadros com parâmetro e largura/profundidade por ponto | testes do `petunia_math` (espaçamento uniforme em curva desigual, quadros ortonormais, curva fechada sem costura duplicada) |
+| Perfis varridos de rio/estrada, fluxo e máscara de margem nos vértices, orçamento e recusas | testes do `petunia_sculpt` (malha, largura por ponto, perfil vazio) |
+| Mapa de altura em blocos, pincel com falloff, aplainamento e continuidade entre blocos | testes do `petunia_world` e do `petunia_sculpt` (caminho cruza a borda do bloco) |
+| Rios: validação de descida, baixar leito, confluências, lago, queda, volume de água | testes do `petunia_sculpt` |
+| Estradas: interseção, divisão por de Casteljau, polígono de cruzamento, aviso de ângulo agudo, ponte/bueiro por diferença de altura | testes do `petunia_sculpt` |
+| Navegação: grafo por arestas, pontas soltas, ilhas, arestas sem dois extremos | 4 testes do `petunia_graph` |
+| **Comandos e consultas:** `terrain.create`, `terrain.paint`, `path.create`, `path.set`, `road.detect_structures`; `terrain.sample`, `path.report` | testes do `petunia_editor` pelo JSON, com desfazer, refazer e gravação na cena |
+| **Gravação na cena:** `Terrain`, `TerrainChunk`, `River`, `Road` e `Bridge` salvam e reabrem | teste que salva, fecha e reabre o projeto |
+| **Pincel de erosão:** uma passada de erosão térmica (cada célula cede material ao vizinho mais baixo, com falloff e cópia do início) | 3 testes do `petunia_world` + 1 de fluxo no editor (`terrain.mode` e `terrain.paint` com `erode`) |
+| **Pincel de ruído:** ruído de valor e fractal próprio (`petunia_math::noise`, retículo de 1,5 m, 3 oitavas) somado com falloff e **centrado na média**, então o carimbo detalha sem mudar o volume | 5 testes do `petunia_math`, 3 do `petunia_world` (detalhe, mesma semente, segunda pincelada aprofunda, entrada hostil) + 1 de fluxo no editor (`noise`) |
+| **Passo por teclado (acessibilidade):** `terrain.step` aplica **um** carimbo com o modo, o raio e a força da barra, sem arrastar — a barra de espaços no viewport; `times` repete no mesmo ponto e tudo continua sendo **um** desfazer. Sem ponteiro sobre o viewport o carimbo cai no centro da tela | 1 teste de fluxo no `petunia_editor` (três passos somam altura, `mode`/`radius`/`strength` e `height` na resposta, **um** desfazer devolve o terreno plano) + 2 verificações no teste de fumaça (subiu e o desfazer devolveu) |
+| **Carimbos de terreno:** formas nomeadas (`crater`, `mound`, `plateau`, `ridge`) em `petunia_world::stamp`, cada uma uma função fechada do afastamento dentro do disco e **zero na borda**; `terrain.paint` aceita `mode: stamp` com `stamp: <forma>` e o combo **Forma** aparece no modo Carimbo | 7 testes do `stamp` (nomes, limites e borda, cratera, monte, platô, crista, entrada hostil) + 4 do `heightfield` (cratera com meio fundo e borda alta, monte que não afunda, mesma forma dá o mesmo terreno, entrada hostil) + 1 de fluxo no editor (cratera com meio e borda, **um** desfazer) + 3 verificações no teste de fumaça (cratera cavou, borda subiu, monte só subiu) |
+| **Giro do carimbo (`DR-37`):** `rotation` em graus por carimbo, girado antes de avaliar a forma; campo **Girar** ao lado de **Forma** (15° por seta, `Ctrl` = 1°), e o passo por teclado lê o mesmo ângulo | 2 testes novos do `stamp` (a crista vira 90° e troca os eixos; 0°/360° iguais e ângulo hostil ignorado) + 1 do `heightfield` (crista girada levanta em z sem mudar o pico) + 1 de fluxo no editor (duas medidas com um desfazer entre elas) + 2 verificações no teste de fumaça (a mesma crista reta e girada 90°) |
+| **Desenho:** terreno com LOD e saia, água, estrada com acostamento, defensas, **convés de ponte** e fluxo/espuma no sombreador | testes do `petunia_render` (convés abaixo da estrada, faces de baixo não iluminadas como céu) + teste do editor que acha o convés no quadro entregue à janela |
+| **Ponte e bueiro:** a ponte ganha convés e defensas; o bueiro/corte fica só como dado (o terreno é a estrutura) | teste do editor com estrada acima do terreno (ponte) e dentro do corte (bueiro) |
+| **Física:** cada bloco de terreno entra como malha sólida, então o leito do rio é chão andável; a água continua meio (empuxo, nado, correnteza) | 2 testes do `petunia_physics` (bloco andável, bloco quebrado reportado e deixado de fora) |
+| Editor Qt | compila (`scripts/editor.sh build`); `scripts/natural-smoke.sh` **16/16** no display virtual: cria o terreno, pinta alturas, **erode** e aplica **ruído** (cada um muda o material e conserva o volume), aplica **um passo por teclado** e **desfaz** (o terreno volta ao medido), grava um **carimbo de cratera** (meio afundou, borda subiu) e um **de monte** (só subiu), carimba a **mesma crista reta e girada 90°** (a medida longa troca de eixo), cria rio e estrada, cava sob a estrada e **detecta a ponte** (entidade `Ponte`, vão 0..2) |
+| Workspace inteiro | **535 testes, 0 falhas** (`main` com esta linha mesclada, 2026-10-29, 2 threads); `cargo clippy --workspace --all-targets -- -D warnings` ok; `cargo fmt` ok **por pacote** (ver a nota do `fmt` abaixo); `cargo deny` **não rodou** (ferramenta não instalada) e nenhuma dependência nova entrou |
+
+**Corrigido ao ligar o teste de fumaça à janela (2026-10-28):** a barra de opções mostrava todos os controles de uma vez, não cabia na largura da janela e o botão **Pontes e bueiros** caía fora da área visível (o canto `⋯` da barra não alcança widgets, só ações); e a checagem de "há estrada selecionada?" comparava `selected_road` — que é o **número** do id — com booleano, então o botão e a caixa **Defensas** nunca habilitavam. Agora cada ferramenta mostra só os seus controles e o teste é `isDouble()`.
+
+**Outro teste de janela:** `scripts/editor-smoke.sh` voltou a **11/11** depois de acertar quantas teclas `Down` escolhem `PlayerStart` no menu **Adicionar tabela**. O menu lista as tabelas que faltam em ordem alfabética e o branch trouxe `Bridge`, `River`, `Road`, `Terrain` e `TerrainChunk` — todos antes de `PlayerStart`, que virou o **sexto** item. O teste reprovava antes de qualquer mudança de produto.
+
+**Uma reprovação intermitente no `editor-smoke.sh` (2026-10-29):** a checagem da malha editável (Tab) reprovou na primeira de duas execuções seguidas, sem nenhuma mudança no caminho do Tab — a segunda passou **11/11**. O passo clica a caixa em (990, 431) depois de andar e girar a câmera; um clique que não acerta a caixa deixa o Tab sem o que converter. Fica registrado como falha do teste, não do produto, e sem conserto: se voltar a acontecer, o clique tem de seguir a posição da caixa em vez de um pixel fixo.
+
+**Pasta de build da janela (2026-10-29):** a pasta do CMake se chamava `/tmp/petunia-editor-build` e estava configurada para o checkout irmão `petunia-engine-mundo`. O CMake guarda a pasta de origem de quem configurou primeiro, então `scripts/editor.sh build` compilava o editor **daquele** checkout e o teste de fumaça rodava um binário com telas que não existem aqui (o status bar dizia `TERRAIN_NO_HIT`, texto que não está neste código). Agora cada cópia de trabalho tem a sua pasta (`/tmp/petunia-editor-<nome do checkout>`), `scripts/editor.sh` recusa uma pasta configurada para outra origem e os dois testes de fumaça derivam o mesmo nome, sem `PETUNIA_EDITOR_BIN` no comando.
+
+**Tela virtual reaproveitada por um teste de fumaça (2026-10-29):** uma execução que morre no meio pode deixar o display `:98` ocupado e um **editor daquela execução** em cima do novo. Todo clique e tecla vão para a janela errada e o script continua "rodando": as pinceladas caíram em outro projeto, o arquivo da cena nunca foi escrito e as verificações começaram a reprovar como se a **erosão**, o **ruído** e o **passo** estivessem quebrados — o que me custou uma hora de diagnóstico errado. `scripts/_virtual-display.sh` (compartilhado pelos dois testes) escolhe um display livre (e recusa, em vez de mudar, quando `PETUNIA_EDITOR_DISPLAY` foi fixado) e aborta na hora se o editor morre ao abrir, mostrando o log dele.
+
+**Salvamento esperado, não adivinhado (2026-10-29):** o teste de fumaça fazia `ctrl+s` e copiava o arquivo da cena depois de um `sleep` fixo. A janela entrega o salvamento ao motor e o arquivo aparece um instante depois, então o `sleep` curto demais copiava o estado da ação **anterior**: cada verificação comparava o par errado de arquivos e quatro checks (erosão, passo, desfazer e monte) reprovaram sobre um produto que estava certo. A função `save_scene` do `scripts/natural-smoke.sh` anota o `mtime` antes do `ctrl+s`, espera até 6 s a cena ser regravada e **para o teste** com mensagem se o arquivo não mudar; nenhuma verificação recebe mais arquivo velho.
+
+**Navegação do combo por posição (2026-10-29):** o mesmo teste escolhia o modo com `End` (último item) e `End`+`Up` (penúltimo). Ao entrar **Carimbo** no fim da lista, os dois atalhos passaram a apontar para outros modos e a erosão virou carimbo sem nenhum aviso. Agora um auxiliar `pick_mode` conta `Home` + N × `Down`, e a ordem dos modos está escrita ao lado para conferência.
+
+**Ainda falta (declarado):** decals de faixa (bloqueado: `DR-12` é só proposta), LOD em quadtree, tubo visível de bueiro e partículas na queda.
+
+**Não verificado:** a janela na sua sessão real (a evidência é o display virtual); leitor de tela (o passo por teclado escreve no rodapé, mas **não foi testado** se o leitor de tela anuncia); o mesmo passo no pincel de esculpir caverna; campo numérico para `times` na barra; terreno grande (desempenho e memória); a forma **platô** só tem teste no domínio — na janela foram vistos a cratera, o monte e a crista (reta e girada); e a silhueta girada **não** é previsualizada antes do clique.
+
+## Antes: intercâmbio Aipo ⇄ IR e isolamento por objeto (2026-10-28)
 
 | O quê | Verificação |
 |---|---|
@@ -25,7 +68,7 @@ Três análises novas pedem a sua decisão: [paridade da interface](../02-arquit
 | **Schema v2 e migração** | **implementado:** grafos v1 são lidos e migrados para v2; `flow.while`, `flow.loop`, `flow.break`, `flow.continue` e `flow.each.with_index`; 14 testes de modelo e 21 testes públicos de grafo |
 | **Edição contínua das duas vistas** | **implementado no recorte suportado:** `graph.code` gera Aipo e `graph.from_code` recria o grafo; botão **Aplicar código** no painel Lógica. Fora do subconjunto, diagnóstico |
 
-## Etapa atual: renomear e apagar scripts/grafos (2026-10-27)
+## Antes: renomear e apagar scripts/grafos (2026-10-27)
 
 | O quê | Verificação |
 |---|---|
@@ -367,6 +410,8 @@ Detalhes: [editor](../02-arquitetura/11-editor.md), [paridade](../02-arquitetura
 | Item | Estado | Evidência |
 |---|---|---|
 | `cargo fmt`, `cargo clippy --workspace --all-targets -D warnings` | **passou** | limpo |
+| `cargo fmt --all` (literal) | **não passa neste worktree** | `--all` também formata a dependência de caminho `../aipo-lang` (29 diferenças, já existentes, fora desta branch). O que se mede aqui é `cargo fmt -p <cada crate petunia> -- --check`, e esse passa. |
+| Suíte completa, **535 testes** (2026-10-29, `main` com a linha dos rios mesclada) | **passou** | math 21, world 42, sculpt 41, graph 39, physics 29, render 22, editor 70, script 67, mesh 181, project 6, commands 6, import 6, input 3, schema 2 |
 | Suíte completa, **441 testes** (2026-10-28) | **passou** | inclui 6 de Aipo → IR, 14 de IR → grafo, 1 de `script.to_graph` no editor, 1 de isolamento por objeto e 14 de modelo de grafo com migração v1→v2 |
 | Suíte completa, **414 testes** (2026-10-27) | **passou** | mesh 181 (164 do Petunia3D), script 55 (15 + 16 do host + 7 de física + 17 de grafo), editor 57, graph 22 (13 + 9 de edição), physics 18, sculpt 17, render 16, world 14, math 11, commands 6, import 6, input 3, project 6, schema 2 |
 | Formas orientadas para fora (caixa, rampa, cilindro, cone, esfera, escada) | **passou** | teste por geometria, em vários níveis de detalhe |

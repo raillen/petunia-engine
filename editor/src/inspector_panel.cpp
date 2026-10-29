@@ -498,6 +498,25 @@ QWidget* InspectorPanel::makeEditor(const QString& table, const QJsonObject& col
         };
         return number;
     }
+    if (kind == "floats" || kind == "spline" || kind == "mesh") {
+        auto* summary = new QLabel;
+        summary->setAccessibleName(accessible);
+        summary->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        field->show = [summary, kind](const QJsonValue& value) {
+            if (kind == "floats") {
+                summary->setText(QStringLiteral("%1 números").arg(value.toArray().size()));
+            } else if (kind == "spline") {
+                summary->setText(QStringLiteral("%1 pontos%2")
+                                     .arg(value.toObject().value(QStringLiteral("points")).toArray().size())
+                                     .arg(value.toObject().value(QStringLiteral("closed")).toBool()
+                                              ? QStringLiteral(", fechada")
+                                              : QStringLiteral(", aberta")));
+            } else {
+                summary->setText(QStringLiteral("malha editável"));
+            }
+        };
+        return summary;
+    }
     if (kind == "text") {
         const QJsonArray choices = column.value("choices").toArray();
         if (!choices.isEmpty()) {

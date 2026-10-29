@@ -27,7 +27,7 @@ Dentro dele: **Arquivo > Novo projeto de exemplo** cria uma sala para explorar. 
 Sem o editor, pela linha de comando:
 
 ```bash
-export CARGO_TARGET_DIR=/tmp/petunia-engine-target CARGO_BUILD_JOBS=2
+export CARGO_BUILD_JOBS=2                                 # a pasta de build vem do .cargo/config.toml
 cargo run -p petunia_cli -- new /tmp/minha_sala      # cria um projeto com uma sala de exemplo
 cargo run -p petunia_cli -- check /tmp/minha_sala    # valida o projeto, sem janela
 cargo run -p petunia_cli -- run /tmp/minha_sala      # abre a janela com câmera livre

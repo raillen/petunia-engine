@@ -64,6 +64,40 @@ pub(crate) fn query_specs() -> Vec<QuerySpec> {
             example: r#"{"entity": 3, "table": "Transform", "column": "position"}"#.to_string(),
         },
         QuerySpec {
+            id: "terrain.sample".to_string(),
+            summary: "Lê a altura do terreno numa posição do mundo.".to_string(),
+            params: vec![
+                ParamSpec::required("terrain", ParamKind::Entity, "Id do terreno."),
+                ParamSpec::required("x", ParamKind::Float, "Coordenada X, em metros."),
+                ParamSpec::required("z", ParamKind::Float, "Coordenada Z, em metros."),
+            ],
+            returns: ParamKind::Any,
+            failures: vec![FailureSpec::new(
+                "WORLD_UNKNOWN_ENTITY",
+                "Confira o id do terreno.",
+            )],
+            permission: "world.read".to_string(),
+            status: Status::Provisional,
+            example: r#"{"terrain": 4, "x": 10, "z": 20}"#.to_string(),
+        },
+        QuerySpec {
+            id: "path.report".to_string(),
+            summary: "Resume um rio ou estrada: pontos, comprimento e maior subida.".to_string(),
+            params: vec![ParamSpec::required(
+                "entity",
+                ParamKind::Entity,
+                "Id do rio ou da estrada.",
+            )],
+            returns: ParamKind::Any,
+            failures: vec![FailureSpec::new(
+                "WORLD_UNKNOWN_ENTITY",
+                "Confira o id do caminho.",
+            )],
+            permission: "world.read".to_string(),
+            status: Status::Provisional,
+            example: r#"{"entity": 8}"#.to_string(),
+        },
+        QuerySpec {
             id: "world.find".to_string(),
             summary: "Lista os ids das entidades com uma tabela e/ou uma tag.".to_string(),
             params: vec![

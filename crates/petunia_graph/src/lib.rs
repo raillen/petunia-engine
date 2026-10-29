@@ -14,6 +14,7 @@ mod edit;
 mod layout;
 mod model;
 mod outline;
+mod road_path;
 
 pub use canvas::canvas;
 pub use catalog::{
@@ -32,3 +33,7 @@ pub use model::{
     MAX_NODES, MAX_TEXT_BYTES, PinRef, SCHEMA_VERSION,
 };
 pub use outline::{Want, fold, outline, search, sources, spec_json};
+pub use road_path::{
+    NavNode, RoadNavigationGraph, build_road_navigation, find_dead_ends, find_islands,
+    validate_road_network,
+};

@@ -12,6 +12,10 @@ endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
+# The compilation database lets clangd/clang-tidy resolve Qt's include paths. It is written to the
+# build directory, and `scripts/editor.sh` links it next to the sources. Without it the editor shows
+# spurious errors such as 'QJsonObject file not found'.
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(Qt6 6.4 REQUIRED COMPONENTS Widgets OpenGLWidgets Svg)
 find_package(Threads REQUIRED)
