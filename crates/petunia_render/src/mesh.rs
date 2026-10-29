@@ -34,6 +34,10 @@ pub struct MeshData {
     /// Optional per-vertex colors (terrain layers). Empty for built-in shapes and editable
     /// meshes, which use the item's uniform color.
     pub colors: Vec<[f32; 3]>,
+    /// Optional detail texture coordinates: `(u, v, layer)`. `u`/`v` are already in tiles (the
+    /// shader takes the fraction), `layer` picks one of the atlas tiles. Empty when the item has
+    /// no texture (only the terrain uses one).
+    pub texture_coordinates: Vec<[f32; 3]>,
 }
 
 impl MeshData {

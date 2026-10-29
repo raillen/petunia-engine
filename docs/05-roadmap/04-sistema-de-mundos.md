@@ -11,7 +11,7 @@ Este documento é a lista viva do que foi implementado e do que falta no sistema
 | Terreno (dados) | `petunia_terrain`: chunks, amostras, materiais, furos, consultas, limites | — | 90% |
 | Terreno (geração) | fBm determinístico próprio; parâmetros validados; **heightmap em arquivo** (`terrain.heights`, importar/exportar `.pthm`); **5 biomas** que escolhem relevo e camadas pela semente | — | 96% |
 | Terreno (edição) | Brushes 3D, 4 falloffs, 6 operações, erosão térmica e hidráulica, espelhamento x/z, *stamp* de heightmap e de malha 3D | Brushes plano/caminho, máscaras | 92% |
-| Terreno (render) | Malha por chunk, cores por camada (8), LOD 1/2/4, saias, furos, plano de corte, **culling por chunk** pelo volume de visão do viewport | Materiais por textura, verificação visual do LOD | 92% |
+| Terreno (render) | Malha por chunk, cores por camada (8), **textura de detalhe por camada** (atlas gerado no motor), LOD 1/2/4, saias, furos, plano de corte, **culling por chunk** pelo volume de visão do viewport | Verificação visual do LOD | 97% |
 | Terreno (física) | Heightfield no Rapier; trimesh nos chunks com furo | Terreno com transformação não-identidade | 80% |
 | Terreno (editor) | Pincel `terrain.begin/drag/end/cancel/set/preview`, anel, prévia ao vivo, um desfazer; menu **Criar > Terreno**, ferramenta **T**, barra de opções, **Gerar terreno**, **Raio X** em arame, **Corte** com **altura digitável** (sugerida pela caverna selecionada), **Exportar/Importar heightmap** e teste de fumaça repetível | Verificação visual do LOD | 97% |
 | Cavernas (SDF) | `petunia_sculpt` (chunks 16³, surface nets, 5 modos, caminho, gerador, fundir, facetada) + espelhamento X, preencher, oco, ruído, **booleanos** (`sculpt.boolean`) e **carimbo de malha** (`sculpt.stamp_mesh`) | Malha sólida (o carimbo imprime a superfície) | 98% |
@@ -24,6 +24,19 @@ Este documento é a lista viva do que foi implementado e do que falta no sistema
 | Água (render) | — (outro agent) | Flow map, Gerstner 4–8, refração, espuma | 0% |
 
 ## Implementado
+
+### 2026-10-29 — materiais por textura
+
+| Item | Evidência |
+|---|---|
+| **Atlas gerado no motor** (`petunia_render::texture`): 8 peças de 64 × 64 px, uma por camada, em tons de cinza que **modulam** a cor da camada (0,78 a 1,22). Cada peça tem o seu desenho: ruído fino (grama), manchas largas (terra, lama), estratos (rocha), ondulações (areia, leito), grão muito fino (neve) | **5 testes**: 8 peças do tamanho certo e opacas, atlas determinístico, nenhuma peça igual à primeira, cada peça tem grão sem chegar a preto nem a branco, leitura fora da imagem é zero |
+| **Coordenadas de textura por vértice** (`MeshData.texture_coordinates`: `u`, `v` em peças e a camada). `u`/`v` seguem o mundo com **4 m por peça**, então o grão não estica com o LOD; a saia copia a coordenada do vértice de cima | **1 teste**: todo vértice do bloco tem coordenada, a camada está dentro do atlas e `u`/`v` batem com a posição × peças por metro |
+| **Adaptador OpenGL**: atributo 3 `(u, v, camada)`, atlas enviado **uma vez** (`RGBA8`, filtro linear, `CLAMP_TO_EDGE`) e amostragem no shader com margem de 1 texel dentro da peça, para o filtro não puxar a camada vizinha | compila; **visto em captura** no display virtual |
+| Objetos sem coordenadas de textura (malhas editáveis, formas, cavernas) **não** leem o atlas: o shader é desligado por item | código + fumaça 12/12 |
+
+**Medido na captura** (vista de cima, bioma planície, projeto de exemplo): a área do terreno tem **208 cores distintas** e pixels vizinhos variam de 1 a 5 unidades — antes do atlas era uma cor chapada por camada. O grão aparece na tela, não só na memória.
+
+**Limite honesto:** a textura é **procedural e única para todas as camadas do motor**; não há arquivo de imagem, atlas de projeto nem escolha de textura pela janela. Ler PNG/JPG exigiria um decodificador (dependência nova, registro em `docs/dependencies.md` e decisão registrada), que não foi adicionado.
 
 ### 2026-10-29 — spline e varredura
 
@@ -187,7 +200,7 @@ As três causas da instabilidade eram do harness e da janela, não de tempo de e
 | # | Item | Depende de | Critério de pronto |
 |---|---|---|---|
 | 1 | Biomas na geração | heightmap em arquivo (feito) | uma semente escolher um bioma e ele aparecer na cor e na forma |
-| 2 | Materiais por textura no terreno | atlas / assets de textura | a superfície trocar de textura por camada, não só de cor |
+| 2 | ~~Materiais por textura no terreno~~ | feito: atlas procedural por camada | a superfície troca de grão por camada, não só de cor (visto em captura) |
 | 3 | Rios e estradas | spline/varredura | — |
 
 Itens concluídos nesta rodada: **altura do corte sugerida pela caverna**, **heightmap em arquivo** (`terrain.heights`, exportar e importar com um desfazer), **culling por chunk** (11 de 25 blocos num mundo 5 × 5) e **teste de fumaça 12/12**.

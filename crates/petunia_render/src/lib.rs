@@ -13,6 +13,7 @@ mod mesh;
 mod pick;
 mod sculpt;
 mod terrain;
+mod texture;
 
 pub use camera::{Camera, Mat4, ProjectionMode, model_matrix, multiply, transform_point};
 pub use fly::FlyCamera;
@@ -32,4 +33,7 @@ pub use sculpt::{
 pub use terrain::{
     LOD_MID_DISTANCE, LOD_NEAR_DISTANCE, TERRAIN_LAYERS, chunk_bounds, chunk_fingerprint,
     chunk_mesh, chunk_sphere, layer_color, lod_step,
+};
+pub use texture::{
+    ATLAS_TILE_SIZE, ATLAS_TILES, DETAIL_METERS_PER_TILE, TextureData, terrain_atlas,
 };

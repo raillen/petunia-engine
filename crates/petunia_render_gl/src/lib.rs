@@ -21,16 +21,19 @@ const VERTEX_SHADER: &str = r#"#version 330 core
 layout(location = 0) in vec3 a_position;
 layout(location = 1) in vec3 a_normal;
 layout(location = 2) in vec3 a_color;
+layout(location = 3) in vec3 a_texture;
 uniform mat4 u_view_projection;
 uniform mat4 u_model;
 out vec3 v_normal;
 out vec3 v_world_position;
 out vec3 v_color;
+out vec3 v_texture;
 void main() {
     vec4 world = u_model * vec4(a_position, 1.0);
     v_world_position = world.xyz;
     v_normal = transpose(inverse(mat3(u_model))) * a_normal;
     v_color = a_color;
+    v_texture = a_texture;
     gl_Position = u_view_projection * world;
 }
 "#;
@@ -39,6 +42,9 @@ const FRAGMENT_SHADER: &str = r#"#version 330 core
 in vec3 v_normal;
 in vec3 v_world_position;
 in vec3 v_color;
+in vec3 v_texture;
+uniform sampler2D u_atlas;
+uniform int u_atlas_enabled;
 uniform int u_vertex_color;
 uniform vec4 u_color;
 uniform vec3 u_camera_position;
@@ -85,6 +91,19 @@ void main() {
         }
     }
     vec3 albedo = (u_vertex_color != 0) ? v_color : u_color.rgb;
+    if (u_atlas_enabled != 0) {
+        // The atlas has 8 tiles side by side; keep the sample 1 texel inside its own tile so the
+        // filter cannot bleed the neighbouring layer into it.
+        vec2 margin = vec2(1.0 / 512.0, 1.0 / 64.0);
+        float tile = clamp(v_texture.z, 0.0, 7.0);
+        vec2 tile_uv = vec2(
+            (tile + 0.5) / 8.0 + (fract(v_texture.x) - 0.5) * (1.0 / 8.0 - 2.0 * margin.x),
+            0.5 + (fract(v_texture.y) - 0.5) * (1.0 - 2.0 * margin.y)
+        );
+        vec3 grain = texture(u_atlas, tile_uv).rgb;
+        // The grain is gray: it darkens and brightens the layer color, it does not tint it.
+        albedo *= 0.78 + grain * 0.44;
+    }
     vec3 lit = albedo * light;
     float fog = clamp(length(v_world_position - u_camera_position) / 200.0, 0.0, 1.0);
     lit = mix(lit, vec3(0.53, 0.70, 0.88), fog * 0.6);
@@ -157,6 +176,8 @@ struct Uniforms {
     point_color: Option<glow::UniformLocation>,
     section_enabled: Option<glow::UniformLocation>,
     section_height: Option<glow::UniformLocation>,
+    atlas: Option<glow::UniformLocation>,
+    atlas_enabled: Option<glow::UniformLocation>,
 }
 
 /// Tint of the selected object and of the object under the mouse: color and amount.
@@ -218,6 +239,8 @@ struct GpuMesh {
     vertex_buffer: glow::Buffer,
     index_buffer: glow::Buffer,
     color_buffer: Option<glow::Buffer>,
+    /// Detail texture coordinates `(u, v, layer)`, when the mesh has them.
+    texture_buffer: Option<glow::Buffer>,
     index_count: i32,
 }
 
@@ -252,6 +275,8 @@ pub struct GlRenderer {
     sculpt_meshes: HashMap<u64, GpuMesh>,
     /// One buffer per editable mesh, by the polygon mesh's fingerprint (new on every edit).
     edit_meshes: HashMap<u64, GpuMesh>,
+    /// The terrain detail atlas, uploaded once and shared by every terrain mesh.
+    atlas: Option<glow::Texture>,
     grid_pass: GridPass,
     overlay_pass: OverlayPass,
 }
@@ -279,10 +304,13 @@ impl GlRenderer {
                 point_color: gl.get_uniform_location(program, "u_point_color[0]"),
                 section_enabled: gl.get_uniform_location(program, "u_section_enabled"),
                 section_height: gl.get_uniform_location(program, "u_section_height"),
+                atlas: gl.get_uniform_location(program, "u_atlas"),
+                atlas_enabled: gl.get_uniform_location(program, "u_atlas_enabled"),
             }
         };
         let grid_pass = create_grid_pass(&gl)?;
         let overlay_pass = create_overlay_pass(&gl)?;
+        let atlas = upload_atlas(&gl)?;
         unsafe {
             gl.enable(glow::DEPTH_TEST);
             gl.enable(glow::CULL_FACE);
@@ -296,6 +324,7 @@ impl GlRenderer {
             meshes: HashMap::new(),
             sculpt_meshes: HashMap::new(),
             edit_meshes: HashMap::new(),
+            atlas: Some(atlas),
             grid_pass,
             overlay_pass,
         })
@@ -573,6 +602,7 @@ impl GlRenderer {
                     normals: chunk.mesh.normals.clone(),
                     indices: chunk.mesh.indices.clone(),
                     colors: Vec::new(),
+                    texture_coordinates: Vec::new(),
                 };
                 let uploaded = upload_mesh(&self.gl, &data)?;
                 self.sculpt_meshes.insert(chunk.id, uploaded);
@@ -688,9 +718,28 @@ impl GlRenderer {
                 self.gl
                     .uniform_1_i32(self.uniforms.vertex_color.as_ref(), 0);
             }
+            // Only the terrain carries detail texture coordinates; everything else keeps its
+            // flat color and skips the texture read.
+            let textured = mesh.texture_buffer.is_some() && self.atlas.is_some();
+            if textured {
+                self.gl.enable_vertex_attrib_array(3);
+                if let Some(atlas) = self.atlas {
+                    self.gl.active_texture(glow::TEXTURE0);
+                    self.gl.bind_texture(glow::TEXTURE_2D, Some(atlas));
+                }
+                self.gl.uniform_1_i32(self.uniforms.atlas.as_ref(), 0);
+                self.gl
+                    .uniform_1_i32(self.uniforms.atlas_enabled.as_ref(), 1);
+            } else {
+                self.gl.disable_vertex_attrib_array(3);
+                self.gl.vertex_attrib_3_f32(3, 0.0, 0.0, 0.0);
+                self.gl
+                    .uniform_1_i32(self.uniforms.atlas_enabled.as_ref(), 0);
+            }
             self.gl
                 .draw_elements(glow::TRIANGLES, mesh.index_count, glow::UNSIGNED_INT, 0);
             self.gl.disable_vertex_attrib_array(2);
+            self.gl.disable_vertex_attrib_array(3);
         }
     }
 
@@ -964,6 +1013,51 @@ fn compile_source_program(
     }
 }
 
+/// Uploads the terrain detail atlas once: 8 tiles of grain, one per material layer.
+fn upload_atlas(gl: &glow::Context) -> Result<glow::Texture, RenderError> {
+    let atlas = petunia_render::terrain_atlas();
+    let width = atlas.width as i32;
+    let height = atlas.height as i32;
+    // SAFETY: the context is current on this thread (the caller's contract).
+    unsafe {
+        let texture = gl.create_texture().map_err(RenderError::Gl)?;
+        gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+        gl.tex_image_2d(
+            glow::TEXTURE_2D,
+            0,
+            glow::RGBA8 as i32,
+            width,
+            height,
+            0,
+            glow::RGBA,
+            glow::UNSIGNED_BYTE,
+            glow::PixelUnpackData::Slice(Some(&atlas.rgba)),
+        );
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_MIN_FILTER,
+            glow::LINEAR as i32,
+        );
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_MAG_FILTER,
+            glow::LINEAR as i32,
+        );
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_WRAP_S,
+            glow::CLAMP_TO_EDGE as i32,
+        );
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_WRAP_T,
+            glow::CLAMP_TO_EDGE as i32,
+        );
+        gl.bind_texture(glow::TEXTURE_2D, None);
+        Ok(texture)
+    }
+}
+
 fn upload_mesh(gl: &glow::Context, mesh: &MeshData) -> Result<GpuMesh, RenderError> {
     let mut vertex_bytes = Vec::with_capacity(mesh.positions.len() * 24);
     for value in mesh.interleaved() {
@@ -987,6 +1081,24 @@ fn upload_mesh(gl: &glow::Context, mesh: &MeshData) -> Result<GpuMesh, RenderErr
         gl.vertex_attrib_pointer_f32(0, 3, glow::FLOAT, false, stride, 0);
         gl.enable_vertex_attrib_array(1);
         gl.vertex_attrib_pointer_f32(1, 3, glow::FLOAT, false, stride, 12);
+        let texture_buffer = if mesh.texture_coordinates.len() == mesh.positions.len()
+            && !mesh.texture_coordinates.is_empty()
+        {
+            let mut texture_bytes = Vec::with_capacity(mesh.texture_coordinates.len() * 12);
+            for coordinates in &mesh.texture_coordinates {
+                for value in coordinates {
+                    texture_bytes.extend_from_slice(&value.to_ne_bytes());
+                }
+            }
+            let buffer = gl.create_buffer().map_err(RenderError::Gl)?;
+            gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer));
+            gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, &texture_bytes, glow::STATIC_DRAW);
+            gl.enable_vertex_attrib_array(3);
+            gl.vertex_attrib_pointer_f32(3, 3, glow::FLOAT, false, 0, 0);
+            Some(buffer)
+        } else {
+            None
+        };
         let color_buffer = if mesh.colors.len() == mesh.positions.len() && !mesh.colors.is_empty() {
             let mut color_bytes = Vec::with_capacity(mesh.colors.len() * 12);
             for color in &mesh.colors {
@@ -1009,6 +1121,7 @@ fn upload_mesh(gl: &glow::Context, mesh: &MeshData) -> Result<GpuMesh, RenderErr
             vertex_buffer,
             index_buffer,
             color_buffer,
+            texture_buffer,
             index_count: mesh.indices.len() as i32,
         })
     }

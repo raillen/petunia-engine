@@ -8,6 +8,7 @@ use petunia_math::{Color, Vec3};
 use petunia_terrain::{ChunkCoord, Terrain};
 
 use crate::mesh::MeshData;
+use crate::texture::DETAIL_METERS_PER_TILE;
 
 /// Default color of each material layer, indexed by the `materials` value in the terrain.
 pub const TERRAIN_LAYERS: [Color; 8] = [
@@ -139,6 +140,12 @@ pub fn chunk_mesh(terrain: &Terrain, coord: ChunkCoord, step: usize) -> MeshData
             mesh.positions.push([world_x, height, world_z]);
             mesh.normals.push([normal.x, normal.y, normal.z]);
             mesh.colors.push([color.r, color.g, color.b]);
+            // The detail texture tiles every few meters on the ground, and `layer` picks the tile.
+            mesh.texture_coordinates.push([
+                world_x / DETAIL_METERS_PER_TILE,
+                world_z / DETAIL_METERS_PER_TILE,
+                f32::from(material),
+            ]);
         }
     }
 
@@ -263,11 +270,17 @@ fn add_skirts(mesh: &mut MeshData, count: usize, depth: f32) {
             let Some(color) = mesh.colors.get(*index as usize) else {
                 continue;
             };
+            let texture = mesh
+                .texture_coordinates
+                .get(*index as usize)
+                .copied()
+                .unwrap_or([0.0, 0.0, 0.0]);
             let new_index = mesh.positions.len() as u32;
             mesh.positions
                 .push([position[0], position[1] - depth, position[2]]);
             mesh.normals.push(*normal);
             mesh.colors.push(*color);
+            mesh.texture_coordinates.push(texture);
             lowered.push(new_index);
         }
         for pair in 0..edge.len().saturating_sub(1) {
@@ -327,6 +340,33 @@ mod tests {
                 .iter()
                 .all(|position| position[1].is_finite())
         );
+    }
+
+    #[test]
+    fn every_vertex_carries_a_texture_coordinate_for_its_layer() {
+        let terrain = terrain();
+        let mesh = chunk_mesh(&terrain, ChunkCoord::new(0, 0), 1);
+        assert_eq!(mesh.texture_coordinates.len(), mesh.positions.len());
+        for (index, coordinates) in mesh.texture_coordinates.iter().enumerate() {
+            let Some(position) = mesh.positions.get(index) else {
+                continue;
+            };
+            assert!(coordinates[0].is_finite() && coordinates[1].is_finite());
+            assert!(
+                (0.0..crate::texture::ATLAS_TILES as f32).contains(&coordinates[2]),
+                "camada fora do atlas: {}",
+                coordinates[2]
+            );
+            // One tile every DETAIL_METERS_PER_TILE meters, so the grain does not stretch.
+            assert!(
+                (coordinates[0] * DETAIL_METERS_PER_TILE - position[0]).abs() < 0.001,
+                "u não segue a posição"
+            );
+            assert!(
+                (coordinates[1] * DETAIL_METERS_PER_TILE - position[2]).abs() < 0.001,
+                "v não segue a posição"
+            );
+        }
     }
 
     #[test]

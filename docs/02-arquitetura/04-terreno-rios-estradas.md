@@ -75,6 +75,19 @@ Um intervalo do terreno sai e volta como arquivo, sem depender de ferramenta ext
 
 Limites: 2048 amostras por lado e 4 milhões no total (16 MB), altura dentro de ±10000 m, origem alinhada à grade do terreno (a mesma amostra no mesmo lugar na volta), amostras sem bloco valem 0 m e a importação só escreve onde já existe bloco. O caminho tem de terminar em `.pthm`.
 
+### Materiais por textura (atlas do terreno)
+
+Cada camada tem **cor e grão**. O grão vem de um atlas gerado no próprio motor (`petunia_render::texture`), sem arquivo de imagem e sem decodificador: 8 peças de 64 × 64 px, uma por camada, em tons de cinza que **multiplicam** a cor (0,78 a 1,22).
+
+| Peça | Onde | Contrato |
+|---|---|---|
+| Atlas | `terrain_atlas()` | 512 × 64 px RGBA8; cada peça vem de um hash próprio, então o desenho é determinístico; 0,5 significa "não mudar a cor" |
+| Coordenadas | `MeshData.texture_coordinates` = `(u, v, camada)` | `u`/`v` = mundo ÷ **4 m por peça**; a camada escolhe a peça no shader; a saia copia do vértice de cima |
+| Shader | `petunia_render_gl` | atributo 3, `u_atlas_enabled` por item, margem de 1 texel dentro da peça para o filtro não vazar a camada vizinha |
+| Objetos | malhas, formas, cavernas | sem coordenadas → shader desligado, cor chapada como antes |
+
+Por que procedural: (1) não entra dependência de decodificação de imagem, (2) o mesmo build desenha o mesmo grão em qualquer máquina, (3) um projeto não depende de um caminho de arquivo que pode sumir. Trocar por texturas de projeto implica decidir o formato, o cache e a dependência — **não decidido**.
+
 ### Biomas
 
 Um bioma é **dado**, não código de geração: nome, relevo (tamanho da feição, amplitude, oitavas, persistência, altura base) e as **faixas de altura** que escolhem a camada de cada amostra. Nada de aleatório além da escolha, que vem da semente — o mesmo seed gera sempre o mesmo mundo.
