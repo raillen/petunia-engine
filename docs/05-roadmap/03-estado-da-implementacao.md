@@ -514,6 +514,34 @@ No editor:
 
 Veja [editor](../02-arquitetura/11-editor.md). Os maiores: lista de objetos sem paginação, sem salvamento automático, cavar só em caixas sem rotação (use `mesh.boolean` para o resto), edição de malha com interface parcial (`Tab` e seleção de componentes; as operações ainda não têm botões).
 
+## Linha paralela guardada: `archive/sistemas-de-mundo` (2026-10-29)
+
+Existia uma **segunda implementação de terreno**, em outra cópia de trabalho, no branch
+`feat/sistemas-de-mundo` (12 commits, nunca publicado). Ela **não** entra na `main` como está: são
+dois terrenos que disputam os **mesmos nomes de comando** (`terrain.create`, `terrain.begin`,
+`terrain.drag`, `terrain.end`, `terrain.cancel`, `terrain.paint`) com payloads diferentes, e o
+princípio é **uma fonte de verdade por responsabilidade**. A `main` ficou com a linha dos rios
+(terreno em `petunia_world`, `DR-36`); a outra virou a tag **`archive/sistemas-de-mundo`**
+(commit `20975be`), publicada no remoto, e a cópia de trabalho dela ficou solta nesse commit para
+consulta.
+
+O que **só** a linha guardada tem, para portar item por item, cada um com a sua decisão:
+
+| Capacidade | Onde está lá |
+|---|---|
+| Cinco biomas gerados da semente | `petunia_terrain` |
+| Ler e gravar mapa de altura (`terrain.heightmap_import`, `heightmap_export`) | `petunia_terrain` + editor |
+| Descarte de bloco fora da vista (corte por frustum) | `petunia_render/frustum.rs` |
+| Terreno por camadas de textura, com grão de um atlas feito pelo motor | `petunia_render/texture.rs` |
+| Varredura de perfil ao longo de uma spline (`spline.sweep`) com `petunia_curve` próprio | `petunia_curve` |
+| Ver a caverna por raio X e cortar altura pelo cursor (`terrain.xray`, `terrain.section`) | `petunia_terrain` + editor |
+| Erosão hídrica além da térmica (`terrain.erode_hydraulic`) | `petunia_terrain` |
+| Carimbo como malha e buracos vindos das cavernas (`terrain.stamp_mesh`, `holes_from_caves`) | `petunia_terrain` |
+
+Portar é **opcional e depois**: nada no caminho das fases 3 a 5 depende disso. O ganho maior está
+em desempenho (frustum, textura) e em fluxo de trabalho (importar mapa de altura, biomas), não em
+capacidade que falte à demo.
+
 ## Pendências que não são código
 
 | Item | Nota |
