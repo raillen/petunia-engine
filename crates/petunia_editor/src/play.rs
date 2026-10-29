@@ -2,7 +2,7 @@
 //! physics and the player's character. Stopping throws the copy away, so playing never changes
 //! what you built. While it runs, nothing that edits the scene is accepted.
 
-use petunia_render::{FlyCamera, extract_frame};
+use petunia_render::{FlyCamera, extract_frame_in};
 use petunia_script::{PhysicsSettings, PlayerInput, ScriptHost};
 use serde_json::{Value as Json, json};
 
@@ -227,10 +227,11 @@ impl EditorSession {
     }
 
     /// What to draw while the game runs: the copy of the world, with nothing selected.
-    pub(crate) fn play_frame(&self) -> Option<petunia_render::RenderFrame> {
+    pub(crate) fn play_frame(&self, viewport: (u32, u32)) -> Option<petunia_render::RenderFrame> {
         let state = self.play.as_ref()?;
         let world = state.host.world();
-        let mut frame = extract_frame(&world, self.camera.camera);
+        let mut mesh_cache = petunia_render::MeshCache::new();
+        let mut frame = extract_frame_in(&world, self.camera.camera, &mut mesh_cache, viewport);
         frame.sculpts = self.sculpt_items();
         frame.show_grid = false;
         Some(frame)

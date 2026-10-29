@@ -32,6 +32,73 @@ pub fn layer_color(material: u8) -> Color {
     }
 }
 
+/// The world box a chunk's mesh occupies, including the deepest skirt any LOD draws. `None` when
+/// the chunk does not exist.
+pub fn chunk_bounds(terrain: &Terrain, coord: ChunkCoord) -> Option<(Vec3, Vec3)> {
+    let chunk = terrain.chunk(coord)?;
+    let cells = terrain.chunk_cells().max(1);
+    let cell_size = terrain.cell_size();
+    let (minimum_xz, maximum_xz) = chunk.bounds(cell_size);
+    let mut lowest = f32::INFINITY;
+    let mut highest = f32::NEG_INFINITY;
+    // The mesh also samples the shared border, so a tall neighbour must widen the bound (otherwise
+    // a visible chunk could be culled at its edge).
+    let base_x = coord.x as i64 * cells as i64;
+    let base_z = coord.z as i64 * cells as i64;
+    for row in 0..=cells {
+        for column in 0..=cells {
+            let (global_x, global_z) = sample_lattice(terrain, base_x, base_z, cells, column, row);
+            let Some(height) = terrain.sample(global_x, global_z) else {
+                continue;
+            };
+            if height.is_finite() {
+                lowest = lowest.min(height);
+                highest = highest.max(height);
+            }
+        }
+    }
+    if lowest > highest {
+        return None;
+    }
+    // A coarse chunk hangs a skirt of up to two coarse cells; take the widest LOD as the bound.
+    let skirt = (cell_size * 4.0 * 2.0).max(0.5);
+    Some((
+        Vec3::new(minimum_xz.x, lowest - skirt, minimum_xz.z),
+        Vec3::new(maximum_xz.x, highest, maximum_xz.z),
+    ))
+}
+
+/// The lattice coordinate a mesh sample reads from: its own, or the closest one inside the chunk
+/// when the neighbour does not exist (the mesh clamps to keep the surface closed).
+fn sample_lattice(
+    terrain: &Terrain,
+    base_x: i64,
+    base_z: i64,
+    cells: usize,
+    column: usize,
+    row: usize,
+) -> (i64, i64) {
+    let global_x = base_x.saturating_add(column as i64);
+    let global_z = base_z.saturating_add(row as i64);
+    if terrain.sample(global_x, global_z).is_some() {
+        return (global_x, global_z);
+    }
+    let clamped_x = column.min(cells - 1);
+    let clamped_z = row.min(cells - 1);
+    (
+        base_x.saturating_add(clamped_x as i64),
+        base_z.saturating_add(clamped_z as i64),
+    )
+}
+
+/// The sphere around a chunk's mesh, for culling. It is conservative: it always contains the mesh.
+pub fn chunk_sphere(terrain: &Terrain, coord: ChunkCoord) -> Option<(Vec3, f32)> {
+    let (minimum, maximum) = chunk_bounds(terrain, coord)?;
+    let center = (minimum + maximum) * 0.5;
+    let radius = ((maximum - minimum) * 0.5).length();
+    radius.is_finite().then_some((center, radius))
+}
+
 /// Sample step for a chunk at `distance` from the camera: 1 (full), 2 or 4.
 pub fn lod_step(distance: f32) -> usize {
     if distance <= LOD_NEAR_DISTANCE {
@@ -292,6 +359,41 @@ mod tests {
             .unwrap();
         let holed = chunk_mesh(&terrain, ChunkCoord::new(0, 0), 1).indices.len();
         assert!(holed < full, "full {full}, holed {holed}");
+    }
+
+    #[test]
+    fn a_chunk_sphere_contains_its_deepest_mesh() {
+        // Two chunks side by side with different relief: the shared border must be inside the
+        // bound too, or a visible chunk could be culled at its edge.
+        let mut terrain = Terrain::new(1.0, 4).expect("terreno");
+        terrain
+            .generate_region(
+                ChunkCoord::new(0, 0),
+                ChunkCoord::new(1, 0),
+                &petunia_terrain::TerrainGeneration {
+                    fractal: petunia_terrain::FractalSettings {
+                        amplitude: 6.0,
+                        ..petunia_terrain::FractalSettings::default()
+                    },
+                    ..petunia_terrain::TerrainGeneration::default()
+                },
+            )
+            .expect("gera");
+        for coord in [ChunkCoord::new(0, 0), ChunkCoord::new(1, 0)] {
+            let (center, radius) = chunk_sphere(&terrain, coord).expect("esfera");
+            // The coarsest LOD hangs the deepest skirt: if the sphere holds that one, it holds all.
+            let mesh = chunk_mesh(&terrain, coord, 4);
+            for position in &mesh.positions {
+                let point = Vec3::new(position[0], position[1], position[2]);
+                let distance = (point - center).length();
+                assert!(
+                    distance <= radius + 1.0e-3,
+                    "{point:?} do bloco {coord:?} ficou a {distance} da esfera (raio {radius})"
+                );
+            }
+        }
+        assert!(chunk_bounds(&terrain, ChunkCoord::new(0, 0)).is_some());
+        assert!(chunk_bounds(&terrain, ChunkCoord::new(9, 9)).is_none());
     }
 
     #[test]

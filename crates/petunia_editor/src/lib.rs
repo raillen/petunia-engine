@@ -790,6 +790,64 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
     #[test]
+    fn terrain_chunks_outside_the_view_are_not_meshed() {
+        let root = scratch_dir("terrain_cull");
+        let mut session = EditorSession::new().expect("session");
+        call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "Culling" }),
+        );
+        let made = call(
+            &mut session,
+            json!({ "op": "create.terrain", "cell_size": 1.0, "chunk_cells": 16 }),
+        );
+        let terrain = made["result"]["entity"].as_u64().expect("terreno");
+        call(&mut session, json!({ "op": "camera.reset" }));
+        // One chunk, 320 m away on the diagonal of the default view.
+        call(
+            &mut session,
+            json!({ "op": "terrain.generate", "entity": terrain,
+                    "min_x": 20, "min_z": 20, "max_x": 20, "max_z": 20,
+                    "seed": 2, "amplitude": 0.0 }),
+        );
+        let count_terrain = |session: &EditorSession, viewport: (u32, u32)| {
+            session
+                .frame_in(viewport)
+                .map(|frame| {
+                    frame
+                        .items
+                        .iter()
+                        .filter(|item| item.shape == petunia_render::Shape::Terrain)
+                        .count()
+                })
+                .unwrap_or(0)
+        };
+        // The reset camera looks down -z, away from the chunk: it is not built.
+        assert_eq!(count_terrain(&session, (800, 600)), 0);
+        // Looking at it (`view_direction` takes the vector from the target to the camera): it is.
+        call(
+            &mut session,
+            json!({ "op": "camera.view_direction", "x": -1.0, "y": 0.0, "z": -1.0 }),
+        );
+        assert_eq!(count_terrain(&session, (800, 600)), 1);
+        // The default frame (16:9, for tests and hosts that do not report a viewport) culls too.
+        assert_eq!(
+            session
+                .frame()
+                .map(|frame| {
+                    frame
+                        .items
+                        .iter()
+                        .filter(|item| item.shape == petunia_render::Shape::Terrain)
+                        .count()
+                })
+                .unwrap_or(0),
+            1
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn terrain_section_sets_the_render_cut_plane() {
         let root = scratch_dir("terrain_section");
         let mut session = EditorSession::new().expect("session");

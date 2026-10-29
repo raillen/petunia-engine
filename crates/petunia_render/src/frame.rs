@@ -5,6 +5,7 @@ use petunia_world::{EntityHandle, Value, World};
 
 use crate::camera::Camera;
 use crate::fly::FlyCamera;
+use crate::frustum::Frustum;
 use crate::mesh::{MeshCache, MeshData};
 use crate::sculpt::SculptItem;
 
@@ -172,12 +173,32 @@ fn transform_of(world: &World, handle: EntityHandle) -> Transform {
 /// Builds the frame from the world: every entity with a `Brush` or a `Mesh`. Entities with
 /// unknown shapes are skipped (the Project Doctor reports them). Cuts every editable mesh into
 /// triangles; a host that extracts often uses [`extract_frame_cached`].
+/// Viewport assumed when the caller does not say one (16:9).
+pub const DEFAULT_VIEWPORT: (u32, u32) = (16, 9);
+
 pub fn extract_frame(world: &World, camera: Camera) -> RenderFrame {
     extract_frame_cached(world, camera, &mut MeshCache::new())
 }
 
 /// [`extract_frame`] reusing the triangles of meshes that did not change.
 pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache) -> RenderFrame {
+    extract_frame_in(world, camera, cache, DEFAULT_VIEWPORT)
+}
+
+/// Extracts the frame a `viewport` can show: the view volume of that aspect ratio is built and the
+/// terrain chunks outside it are **not meshed** (a big world costs only what is on screen).
+pub fn extract_frame_in(
+    world: &World,
+    camera: Camera,
+    cache: &mut MeshCache,
+    viewport: (u32, u32),
+) -> RenderFrame {
+    let aspect_ratio = if viewport.1 == 0 {
+        DEFAULT_VIEWPORT.0 as f32 / DEFAULT_VIEWPORT.1 as f32
+    } else {
+        (viewport.0 as f32 / viewport.1 as f32).max(0.01)
+    };
+    let frustum = Frustum::from_view_projection(&camera.view_projection(aspect_ratio));
     let mut items = Vec::new();
     for handle in world.entities_with_table("Brush").unwrap_or_default() {
         let Ok(Value::Text(shape_name)) = world.get(handle, "Brush", "shape") else {
@@ -248,6 +269,12 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
         let cell_size = terrain.cell_size();
         for chunk in terrain.chunks() {
             let coord = chunk.coord();
+            // Off screen: no mesh, no upload, no draw.
+            if let Some((center, radius)) = crate::terrain::chunk_sphere(terrain, coord)
+                && !frustum.contains_sphere(center, radius)
+            {
+                continue;
+            }
             let center = Vec3::new(
                 (coord.x as f32 + 0.5) * cells as f32 * cell_size,
                 0.0,

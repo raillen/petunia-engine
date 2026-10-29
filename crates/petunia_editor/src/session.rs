@@ -8,7 +8,7 @@ use petunia_project::{
     ProjectManifest, Report, Severity, create_sample_project, load_project, save_scene,
 };
 use petunia_render::{
-    FlyCamera, MeshCache, RenderFrame, Shape, extract_frame_cached, pick_entity, ray_through,
+    FlyCamera, MeshCache, RenderFrame, Shape, extract_frame_in, pick_entity, ray_through,
     start_camera,
 };
 use petunia_world::{PersistentId, Value, World};
@@ -741,13 +741,18 @@ impl EditorSession {
 
     /// What to draw this frame, with the selection marked. `None` when no project is open.
     pub fn frame(&self) -> Option<RenderFrame> {
-        if let Some(frame) = self.play_frame() {
+        self.frame_in(petunia_render::DEFAULT_VIEWPORT)
+    }
+
+    /// The frame a `viewport` can show: terrain chunks off screen are not meshed at all.
+    pub fn frame_in(&self, viewport: (u32, u32)) -> Option<RenderFrame> {
+        if let Some(frame) = self.play_frame(viewport) {
             return Some(frame);
         }
         let world = &self.project.as_ref()?.world;
         let mut frame = {
             let mut cache = self.mesh_cache.borrow_mut();
-            let frame = extract_frame_cached(world, self.camera.camera, &mut cache);
+            let frame = extract_frame_in(world, self.camera.camera, &mut cache, viewport);
             // Meshes no longer in the scene (edited, undone, deleted) leave the cache.
             cache.sweep();
             frame

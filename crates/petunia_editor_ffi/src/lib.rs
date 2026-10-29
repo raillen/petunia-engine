@@ -165,7 +165,11 @@ pub unsafe extern "C" fn petunia_editor_viewport_render(
         let Some(renderer) = editor.renderer.as_mut() else {
             return into_c_string("o viewport ainda não foi inicializado".to_string());
         };
-        let frame = editor.session.frame().unwrap_or_else(empty_frame);
+        // The viewport's own aspect ratio decides which terrain chunks are built.
+        let frame = editor
+            .session
+            .frame_in((width, height))
+            .unwrap_or_else(empty_frame);
         match renderer.render(&frame, (width, height)) {
             Ok(()) => std::ptr::null_mut(),
             Err(error) => into_c_string(error.to_string()),
