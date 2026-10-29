@@ -1,5 +1,5 @@
-use petunia_math::{Color, PolygonMesh, Vec3};
-use petunia_world::{TableSpec, Value, ValueKind, World, WorldError};
+use petunia_math::{Color, CubicBezierSpline, PolygonMesh, SplinePoint, Vec3};
+use petunia_world::{HEIGHT_CHUNK_SIZE, TableSpec, Value, ValueKind, World, WorldError};
 
 /// Shapes a brush can have. The renderer builds the mesh from the shape and the size.
 pub const BRUSH_SHAPES: [&str; 6] = ["box", "ramp", "cylinder", "cone", "sphere", "stairs"];
@@ -12,6 +12,31 @@ pub const LIGHT_KINDS: [&str; 2] = ["sun", "point"];
 
 /// How a rigid body moves.
 pub const BODY_KINDS: [&str; 3] = ["static", "dynamic", "kinematic"];
+
+fn default_spline() -> CubicBezierSpline {
+    let mut spline = CubicBezierSpline::new();
+    spline.points.push(SplinePoint {
+        position: Vec3::ZERO,
+        handle_in: Vec3::ZERO,
+        handle_out: Vec3::new(2.0, 0.0, 0.0),
+        width: 4.0,
+        depth: 1.0,
+        extra: 0.0,
+    });
+    spline.points.push(SplinePoint {
+        position: Vec3::new(10.0, 0.0, 0.0),
+        handle_in: Vec3::new(-2.0, 0.0, 0.0),
+        handle_out: Vec3::ZERO,
+        width: 4.0,
+        depth: 1.0,
+        extra: 0.0,
+    });
+    spline
+}
+
+fn default_heights() -> Vec<f32> {
+    vec![0.0; HEIGHT_CHUNK_SIZE * HEIGHT_CHUNK_SIZE]
+}
 
 /// Registers the tables every project starts with.
 ///
@@ -58,6 +83,18 @@ pub const BODY_KINDS: [&str; 3] = ["static", "dynamic", "kinematic"];
 ///   it lights up to `range` meters). `color` and `intensity` (0 to 16) set how strong; `ambient`
 ///   is the soft light everywhere (the first light's value is used). A scene with no `Light` row
 ///   uses the built-in sun and ambient light; with at least one, only its lights are used.
+/// - `Terrain`: a heightfield object. `cell_size` is the distance between height samples and
+///   `color` paints the surface; the actual samples live in `TerrainChunk` rows.
+/// - `TerrainChunk`: one square block of a `Terrain`. `owner` is the terrain's persistent id,
+///   `chunk_x`/`chunk_z` are block coordinates, `size` cells per side, `cell_size` meters per
+///   cell and `heights` the row-major samples (one list of `size * size` finite numbers).
+/// - `River`: a water path. `spline` carries position and per-point width/depth; `flow_speed`
+///   drives currents, `float_force` and `swim_force` are the gameplay forces.
+/// - `Road`: a road path. `spline` carries the center line, `width` the paved width, `shoulder`
+///   the shoulder as a fraction of the half width, `material` a label for the surface and
+///   `guardrail` whether the road draws rails.
+/// - `Bridge`: a detected bridge or culvert span of a road (`kind`, `start_parameter`,
+///   `end_parameter`, `width`). Bridges draw rails; culverts are only reported.
 /// - `RigidBody`: makes an object move with physics. `kind` is `static`, `dynamic` (gravity and
 ///   contacts) or `kinematic` (moved by the game, pushes others). `mass` in kilograms,
 ///   `gravity_scale` (1 normal, 0 floats), damping, and `lock_rotation` to keep it upright.
@@ -173,6 +210,55 @@ pub fn register_standard_tables(world: &mut World) -> Result<(), WorldError> {
             .column("coyote_seconds", ValueKind::Float, Value::Float(0.12))
             .column("gravity_scale", ValueKind::Float, Value::Float(1.0))
             .column("player", ValueKind::Bool, Value::Bool(false)),
+    )?;
+    world.define_table(
+        TableSpec::new("Terrain")
+            .column("cell_size", ValueKind::Float, Value::Float(1.0))
+            .column(
+                "color",
+                ValueKind::Color,
+                Value::Color(Color::rgb(0.36, 0.46, 0.28)),
+            ),
+    )?;
+    world.define_table(
+        TableSpec::new("TerrainChunk")
+            .column("owner", ValueKind::Int, Value::Int(0))
+            .column("chunk_x", ValueKind::Int, Value::Int(0))
+            .column("chunk_z", ValueKind::Int, Value::Int(0))
+            .column("size", ValueKind::Int, Value::Int(HEIGHT_CHUNK_SIZE as i64))
+            .column("cell_size", ValueKind::Float, Value::Float(1.0))
+            .column(
+                "heights",
+                ValueKind::Floats,
+                Value::Floats(default_heights()),
+            ),
+    )?;
+    world.define_table(
+        TableSpec::new("River")
+            .column("spline", ValueKind::Spline, Value::Spline(default_spline()))
+            .column("flow_speed", ValueKind::Float, Value::Float(1.0))
+            .column("float_force", ValueKind::Float, Value::Float(9.8))
+            .column("swim_force", ValueKind::Float, Value::Float(4.0)),
+    )?;
+    world.define_table(
+        TableSpec::new("Road")
+            .column("spline", ValueKind::Spline, Value::Spline(default_spline()))
+            .column("width", ValueKind::Float, Value::Float(6.0))
+            .column("shoulder", ValueKind::Float, Value::Float(0.0))
+            .column(
+                "material",
+                ValueKind::Text,
+                Value::Text("gravel".to_string()),
+            )
+            .column("guardrail", ValueKind::Bool, Value::Bool(false)),
+    )?;
+    world.define_table(
+        TableSpec::new("Bridge")
+            .column("road", ValueKind::Int, Value::Int(0))
+            .column("kind", ValueKind::Text, Value::Text("bridge".to_string()))
+            .column("start_parameter", ValueKind::Float, Value::Float(0.0))
+            .column("end_parameter", ValueKind::Float, Value::Float(1.0))
+            .column("width", ValueKind::Float, Value::Float(6.0)),
     )?;
     world.define_table(
         TableSpec::new("RigidBody")

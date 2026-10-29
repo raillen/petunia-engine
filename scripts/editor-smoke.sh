@@ -59,7 +59,10 @@ xdotool mouseup 1;                               sleep 0.6
 # button's menu. Deleting a widget inside its own signal used to crash Qt (SIGSEGV).
 xdotool mousemove 1185 600; for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do xdotool click 5; sleep 0.05; done; sleep 0.4
 xdotool mousemove 1185 457 click 1;              sleep 0.6   # open the "Adicionar tabela" menu
-xdotool key Down Down Down Down Down Return;     sleep 0.8   # choose PlayerStart (list: Character, Floor, Light, Mesh, PlayerStart)
+# The menu lists the tables the object still lacks, in alphabetical order, so this count follows the
+# schema: Bridge, Character, Floor, Light, Mesh, PlayerStart... Adding a table that sorts before
+# PlayerStart (or removing one) means changing the number of Downs here.
+xdotool key Down Down Down Down Down Down Return; sleep 0.8   # choose PlayerStart (6th)
 xdotool mousemove 600 450; xdotool key shift+a;  sleep 0.8   # radial menu of primitives
 xdotool key 2;                                   sleep 0.8   # item 2: a ramp, on the current floor
 xdotool key ctrl+d;                              sleep 0.6   # duplicate it (the copy is selected)

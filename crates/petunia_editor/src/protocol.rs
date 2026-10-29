@@ -162,6 +162,25 @@ impl EditorSession {
                 number(request, "y")? as f64,
             ),
 
+            "create.terrain" => self.create_terrain(),
+            "terrain.mode" => self.set_terrain_options(
+                request.get("mode").and_then(Json::as_str),
+                optional_number(request, "radius"),
+                optional_number(request, "strength"),
+            ),
+            "terrain.begin" => self.terrain_begin(pointer(request)?),
+            "terrain.drag" => self.terrain_drag(pointer(request)?),
+            "terrain.end" => self.terrain_end(),
+            "terrain.cancel" => Ok(self.terrain_cancel()),
+            "natural.point" => self.natural_point(pointer(request)?),
+            "natural.pop" => Ok(self.natural_pop()),
+            "natural.commit" => self.natural_commit(),
+            "natural.cancel" => Ok(self.natural_cancel()),
+            "natural.width" => self.natural_width(
+                optional_number(request, "width"),
+                optional_number(request, "depth"),
+            ),
+
             "editor.snapshot" => Ok(self.snapshot()),
             "entity.describe" => self.describe(entity(request)?),
             "diagnostics.get" => Ok(self.diagnostics()),

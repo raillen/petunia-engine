@@ -14,9 +14,11 @@ petunia_math.workspace = true
 petunia_mesh.workspace = true
 petunia_project.workspace = true
 petunia_render.workspace = true
+petunia_schema.workspace = true
 petunia_sculpt.workspace = true
 petunia_script.workspace = true
 petunia_world.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 
 [lints]

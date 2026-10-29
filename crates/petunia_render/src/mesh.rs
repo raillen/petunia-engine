@@ -26,20 +26,30 @@ impl std::fmt::Display for MeshError {
 impl std::error::Error for MeshError {}
 
 /// Triangle mesh with one normal per vertex. Counter-clockwise triangles face outward.
+///
+/// `uvs`, `flows` and `margins` are optional per-vertex data (water uses them for flow and foam);
+/// when a list is shorter than `positions`, the GL adapter fills the missing values with zero.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MeshData {
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,
     pub indices: Vec<u32>,
+    pub uvs: Vec<[f32; 2]>,
+    pub flows: Vec<[f32; 3]>,
+    pub margins: Vec<f32>,
 }
 
 impl MeshData {
-    /// Interleaved `position(3) + normal(3)` floats, the layout the GL adapter uploads.
+    /// Interleaved `position(3) + normal(3) + uv(2) + flow(3) + margin(1)` floats, the layout the
+    /// GL adapter uploads.
     pub fn interleaved(&self) -> Vec<f32> {
-        let mut data = Vec::with_capacity(self.positions.len() * 6);
-        for (position, normal) in self.positions.iter().zip(&self.normals) {
+        let mut data = Vec::with_capacity(self.positions.len() * 12);
+        for (index, position) in self.positions.iter().enumerate() {
             data.extend_from_slice(position);
-            data.extend_from_slice(normal);
+            data.extend_from_slice(self.normals.get(index).unwrap_or(&[0.0, 1.0, 0.0]));
+            data.extend_from_slice(self.uvs.get(index).unwrap_or(&[0.0, 0.0]));
+            data.extend_from_slice(self.flows.get(index).unwrap_or(&[0.0, 0.0, 0.0]));
+            data.push(self.margins.get(index).copied().unwrap_or(0.0));
         }
         data
     }
@@ -48,6 +58,9 @@ impl MeshData {
         let index = self.positions.len() as u32;
         self.positions.push([position.x, position.y, position.z]);
         self.normals.push([normal.x, normal.y, normal.z]);
+        self.uvs.push([0.0, 0.0]);
+        self.flows.push([0.0, 0.0, 0.0]);
+        self.margins.push(0.0);
         index
     }
 
@@ -122,6 +135,15 @@ impl MeshCache {
         self.meshes
             .entry(fingerprint)
             .or_insert_with(|| Arc::new(polygon_mesh_data(mesh)))
+            .clone()
+    }
+
+    /// Stores an already-built mesh under `fingerprint` (terrain, water, roads).
+    pub fn store_drawing(&mut self, fingerprint: u64, mesh: MeshData) -> Arc<MeshData> {
+        self.used.insert(fingerprint);
+        self.meshes
+            .entry(fingerprint)
+            .or_insert_with(|| Arc::new(mesh))
             .clone()
     }
 

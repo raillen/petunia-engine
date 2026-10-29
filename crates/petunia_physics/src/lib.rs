@@ -16,10 +16,12 @@ use rapier3d::prelude as rapier;
 
 mod character;
 mod scene;
+mod water;
 
 pub use character::CharacterDescription;
 pub use petunia_math::SolidShape;
 pub use scene::{AUTO_COLLIDER_FLAG, SceneDescription, describe};
+pub use water::{WaterMoment, WaterSample, WaterVolume};
 
 /// Most bodies and colliders one simulation accepts; bigger scenes fail with a clear error.
 pub const MAX_BODIES: usize = 20_000;
@@ -280,6 +282,8 @@ pub struct Simulation {
     references: Vec<ColliderRef>,
     collector: ContactCollector,
     characters: BTreeMap<u64, character::CharacterState>,
+    /// Rivers that push, float and slow characters down.
+    water: Vec<WaterVolume>,
 }
 
 impl Simulation {
@@ -444,7 +448,27 @@ impl Simulation {
             references,
             collector,
             characters: BTreeMap::new(),
+            water: Vec::new(),
         })
+    }
+
+    /// Makes these rivers affect characters (current, buoyancy and swimming).
+    pub fn set_water(&mut self, water: &[WaterVolume]) {
+        self.water = water.to_vec();
+    }
+
+    /// The water moment at a world position, or `None` when it is dry.
+    pub fn water_moment(&self, position: Vec3) -> Option<WaterMoment> {
+        let mut best: Option<(f32, WaterMoment)> = None;
+        for volume in &self.water {
+            if let Some(moment) = volume.moment_at(position) {
+                let score = (moment.surface_y - position.y).abs();
+                if best.is_none_or(|(best_score, _)| score < best_score) {
+                    best = Some((score, moment));
+                }
+            }
+        }
+        best.map(|(_, moment)| moment)
     }
 
     pub fn settings(&self) -> PhysicsSettings {

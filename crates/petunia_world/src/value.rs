@@ -1,4 +1,4 @@
-use petunia_math::{Color, PolygonMesh, Vec3};
+use petunia_math::{Color, CubicBezierSpline, MAX_SPLINE_POINTS, PolygonMesh, Vec3};
 use serde::{Deserialize, Serialize};
 
 /// Largest integer that every language in the engine can represent exactly (2^53 - 1).
@@ -7,6 +7,9 @@ pub const MAX_SAFE_INT: i64 = 9_007_199_254_740_991;
 
 /// Default ceiling for a text value, in bytes.
 pub const MAX_TEXT_BYTES: usize = 1024;
+
+/// Largest number of floats in one `Floats` cell (a 256 by 256 terrain chunk fits).
+pub const MAX_FLOATS: usize = 65_536;
 
 /// The type of a column.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -20,6 +23,10 @@ pub enum ValueKind {
     Color,
     /// An editable polygon mesh (see `petunia_math::PolygonMesh`).
     Mesh,
+    /// A cubic Bezier spline (rivers, roads).
+    Spline,
+    /// A list of finite floats (terrain chunk heights).
+    Floats,
 }
 
 impl ValueKind {
@@ -32,6 +39,8 @@ impl ValueKind {
             Self::Vec3 => "vec3",
             Self::Color => "color",
             Self::Mesh => "mesh",
+            Self::Spline => "spline",
+            Self::Floats => "floats",
         }
     }
 }
@@ -46,6 +55,8 @@ pub enum Value {
     Vec3(Vec3),
     Color(Color),
     Mesh(PolygonMesh),
+    Spline(CubicBezierSpline),
+    Floats(Vec<f32>),
 }
 
 impl Value {
@@ -58,6 +69,8 @@ impl Value {
             Self::Vec3(_) => ValueKind::Vec3,
             Self::Color(_) => ValueKind::Color,
             Self::Mesh(_) => ValueKind::Mesh,
+            Self::Spline(_) => ValueKind::Spline,
+            Self::Floats(_) => ValueKind::Floats,
         }
     }
 
@@ -86,6 +99,24 @@ impl Value {
             Self::Vec3(vector) => finite(vector.is_finite()),
             Self::Color(color) => finite(color.is_finite()),
             Self::Mesh(mesh) => mesh.validate().map_err(|error| error.to_string()),
+            Self::Spline(spline) => {
+                if spline.points.len() > MAX_SPLINE_POINTS {
+                    Err(format!("spline com mais de {MAX_SPLINE_POINTS} pontos"))
+                } else if !spline.is_valid() {
+                    Err("a spline precisa de pelo menos dois pontos finitos".to_string())
+                } else {
+                    Ok(())
+                }
+            }
+            Self::Floats(values) => {
+                if values.len() > MAX_FLOATS {
+                    Err(format!("lista com mais de {MAX_FLOATS} números"))
+                } else if values.iter().any(|value| !value.is_finite()) {
+                    Err("a lista contém um número não finito".to_string())
+                } else {
+                    Ok(())
+                }
+            }
         }
     }
 
@@ -110,6 +141,19 @@ impl Value {
             ),
             ValueKind::Mesh => {
                 Self::Mesh(PolygonMesh::from_text_json(json).map_err(|error| error.to_string())?)
+            }
+            ValueKind::Spline => Self::Spline(
+                serde_json::from_value::<CubicBezierSpline>(json.clone())
+                    .map_err(|error| format!("esperava {{points, closed}}: {error}"))?,
+            ),
+            ValueKind::Floats => {
+                let items = json.as_array().ok_or("esperava uma lista de números")?;
+                let mut values = Vec::with_capacity(items.len());
+                for item in items {
+                    let number = item.as_f64().ok_or("esperava uma lista de números")?;
+                    values.push(number as f32);
+                }
+                Self::Floats(values)
             }
         };
         value.validate(max_text_bytes)?;
@@ -136,6 +180,10 @@ impl Value {
                 "a": f32_json(color.a),
             }),
             Self::Mesh(mesh) => mesh.to_text_json(),
+            Self::Spline(spline) => serde_json::to_value(spline).unwrap_or(serde_json::Value::Null),
+            Self::Floats(values) => {
+                serde_json::Value::Array(values.iter().map(|value| f32_json(*value)).collect())
+            }
         }
     }
 }
@@ -179,6 +227,44 @@ mod tests {
         assert!(text.contains("0.1") && text.contains("0.001"), "{text}");
         let back = Value::from_json(ValueKind::Vec3, &Value::Vec3(vector).to_json(), 16);
         assert_eq!(back, Ok(Value::Vec3(vector)));
+    }
+
+    #[test]
+    fn splines_and_float_lists_round_trip_and_refuse_hostile_data() {
+        use petunia_math::SplinePoint;
+
+        let mut spline = CubicBezierSpline::new();
+        spline.points.push(SplinePoint {
+            position: Vec3::ZERO,
+            ..SplinePoint::default()
+        });
+        spline.points.push(SplinePoint {
+            position: Vec3::new(4.0, 0.5, 0.0),
+            ..SplinePoint::default()
+        });
+        let json = Value::Spline(spline.clone()).to_json();
+        assert_eq!(
+            Value::from_json(ValueKind::Spline, &json, 16),
+            Ok(Value::Spline(spline))
+        );
+        let single = serde_json::json!({
+            "points": [SplinePoint::default()],
+            "closed": false
+        });
+        assert!(Value::from_json(ValueKind::Spline, &single, 16).is_err());
+
+        let heights = Value::Floats(vec![0.0, 1.5, -2.25]);
+        let json = heights.to_json();
+        assert_eq!(Value::from_json(ValueKind::Floats, &json, 16), Ok(heights));
+        assert!(Value::from_json(ValueKind::Floats, &serde_json::json!([1.0, "x"]), 16).is_err());
+        assert!(
+            Value::from_json(
+                ValueKind::Floats,
+                &serde_json::json!([1.0, f64::INFINITY]),
+                16
+            )
+            .is_err()
+        );
     }
 
     #[test]

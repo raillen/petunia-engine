@@ -285,6 +285,9 @@ impl EditorSession {
         if self.face_drag.is_some() {
             let _ = self.face_drag_cancel();
         }
+        if self.tool.is_natural() && !tool.is_natural() {
+            self.natural.reset_transient();
+        }
         self.tool = tool;
         self.hover = None;
         self.hovered_face = None;

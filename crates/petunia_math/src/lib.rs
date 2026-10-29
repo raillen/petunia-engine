@@ -6,12 +6,16 @@
 
 mod polygon;
 mod solid;
+mod spline;
 
 pub use polygon::{
     MAX_FACE_CORNERS, MAX_MESH_CORNERS, MAX_MESH_FACES, MAX_MESH_VERTICES, PolygonError,
     PolygonMesh,
 };
 pub use solid::{MAX_SOLID_TRIANGLES, SolidShape};
+pub use spline::{
+    CubicBezierSpline, CurveFrame, MAX_CURVE_SAMPLES, MAX_SPLINE_POINTS, SplinePoint,
+};
 
 use std::ops::{Add, Mul, Neg, Sub};
 

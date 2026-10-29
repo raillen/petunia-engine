@@ -82,7 +82,10 @@ private:
     QString currentTool() const;
     bool faceTool() const;
     bool sculptTool() const;
+    bool naturalTool() const;
+    bool naturalPathTool() const;
     bool pathPending() const;
+    bool naturalPathPending() const;
     void finishFreeMode(bool confirm);
     void handleFreeKey(QKeyEvent* event);
     void updateHover(const QPoint& position);
@@ -98,6 +101,7 @@ private:
     bool gizmoDragging_ = false;
     bool faceDragging_ = false;
     bool sculptDragging_ = false;
+    bool naturalDragging_ = false;
     bool freeMode_ = false;
     QString freeTyped_;
     QPoint lastPointer_;

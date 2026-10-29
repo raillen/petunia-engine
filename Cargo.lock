@@ -1551,9 +1551,11 @@ dependencies = [
  "petunia_mesh",
  "petunia_project",
  "petunia_render",
+ "petunia_schema",
  "petunia_script",
  "petunia_sculpt",
  "petunia_world",
+ "serde",
  "serde_json",
 ]
 
@@ -1573,6 +1575,8 @@ dependencies = [
 name = "petunia_graph"
 version = "0.1.0"
 dependencies = [
+ "petunia_math",
+ "petunia_world",
  "serde",
  "serde_json",
 ]
@@ -1709,6 +1713,7 @@ name = "petunia_sculpt"
 version = "0.1.0"
 dependencies = [
  "petunia_math",
+ "petunia_world",
 ]
 
 [[package]]

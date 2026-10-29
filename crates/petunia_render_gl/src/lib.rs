@@ -19,14 +19,23 @@ use petunia_render::{
 const VERTEX_SHADER: &str = r#"#version 330 core
 layout(location = 0) in vec3 a_position;
 layout(location = 1) in vec3 a_normal;
+layout(location = 2) in vec2 a_uv;
+layout(location = 3) in vec3 a_flow;
+layout(location = 4) in float a_margin;
 uniform mat4 u_view_projection;
 uniform mat4 u_model;
 out vec3 v_normal;
 out vec3 v_world_position;
+out vec2 v_uv;
+out vec3 v_flow;
+out float v_margin;
 void main() {
     vec4 world = u_model * vec4(a_position, 1.0);
     v_world_position = world.xyz;
     v_normal = transpose(inverse(mat3(u_model))) * a_normal;
+    v_uv = a_uv;
+    v_flow = a_flow;
+    v_margin = a_margin;
     gl_Position = u_view_projection * world;
 }
 "#;
@@ -34,6 +43,10 @@ void main() {
 const FRAGMENT_SHADER: &str = r#"#version 330 core
 in vec3 v_normal;
 in vec3 v_world_position;
+in vec2 v_uv;
+in vec3 v_flow;
+in float v_margin;
+uniform float u_time;
 uniform vec4 u_color;
 uniform vec3 u_camera_position;
 uniform vec4 u_tint;
@@ -74,6 +87,12 @@ void main() {
         }
     }
     vec3 lit = u_color.rgb * light;
+    // Water: flow ripples and foam on the margins. Other meshes have zero flow and margin.
+    float flow_speed = length(v_flow);
+    float ripple = 0.5 + 0.5 * sin(v_uv.x * 6.0 - u_time * (1.0 + flow_speed * 2.0) + v_uv.y * 5.0);
+    float foam = smoothstep(0.55, 1.0, v_margin) * (0.55 + 0.45 * ripple);
+    lit = mix(lit, vec3(0.92, 0.97, 1.0), foam * 0.55);
+    lit += vec3(0.03, 0.05, 0.07) * ripple * step(0.01, flow_speed);
     float fog = clamp(length(v_world_position - u_camera_position) / 200.0, 0.0, 1.0);
     lit = mix(lit, vec3(0.53, 0.70, 0.88), fog * 0.6);
     lit = mix(lit, u_tint.rgb, u_tint.a);
@@ -142,6 +161,7 @@ struct Uniforms {
     point_count: Option<glow::UniformLocation>,
     point_position: Option<glow::UniformLocation>,
     point_color: Option<glow::UniformLocation>,
+    time: Option<glow::UniformLocation>,
 }
 
 /// Tint of the selected object and of the object under the mouse: color and amount.
@@ -236,6 +256,8 @@ pub struct GlRenderer {
     sculpt_meshes: HashMap<u64, GpuMesh>,
     /// One buffer per editable mesh, by the polygon mesh's fingerprint (new on every edit).
     edit_meshes: HashMap<u64, GpuMesh>,
+    /// Clock for water ripples (rendering only; the simulation is deterministic).
+    started: std::time::Instant,
     grid_pass: GridPass,
     overlay_pass: OverlayPass,
 }
@@ -260,6 +282,7 @@ impl GlRenderer {
                 point_count: gl.get_uniform_location(program, "u_point_count"),
                 point_position: gl.get_uniform_location(program, "u_point_position[0]"),
                 point_color: gl.get_uniform_location(program, "u_point_color[0]"),
+                time: gl.get_uniform_location(program, "u_time"),
             }
         };
         let grid_pass = create_grid_pass(&gl)?;
@@ -279,6 +302,7 @@ impl GlRenderer {
             edit_meshes: HashMap::new(),
             grid_pass,
             overlay_pass,
+            started: std::time::Instant::now(),
         })
     }
 
@@ -316,6 +340,10 @@ impl GlRenderer {
                 camera.x,
                 camera.y,
                 camera.z,
+            );
+            self.gl.uniform_1_f32(
+                self.uniforms.time.as_ref(),
+                self.started.elapsed().as_secs_f32(),
             );
             self.upload_lighting(&frame.lighting);
         }
@@ -502,6 +530,7 @@ impl GlRenderer {
                     positions: chunk.mesh.positions.clone(),
                     normals: chunk.mesh.normals.clone(),
                     indices: chunk.mesh.indices.clone(),
+                    ..MeshData::default()
                 };
                 let uploaded = upload_mesh(&self.gl, &data)?;
                 self.sculpt_meshes.insert(chunk.id, uploaded);
@@ -880,7 +909,7 @@ fn compile_source_program(
 }
 
 fn upload_mesh(gl: &glow::Context, mesh: &MeshData) -> Result<GpuMesh, RenderError> {
-    let mut vertex_bytes = Vec::with_capacity(mesh.positions.len() * 24);
+    let mut vertex_bytes = Vec::with_capacity(mesh.positions.len() * 48);
     for value in mesh.interleaved() {
         vertex_bytes.extend_from_slice(&value.to_ne_bytes());
     }
@@ -897,11 +926,17 @@ fn upload_mesh(gl: &glow::Context, mesh: &MeshData) -> Result<GpuMesh, RenderErr
         gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, &vertex_bytes, glow::STATIC_DRAW);
         gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(index_buffer));
         gl.buffer_data_u8_slice(glow::ELEMENT_ARRAY_BUFFER, &index_bytes, glow::STATIC_DRAW);
-        let stride = 6 * 4;
+        let stride = 12 * 4;
         gl.enable_vertex_attrib_array(0);
         gl.vertex_attrib_pointer_f32(0, 3, glow::FLOAT, false, stride, 0);
         gl.enable_vertex_attrib_array(1);
         gl.vertex_attrib_pointer_f32(1, 3, glow::FLOAT, false, stride, 12);
+        gl.enable_vertex_attrib_array(2);
+        gl.vertex_attrib_pointer_f32(2, 2, glow::FLOAT, false, stride, 24);
+        gl.enable_vertex_attrib_array(3);
+        gl.vertex_attrib_pointer_f32(3, 3, glow::FLOAT, false, stride, 32);
+        gl.enable_vertex_attrib_array(4);
+        gl.vertex_attrib_pointer_f32(4, 1, glow::FLOAT, false, stride, 44);
         gl.bind_vertex_array(None);
         Ok(GpuMesh {
             vertex_array,

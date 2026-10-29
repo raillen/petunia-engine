@@ -68,6 +68,8 @@ private:
     void setFullMenus(bool on);
     void buildSculptBar();
     void syncSculptBar(const QJsonObject& snapshot);
+    void buildNaturalBar();
+    void syncNaturalBar(const QJsonObject& snapshot);
     void buildDocks();
 
     Reply perform(const QString& operation, const QJsonObject& fields, bool interactive = true);
@@ -135,13 +137,14 @@ private:
     QAction* edgeModeAction_ = nullptr;
     QAction* faceModeAction_ = nullptr;
     QAction* shapeActions_[6] = {};
-    QAction* toolActions_[8] = {};
+    QAction* toolActions_[11] = {};
     QAction* carveAction_ = nullptr;
     QAction* codeAction_ = nullptr;
     CodePanel* code_ = nullptr;
     QAction* logicAction_ = nullptr;
     GraphPanel* graph_ = nullptr;
     QAction* caveAction_ = nullptr;
+    QAction* terrainAction_ = nullptr;
     // Criar > Luz: a bulb and a sun (DR-29).
     QAction* importModelAction_ = nullptr;
     QAction* pointLightAction_ = nullptr;
@@ -157,6 +160,20 @@ private:
     bool closing_ = false;
     // Options bar of the sculpting tools; only visible while one of them is active.
     QToolBar* sculptBar_ = nullptr;
+    QToolBar* naturalBar_ = nullptr;
+    QComboBox* naturalMode_ = nullptr;
+    QDoubleSpinBox* naturalRadiusBox_ = nullptr;
+    QDoubleSpinBox* naturalStrengthBox_ = nullptr;
+    QDoubleSpinBox* naturalWidthBox_ = nullptr;
+    QDoubleSpinBox* naturalDepthBox_ = nullptr;
+    QCheckBox* naturalGuardrailBox_ = nullptr;
+    QPushButton* naturalStructuresButton_ = nullptr;
+    // Items of the options bar, grouped by the tool that uses them. A widget inside a QToolBar
+    // follows the visibility of its action, so the actions are what gets toggled.
+    QList<QAction*> naturalTerrainItems_;
+    QList<QAction*> naturalPathItems_;
+    QList<QAction*> naturalRiverItems_;
+    QList<QAction*> naturalRoadItems_;
     QComboBox* sculptMode_ = nullptr;
     QDoubleSpinBox* sculptRadiusBox_ = nullptr;
     QDoubleSpinBox* sculptForceBox_ = nullptr;

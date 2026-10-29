@@ -16,6 +16,8 @@ mod gizmo;
 mod graph_ops;
 mod lights;
 mod mesh_tool;
+mod natural_ops;
+mod natural_tool;
 mod play;
 mod prefabs;
 mod protocol;
@@ -448,6 +450,254 @@ mod tests {
             (iso_cam["result"]["pitch_degrees"].as_f64().unwrap() - true_iso_pitch).abs() < 1.0e-3
         );
 
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn terrain_and_paths_are_commands_that_save_and_undo() {
+        let root = scratch_dir("natural");
+        let mut session = EditorSession::new().expect("session");
+        call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "Mundo" }),
+        );
+
+        let created = call(&mut session, json!({ "op": "create.terrain" }));
+        assert_eq!(created["ok"], true, "{created}");
+        let terrain = created["result"]["entity"].as_u64().expect("terrain id");
+
+        let painted = call(
+            &mut session,
+            json!({
+                "op": "command.execute",
+                "command": "terrain.paint",
+                "payload": {
+                    "terrain": terrain,
+                    "stamps": [{
+                        "center": {"x": 10.0, "y": 0.0, "z": 10.0},
+                        "radius": 4.0,
+                        "strength": 2.0,
+                        "mode": "raise"
+                    }]
+                }
+            }),
+        );
+        assert_eq!(painted["ok"], true, "{painted}");
+        let sample = call(
+            &mut session,
+            json!({ "op": "query.run", "query": "terrain.sample", "payload": { "terrain": terrain, "x": 10.0, "z": 10.0 } }),
+        );
+        let raised = sample["result"]["height"].as_f64().unwrap_or(0.0);
+        assert!(raised > 0.5, "height {raised}");
+
+        assert_eq!(call(&mut session, json!({ "op": "edit.undo" }))["ok"], true);
+        let after_undo = call(
+            &mut session,
+            json!({ "op": "query.run", "query": "terrain.sample", "payload": { "terrain": terrain, "x": 10.0, "z": 10.0 } }),
+        );
+        assert!(
+            after_undo["result"]["height"].as_f64().unwrap_or(1.0).abs() < 1.0e-4,
+            "{after_undo}"
+        );
+        assert_eq!(call(&mut session, json!({ "op": "edit.redo" }))["ok"], true);
+
+        // The editor accepts the erosion mode and the command wears the bump down.
+        let mode = call(
+            &mut session,
+            json!({ "op": "terrain.mode", "mode": "erode" }),
+        );
+        assert_eq!(mode["ok"], true, "{mode}");
+        assert_eq!(mode["result"]["mode"], "erode", "{mode}");
+        let eroded = call(
+            &mut session,
+            json!({
+                "op": "command.execute",
+                "command": "terrain.paint",
+                "payload": {
+                    "terrain": terrain,
+                    "stamps": [{
+                        "center": {"x": 10.0, "y": 0.0, "z": 10.0},
+                        "radius": 4.0,
+                        "strength": 1.0,
+                        "mode": "erode"
+                    }]
+                }
+            }),
+        );
+        assert_eq!(eroded["ok"], true, "{eroded}");
+        let sample_after_erosion = call(
+            &mut session,
+            json!({ "op": "query.run", "query": "terrain.sample", "payload": { "terrain": terrain, "x": 10.0, "z": 10.0 } }),
+        );
+        let eroded_height = sample_after_erosion["result"]["height"]
+            .as_f64()
+            .unwrap_or(0.0);
+        assert!(
+            eroded_height < raised,
+            "erosion lowered the peak: {eroded_height} >= {raised}"
+        );
+
+        let mut spline = petunia_math::CubicBezierSpline::new();
+        spline.points.push(petunia_math::SplinePoint {
+            position: petunia_math::Vec3::new(0.0, 2.0, 0.0),
+            ..petunia_math::SplinePoint::default()
+        });
+        spline.points.push(petunia_math::SplinePoint {
+            position: petunia_math::Vec3::new(20.0, 0.0, 0.0),
+            ..petunia_math::SplinePoint::default()
+        });
+        let river = call(
+            &mut session,
+            json!({
+                "op": "command.execute",
+                "command": "path.create",
+                "payload": {
+                    "kind": "river",
+                    "spline": petunia_world::Value::Spline(spline).to_json()
+                }
+            }),
+        );
+        assert_eq!(river["ok"], true, "{river}");
+        let river_id = river["result"]["entity"].as_u64().expect("river id");
+        let report = call(
+            &mut session,
+            json!({ "op": "query.run", "query": "path.report", "payload": { "entity": river_id } }),
+        );
+        assert_eq!(report["result"]["kind"], "river");
+        assert_eq!(report["result"]["points"], 2);
+        assert!(report["result"]["length_meters"].as_f64().unwrap_or(0.0) > 15.0);
+
+        assert_eq!(
+            call(&mut session, json!({ "op": "project.save" }))["ok"],
+            true
+        );
+        let mut reopened = EditorSession::new().expect("session");
+        call(
+            &mut reopened,
+            json!({ "op": "project.open", "path": root.display().to_string() }),
+        );
+        let kept = call(
+            &mut reopened,
+            json!({ "op": "query.run", "query": "terrain.sample", "payload": { "terrain": terrain, "x": 10.0, "z": 10.0 } }),
+        );
+        assert!(
+            kept["result"]["height"].as_f64().unwrap_or(0.0) > 0.5,
+            "{kept}"
+        );
+        let kept_river = call(
+            &mut reopened,
+            json!({ "op": "query.run", "query": "path.report", "payload": { "entity": river_id } }),
+        );
+        assert_eq!(kept_river["result"]["kind"], "river");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_terrain_and_path_tools_work_from_pointer_events() {
+        let root = scratch_dir("natural_tools");
+        let mut session = EditorSession::new().expect("session");
+        call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "Ferramentas" }),
+        );
+        let pointer = json!({ "x": 720.0, "y": 560.0, "width": 1440.0, "height": 900.0 });
+        call(&mut session, json!({ "op": "tool.set", "tool": "terrain" }));
+        let mut begin = pointer.clone();
+        begin["op"] = json!("terrain.begin");
+        assert_eq!(call(&mut session, begin)["ok"], true);
+        let mut drag = pointer.clone();
+        drag["op"] = json!("terrain.drag");
+        assert_eq!(call(&mut session, drag)["ok"], true);
+        let ended = call(&mut session, json!({ "op": "terrain.end" }));
+        assert_eq!(ended["ok"], true, "{ended}");
+        let snapshot = call(&mut session, json!({ "op": "editor.snapshot" }));
+        assert!(
+            snapshot["result"]["natural"]["terrain"].as_u64().is_some(),
+            "{snapshot}"
+        );
+
+        call(
+            &mut session,
+            json!({ "op": "tool.set", "tool": "river_path" }),
+        );
+        let mut point = pointer.clone();
+        point["op"] = json!("natural.point");
+        assert_eq!(call(&mut session, point.clone())["ok"], true);
+        point["x"] = json!(760.0);
+        assert_eq!(call(&mut session, point.clone())["ok"], true);
+        point["x"] = json!(820.0);
+        assert_eq!(call(&mut session, point)["ok"], true);
+        let committed = call(&mut session, json!({ "op": "natural.commit" }));
+        assert_eq!(committed["ok"], true, "{committed}");
+        let river_id = committed["result"]["entity"].as_u64().expect("river");
+        let report = call(
+            &mut session,
+            json!({ "op": "query.run", "query": "path.report", "payload": { "entity": river_id } }),
+        );
+        assert_eq!(report["result"]["kind"], "river", "{report}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_road_above_the_terrain_gets_a_bridge_span_that_undo_removes() {
+        let root = scratch_dir("bridge");
+        let mut session = EditorSession::new().expect("session");
+        call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "Ponte" }),
+        );
+        let terrain = call(&mut session, json!({ "op": "create.terrain" }))["result"]["entity"]
+            .as_u64()
+            .expect("terrain");
+        assert!(terrain > 0);
+        let mut spline = petunia_math::CubicBezierSpline::new();
+        spline.points.push(petunia_math::SplinePoint {
+            position: petunia_math::Vec3::new(-10.0, 6.0, 10.0),
+            ..petunia_math::SplinePoint::default()
+        });
+        spline.points.push(petunia_math::SplinePoint {
+            position: petunia_math::Vec3::new(10.0, 6.0, 10.0),
+            ..petunia_math::SplinePoint::default()
+        });
+        let road = call(
+            &mut session,
+            json!({
+                "op": "command.execute",
+                "command": "path.create",
+                "payload": { "kind": "road", "spline": petunia_world::Value::Spline(spline).to_json(), "width": 6.0 }
+            }),
+        );
+        assert_eq!(road["ok"], true, "{road}");
+        let road_id = road["result"]["entity"].as_u64().expect("road");
+        let found = call(
+            &mut session,
+            json!({
+                "op": "command.execute",
+                "command": "road.detect_structures",
+                "payload": { "road": road_id, "minimum_height_difference": 2.0 }
+            }),
+        );
+        assert_eq!(found["ok"], true, "{found}");
+        assert!(
+            found["result"]["bridges"].as_u64().unwrap_or(0) > 0,
+            "{found}"
+        );
+        let snapshot = call(&mut session, json!({ "op": "editor.snapshot" }));
+        assert!(
+            snapshot["result"]["entities"]
+                .to_string()
+                .contains("\"Bridge\""),
+            "{snapshot}"
+        );
+        assert_eq!(call(&mut session, json!({ "op": "edit.undo" }))["ok"], true);
+        let after = call(&mut session, json!({ "op": "editor.snapshot" }));
+        assert!(
+            !after["result"]["entities"]
+                .to_string()
+                .contains("\"Bridge\""),
+            "{after}"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 }

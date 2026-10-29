@@ -18,6 +18,7 @@ use crate::failure::Failure;
 use crate::floors::AboveFloor;
 use crate::gizmo::{Drag, Handle, Orientation, Snap, Tool};
 use crate::mesh_tool::ComponentSelection;
+use crate::natural_tool::NaturalState;
 use crate::sculpt_tool::SculptState;
 use crate::tools::{DEFAULT_FLOOR_HEIGHT, FreeMode, PivotMode, SnapTarget};
 
@@ -106,6 +107,8 @@ pub struct EditorSession {
     pub(crate) outline: crate::tools::OutlineStyle,
     /// The sculpting tool (caves).
     pub(crate) sculpt: SculptState,
+    /// Terrain, river and road tools.
+    pub(crate) natural: NaturalState,
     /// Faces, edges and vertices chosen on an editable mesh (`mesh.select`).
     pub(crate) components: Option<ComponentSelection>,
     /// Triangles of editable meshes, reused while they do not change (the tools extract the
@@ -144,11 +147,19 @@ pub(crate) fn display_name(world: &World, id: u64) -> String {
     }
 }
 
+fn new_dispatcher() -> Result<Dispatcher, Failure> {
+    let mut dispatcher = Dispatcher::with_builtin()?;
+    for (spec, apply) in crate::natural_ops::commands() {
+        dispatcher.register(spec, apply)?;
+    }
+    Ok(dispatcher)
+}
+
 impl EditorSession {
     pub fn new() -> Result<Self, Failure> {
         Ok(Self {
             project: None,
-            dispatcher: Dispatcher::with_builtin()?,
+            dispatcher: new_dispatcher()?,
             selection: None,
             camera: FlyCamera::new(petunia_render::Camera::default()),
             log: VecDeque::new(),
@@ -177,6 +188,7 @@ impl EditorSession {
             gizmo_size: Self::default_gizmo_size(),
             outline: crate::tools::OutlineStyle::default(),
             sculpt: SculptState::new(),
+            natural: NaturalState::default(),
             components: None,
             mesh_cache: RefCell::new(MeshCache::new()),
             play: None,
@@ -249,7 +261,7 @@ impl EditorSession {
             scene_path: loaded.scene_path,
             world: loaded.world,
         });
-        self.dispatcher = Dispatcher::with_builtin()?;
+        self.dispatcher = new_dispatcher()?;
         self.selection = None;
         self.graph = None;
         self.floor = None;
@@ -286,6 +298,7 @@ impl EditorSession {
             || self.face_drag.is_some()
             || self.free.is_some()
             || self.sculpt.drag.is_some()
+            || self.natural.dragging
             || self
                 .components
                 .as_ref()
@@ -725,6 +738,7 @@ impl EditorSession {
         frame.mark_hovered(self.hovered.filter(|id| Some(*id) != self.selection));
         frame.overlay = self.outline_overlay(&frame);
         self.sculpt_overlay(&mut frame.overlay);
+        self.natural_overlay(&mut frame.overlay);
         self.mesh_overlay(&mut frame.overlay);
         self.collider_overlay(&frame.items, &mut frame.overlay);
         self.light_overlay(&mut frame.overlay);
@@ -765,6 +779,7 @@ impl EditorSession {
                 "can_redo": false,
                 "diagnostics": diagnostics,
                 "camera": camera_json,
+                "natural": self.natural_json(),
             });
         };
         let world = &project.world;
@@ -780,7 +795,10 @@ impl EditorSession {
                 .map(|snapshot| snapshot.rows.keys().cloned().collect())
                 .unwrap_or_default();
             // The strokes of a cave are part of it; listing hundreds of them would bury the scene.
-            if tables.iter().any(|table| table == "SculptStroke") {
+            if tables
+                .iter()
+                .any(|table| table == "SculptStroke" || table == "TerrainChunk")
+            {
                 continue;
             }
             // A collider is listed under its object, by its own name.
@@ -812,6 +830,7 @@ impl EditorSession {
             // What people count as objects: cave strokes and colliders are parts of something.
             "object_count": world.entity_count().saturating_sub(
                 world.entities_with_table("SculptStroke").map_or(0, |strokes| strokes.len())
+                    + world.entities_with_table("TerrainChunk").map_or(0, |chunks| chunks.len())
                     + world.entities_with_table("Collider").map_or(0, |colliders| colliders.len())
             ),
             "truncated": truncated,
@@ -826,6 +845,7 @@ impl EditorSession {
             "transform": self.transform_json(),
             "floor": self.floor_json(),
             "sculpt": self.sculpt_json(),
+            "natural": self.natural_json(),
             "mesh_selection": self.components_json(),
         })
     }

@@ -47,6 +47,7 @@ São **24 decisões**. Estados possíveis:
 | **DR-30** | Sistema de nós (no lugar do Event Sheet) | **ACEITA** (2026-10-26, "tudo aprovado"; N1 implementado) | Grafo tipado 1:1 com a API; compila para Aipo; vista em contorno completa como primeira entrega; tela de nós própria sem biblioteca nova |
 | **DR-31** | Prefabs embutidos e o nó Esperar | **ACEITA** (2026-10-26, "prossiga com a implementação"; N4 implementado) | Porta, Item coletável e Ponto de nascimento como moldes de linhas + grafos; `Esperar` compila para uma função por espera |
 | **DR-24** | Workspaces e prioridades antes da API | **EM PARTE ACEITA** (andares, cavernas B) | Mapa (com Jogar), Pintura sem UV, Animação, Efeitos por nós; antes da API: andares, cavernas, terreno, prefabs, Jogar ([análise](../02-arquitetura/14-workspaces-e-prioridades.md)) |
+| **DR-33** | Terreno, rios e estradas | **FEITA NO BRANCH** (2026-10-28, `feat/mundo-natural-rios-estradas`) | Spline Bézier por comprimento de arco, perfis varridos, escavação/aplainamento/aterro, descida do rio, cruzamentos, lagos, quedas, confluências e grafo de navegação; depois da aceitação: comandos e consultas, barra no editor, gravação na cena, convés de ponte, leito sólido na física e pincel de erosão. **Faltam** decals (`DR-12` é proposta), ruído, carimbos e partículas ([arquitetura](../02-arquitetura/04-terreno-rios-estradas.md)) |
 
 ---
 
@@ -639,6 +640,41 @@ Se uma biblioteca for necessária mais tarde, passa no checklist de admissão an
 **Não verificado:** leitor de tela no canvas (o contorno tem texto e descrição falados; **não ouvi** nenhum dos dois), e o destaque com um grafo grande (os testes usam dois ou três nós).
 
 **Reabrir se:** o contorno não bastar para quem usa leitor de tela depois de um teste com uma pessoa real (era a condição do DR-30), ou se 200 ms não acompanharem um grafo grande.
+
+---
+
+## DR-33 — Terreno, rios e estradas: protótipo de domínio · ACEITA (2026-10-28)
+
+**Pedido:** "prossiga com a implementação completa" dos rios, estradas e água, sem bibliotecas novas e em worktree isolada (`feat/mundo-natural-rios-estradas`, a partir da `main` @ `3db1c42`).
+
+**Decisão:** implementar primeiro o **domínio puro**, com dados serializáveis e funções pequenas; a integração com comandos, editor e render fica declarada como etapa seguinte.
+
+1. **Uma curva só.** `CubicBezierSpline` mora em `petunia_math` (parâmetro em unidades de segmento, handles, largura/profundidade/extra por ponto). A amostragem é **por comprimento de arco** e cada quadro carrega o parâmetro da curva, para largura/profundidade não dependerem de adivinhação. Limites: `MAX_SPLINE_POINTS` e `MAX_CURVE_SAMPLES`. `petunia_world` **não** redefine a curva; importa a de `petunia_math`.
+2. **Perfil normalizado.** `offset_x` é múltiplo da meia largura e `offset_y` do raio/profundidade. O perfil de **água** é plano (a superfície não afunda); o leito é escavado no terreno por outro caminho. A varredura devolve `Result<PathMesh, PathMeshError>` com orçamento de vértices e perfis de 2 a `MAX_PROFILE_POINTS` pontos; o fluxo e a máscara de margem vão nos vértices.
+3. **Terreno em `petunia_world`.** `Heightfield` com blocos de `HEIGHT_CHUNK_SIZE`, pincel com falloff, aplainamento com patamar interno (o resultado não depende de quantos carimbos se sobrepõem) e `chunks_touching`, para um caminho que cruza a borda do bloco continuar contínuo. `petunia_sculpt` escava, achata e aterra ao longo da spline; a escavação de rio usa largura e profundidade **por ponto**.
+4. **Rios.** `validate_river_descent` devolve relatório (`descends`, `maximum_ascent`) e `lower_river_bed` baixa o leito; confluências entre pontas de splines, lago por leque de triângulos, queda como fita vertical e `water_volume_for_spline` para flutuação/nado/correnteza.
+5. **Estradas.** Interseção por busca grossa + refino local determinístico, divisão por **de Casteljau** preservando os dois lados da curva, polígono de cruzamento ordenado por ângulo e aviso de cruzamento agudo. Faixas de **ponte** (estrada acima do terreno) e **bueiro/corte** (terreno acima da estrada) são detectadas quando a diferença de altura passa de um limite; a malha da ponte em si não entra nesta etapa.
+6. **Navegação em `petunia_graph`.** A rede vira grafo por arestas compartilhadas; o Project Doctor recebe pontas soltas, ilhas desconectadas e arestas com menos de dois extremos.
+7. **Sem dependência nova.** Tudo é matemática própria, determinística e sem `unwrap` em produção.
+
+**Fora desta etapa (declarado):** comandos e consultas (`petunia_commands`), interface no editor Qt, armazenamento do terreno e das redes no arquivo de cena, malha de pontes e bueiros, decals, colisão de água na física, sombreadores de fluxo/espuma e desfazer de pinceladas.
+
+**Complemento (2026-10-28, mesma data, depois da aceitação):** a etapa seguinte foi implementada nesta branch, e a lista acima fica **cumprida** assim:
+
+1. **Comandos e consultas:** `terrain.create`, `terrain.paint`, `path.create`, `path.set`, `road.detect_structures`; `terrain.sample` e `path.report`. Cada pincelada é **um** comando, logo **um** passo de desfazer: não houve código novo de desfazer por pincelada.
+2. **Editor Qt:** barra do terreno/rio/estrada (modo, raio, força, largura, profundidade), ferramentas `T`, `Y` e `U`, botão **Pontes e bueiros** e caixa de defensas. O **modo erosão** entrou no combo como `erode`. A barra mostra **só os controles da ferramenta ativa**, e o botão só habilita com uma estrada selecionada.
+3. **Gravação:** `Terrain`, `TerrainChunk`, `River`, `Road` e `Bridge` são tabelas normais da cena e sobrevivem a salvar e reabrir.
+4. **Malha da ponte:** laje fechada de 0,6 m sob a estrada mais as duas defensas, com **normal plana por triângulo** (a varredura dava a normal "para cima" a todas as faces, e o lado de baixo da laje ficava iluminado como céu). O **bueiro/corte continua só dado**: dentro de um corte é o terreno que faz a estrutura, e um tubo visível pertence a drenagem, não a esta etapa.
+5. **Colisão de água:** cada `TerrainChunk` vira `TriMesh` sólida (com passo reduzido quando o bloco passaria de `MAX_SOLID_TRIANGLES`), então o **leito** escavado do rio é chão andável. A água **não** vira parede: continua meio, com empuxo, nado e correnteza. A colisão que faltava era a do fundo.
+6. **Sombreadores de fluxo e espuma:** já estavam no `petunia_render_gl` (ondulação e espuma pela máscara de margem gravada nos vértices).
+7. **Pincel de erosão:** uma passada de erosão térmica em `HeightChunk::erode_region` — cada célula lê a cópia do início, cede material ao vizinho mais baixo, e o pé ganha exatamente o que o pico perdeu (determinístico).
+8. **Dois defeitos da janela, achados ao ligar o teste de fumaça aos botões de verdade (2026-10-28):** a barra de opções mostrava tudo de uma vez e empurrava o botão **Pontes e bueiros** para fora da área visível (o canto `⋯` da barra só alcança ações, não widgets); e a pergunta "há estrada selecionada?" comparava o **número** de `selected_road` com booleano, então o botão e a caixa **Defensas** nunca habilitavam. Os dois estão corrigidos e o teste de fumaça passa por eles (**7/7**, com erosão e ponte).
+
+**Continua fora:** decals (bloqueados pelo `DR-12`, que é proposta), erosão por ruído, carimbos de terreno, LOD em quadtree e partículas na queda.
+
+**Não verificado:** a janela na sessão real do usuário; a evidência de janela é o teste de fumaça no display virtual (terreno, alturas pintadas, erosão, rio, estrada e **ponte com convés**), nenhuma imagem foi tirada na sessão real.
+
+**Reabrir se:** a integração com o editor precisar de outro formato de dados, ou se o custo de amostragem por comprimento de arco pesar em rios muito longos.
 
 ---
 

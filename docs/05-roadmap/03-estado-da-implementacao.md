@@ -1,6 +1,6 @@
 # Estado da implementação
 
-**Revisão:** 2026-10-27 (integridade de dados) · **Fase atual:** 1 (esqueleto) concluída no código; **fase 2 (editor e construção de mapas) começou**
+**Revisão:** 2026-10-28 (protótipo de rios e estradas, branch) · **Fase atual:** 1 (esqueleto) concluída no código; **fase 2 (editor e construção de mapas) começou**
 
 ## Resumo (TL;DR)
 
@@ -11,6 +11,35 @@ O essencial foi verificado **em display virtual** (nada apareceu na sua tela), c
 Três análises novas pedem a sua decisão: [paridade da interface](../02-arquitetura/12-paridade-ui-petunia3d.md), [edição de malha](../02-arquitetura/13-primitivas-e-edicao-de-malha.md) e [pintura e animação](../01-pesquisa/07-pintura-e-animacao.md).
 
 **Consolidação de 2026-10-27:** os PRs #2 a #7 foram mesclados na `main` (personagem e Jogar, luzes e GLB, grafo de nós N1–N5, prefabs). A `main` tinha **397 testes** antes destas correções; com elas, tem **402 testes, 0 falhas**, e o editor compila no Qt 6.4.2.
+
+## Etapa atual: rios, estradas, água e terreno no editor (2026-10-28, branch `feat/mundo-natural-rios-estradas`)
+
+Decisão: [DR-33](../06-decisoes/registro-de-decisoes.md) e o complemento dela. **Não está na `main`.** A interface existe (barra do terreno/rio/estrada no viewport) e o teste de fumaça a exercita no display virtual; nada foi visto na sua sessão real.
+
+| Entrega | Evidência |
+|---|---|
+| Spline Bézier com amostragem por comprimento de arco, quadros com parâmetro e largura/profundidade por ponto | testes do `petunia_math` (espaçamento uniforme em curva desigual, quadros ortonormais, curva fechada sem costura duplicada) |
+| Perfis varridos de rio/estrada, fluxo e máscara de margem nos vértices, orçamento e recusas | testes do `petunia_sculpt` (malha, largura por ponto, perfil vazio) |
+| Mapa de altura em blocos, pincel com falloff, aplainamento e continuidade entre blocos | testes do `petunia_world` e do `petunia_sculpt` (caminho cruza a borda do bloco) |
+| Rios: validação de descida, baixar leito, confluências, lago, queda, volume de água | testes do `petunia_sculpt` |
+| Estradas: interseção, divisão por de Casteljau, polígono de cruzamento, aviso de ângulo agudo, ponte/bueiro por diferença de altura | testes do `petunia_sculpt` |
+| Navegação: grafo por arestas, pontas soltas, ilhas, arestas sem dois extremos | 4 testes do `petunia_graph` |
+| **Comandos e consultas:** `terrain.create`, `terrain.paint`, `path.create`, `path.set`, `road.detect_structures`; `terrain.sample`, `path.report` | testes do `petunia_editor` pelo JSON, com desfazer, refazer e gravação na cena |
+| **Gravação na cena:** `Terrain`, `TerrainChunk`, `River`, `Road` e `Bridge` salvam e reabrem | teste que salva, fecha e reabre o projeto |
+| **Pincel de erosão:** uma passada de erosão térmica (cada célula cede material ao vizinho mais baixo, com falloff e cópia do início) | 3 testes do `petunia_world` + 1 de fluxo no editor (`terrain.mode` e `terrain.paint` com `erode`) |
+| **Desenho:** terreno com LOD e saia, água, estrada com acostamento, defensas, **convés de ponte** e fluxo/espuma no sombreador | testes do `petunia_render` (convés abaixo da estrada, faces de baixo não iluminadas como céu) + teste do editor que acha o convés no quadro entregue à janela |
+| **Ponte e bueiro:** a ponte ganha convés e defensas; o bueiro/corte fica só como dado (o terreno é a estrutura) | teste do editor com estrada acima do terreno (ponte) e dentro do corte (bueiro) |
+| **Física:** cada bloco de terreno entra como malha sólida, então o leito do rio é chão andável; a água continua meio (empuxo, nado, correnteza) | 2 testes do `petunia_physics` (bloco andável, bloco quebrado reportado e deixado de fora) |
+| Editor Qt | compila (`scripts/editor.sh build`); `scripts/natural-smoke.sh` **7/7** no display virtual: cria o terreno, pinta alturas, **erode** (o material muda de lugar e o volume se conserva), cria rio e estrada, cava sob a estrada e **detecta a ponte** (entidade `Ponte`, vão 0..2); imagem do viewport com o convés conferida |
+| Workspace inteiro | **464 testes, 0 falhas**; `cargo clippy --workspace --all-targets -- -D warnings` ok; `cargo fmt` ok **por pacote** (ver a nota do `fmt` abaixo) |
+
+**Corrigido ao ligar o teste de fumaça à janela (2026-10-28):** a barra de opções mostrava todos os controles de uma vez, não cabia na largura da janela e o botão **Pontes e bueiros** caía fora da área visível (o canto `⋯` da barra não alcança widgets, só ações); e a checagem de "há estrada selecionada?" comparava `selected_road` — que é o **número** do id — com booleano, então o botão e a caixa **Defensas** nunca habilitavam. Agora cada ferramenta mostra só os seus controles e o teste é `isDouble()`.
+
+**Outro teste de janela:** `scripts/editor-smoke.sh` voltou a **11/11** depois de acertar quantas teclas `Down` escolhem `PlayerStart` no menu **Adicionar tabela**. O menu lista as tabelas que faltam em ordem alfabética e o branch trouxe `Bridge`, `River`, `Road`, `Terrain` e `TerrainChunk` — todos antes de `PlayerStart`, que virou o **sexto** item. O teste reprovava antes de qualquer mudança de produto.
+
+**Ainda falta (declarado):** decals de faixa (bloqueado: `DR-12` é só proposta), erosão por **ruído**, carimbos de terreno, LOD em quadtree, tubo visível de bueiro e partículas na queda.
+
+**Não verificado:** a janela na sua sessão real (a evidência é o display virtual); leitor de tela; terreno grande (desempenho e memória).
 
 ## Etapa atual: integridade de dados (2026-10-27)
 
@@ -280,7 +309,9 @@ Detalhes: [editor](../02-arquitetura/11-editor.md), [paridade](../02-arquitetura
 | Item | Estado | Evidência |
 |---|---|---|
 | `cargo fmt`, `cargo clippy --workspace --all-targets -D warnings` | **passou** | limpo |
-| Suíte completa, **402 testes** (2026-10-27) | **passou** | mesh 181 (164 do Petunia3D), script 55 (15 + 16 do host + 7 de física + 17 de grafo), editor 49, graph 21 (12 + 9 de edição), physics 18, sculpt 17, render 16, world 14, math 11, commands 6, import 6, input 3, project 3, schema 2 |
+| `cargo fmt --all` (literal) | **não passa neste worktree** | `--all` também formata a dependência de caminho `../aipo-lang` (29 diferenças, já existentes, fora desta branch). O que se mede aqui é `cargo fmt -p <cada crate petunia> -- --check`, e esse passa. |
+| Suíte completa do **branch dos rios**, **464 testes** (2026-10-28) | **passou** | math 16, world 25, sculpt 41, graph 25, physics 22, render 22, editor 57 (55 + 2 de integração), project 3, commands 6, script 55, schema 2, import 6, mesh 181, input 3 |
+| Suíte completa, **402 testes** (2026-10-27, `main`) | **passou** | mesh 181 (164 do Petunia3D), script 55 (15 + 16 do host + 7 de física + 17 de grafo), editor 49, graph 21 (12 + 9 de edição), physics 18, sculpt 17, render 16, world 14, math 11, commands 6, import 6, input 3, project 3, schema 2 |
 | Formas orientadas para fora (caixa, rampa, cilindro, cone, esfera, escada) | **passou** | teste por geometria, em vários níveis de detalhe |
 | Gizmo: acertar a alça, mover só no eixo e no snap, girar em passos, escalar sem zerar | **passou** | 6 testes em `petunia_editor` |
 | Um arrasto vira **um** passo de desfazer; sem mudança, nenhum | **passou** | teste de gesto |

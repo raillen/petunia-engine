@@ -225,6 +225,21 @@ bool ViewportWidget::sculptTool() const {
     return tool == QLatin1String("sculpt") || tool == QLatin1String("sculpt_path");
 }
 
+bool ViewportWidget::naturalTool() const {
+    const QString tool = currentTool();
+    return tool == QLatin1String("terrain") || tool == QLatin1String("river_path") || tool == QLatin1String("road_path");
+}
+
+bool ViewportWidget::naturalPathTool() const {
+    const QString tool = currentTool();
+    return tool == QLatin1String("river_path") || tool == QLatin1String("road_path");
+}
+
+bool ViewportWidget::naturalPathPending() const {
+    return naturalPathTool() &&
+           bridge_->snapshot().value(QStringLiteral("natural")).toObject().value(QStringLiteral("path_points")).toInt() > 0;
+}
+
 // A tunnel with at least one point waits for Enter (dig), Backspace (undo a point) or Esc (cancel).
 bool ViewportWidget::pathPending() const {
     return currentTool() == QLatin1String("sculpt_path") &&
@@ -354,8 +369,9 @@ bool ViewportWidget::event(QEvent* event) {
             (looking_ && plain && isLetterMovementKey(key->key())) ||
             ((gizmoDragging_ || faceDragging_) && key->key() == Qt::Key_Escape) ||
             (freeMode_ && plain && isFreeModeKey(key->key())) ||
-            (pathPending() && (key->key() == Qt::Key_Escape || key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter ||
-                               key->key() == Qt::Key_Backspace))) {
+            ((pathPending() || naturalPathPending()) &&
+             (key->key() == Qt::Key_Escape || key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter ||
+              key->key() == Qt::Key_Backspace))) {
             key->accept();
             return true;
         }
@@ -373,6 +389,24 @@ bool ViewportWidget::event(QEvent* event) {
         if (gizmoDragging_ && key->key() == Qt::Key_Escape) {
             cancelGizmoDrag();
             return true;
+        }
+        if (naturalPathPending()) {
+            const int code = key->key();
+            if (code == Qt::Key_Return || code == Qt::Key_Enter) {
+                const Reply reply = bridge_->call(QStringLiteral("natural.commit"));
+                if (!reply.ok) {
+                    emit renderFailed(reply.explanation());
+                }
+                emit selectionChanged();
+                update();
+                return true;
+            }
+            if (code == Qt::Key_Backspace || code == Qt::Key_Escape) {
+                bridge_->call(code == Qt::Key_Backspace ? QStringLiteral("natural.pop") : QStringLiteral("natural.cancel"));
+                emit selectionChanged();
+                update();
+                return true;
+            }
         }
         if (pathPending()) {
             const int code = key->key();
@@ -395,6 +429,12 @@ bool ViewportWidget::event(QEvent* event) {
         if (sculptDragging_ && key->key() == Qt::Key_Escape) {
             sculptDragging_ = false;
             bridge_->call(QStringLiteral("sculpt.cancel"));
+            update();
+            return true;
+        }
+        if (naturalDragging_ && key->key() == Qt::Key_Escape) {
+            naturalDragging_ = false;
+            bridge_->call(QStringLiteral("terrain.cancel"));
             update();
             return true;
         }
@@ -427,6 +467,7 @@ void ViewportWidget::cancelActiveEdit() {
         gizmoDragging_ = false;
         faceDragging_ = false;
         sculptDragging_ = false;
+        naturalDragging_ = false;
         freeTyped_.clear();
         heldKeys_.clear();
         looking_ = false;
@@ -454,8 +495,15 @@ void ViewportWidget::cancelActiveEdit() {
         sculptDragging_ = false;
         bridge_->call(QStringLiteral("sculpt.cancel"));
     }
+    if (naturalDragging_) {
+        naturalDragging_ = false;
+        bridge_->call(QStringLiteral("terrain.cancel"));
+    }
     if (pathPending()) {
         bridge_->call(QStringLiteral("path.cancel"));
+    }
+    if (naturalPathPending()) {
+        bridge_->call(QStringLiteral("natural.cancel"));
     }
     clearLocalState();
     update();
@@ -504,6 +552,25 @@ void ViewportWidget::mousePressEvent(QMouseEvent* event) {
             event->accept();
             return;
         }
+        if (hasProject() && currentTool() == QLatin1String("terrain")) {
+            const Reply reply = bridge_->call(QStringLiteral("terrain.begin"), pointerFields(event->pos()));
+            if (!reply.ok) {
+                emit renderFailed(reply.explanation());
+            } else {
+                naturalDragging_ = true;
+                clickCandidate_ = false;
+                emit selectionChanged();
+                update();
+            }
+            event->accept();
+            return;
+        }
+        if (hasProject() && naturalPathTool()) {
+            pressPosition_ = event->pos();
+            clickCandidate_ = true;  // a click adds a point of the river/road
+            event->accept();
+            return;
+        }
         if (hasProject() && faceTool()) {
             const Reply reply = bridge_->call(QStringLiteral("face.begin"), pointerFields(event->pos()));
             if (!reply.ok) {
@@ -534,12 +601,17 @@ void ViewportWidget::mousePressEvent(QMouseEvent* event) {
 
 void ViewportWidget::mouseMoveEvent(QMouseEvent* event) {
     const bool invert = event->modifiers().testFlag(Qt::ControlModifier);
+    if (naturalDragging_) {
+        bridge_->call(QStringLiteral("terrain.drag"), pointerFields(event->pos()));
+        update();
+        return;
+    }
     if (sculptDragging_) {
         bridge_->call(QStringLiteral("sculpt.drag"), pointerFields(event->pos()));
         update();
         return;
     }
-    if (!looking_ && event->buttons() == Qt::NoButton && hasProject() && sculptTool()) {
+    if (!looking_ && event->buttons() == Qt::NoButton && hasProject() && (sculptTool() || naturalTool())) {
         // The brush ring follows the mouse over the cave.
         bridge_->call(QStringLiteral("pointer.hover"), pointerFields(event->pos()));
         update();
@@ -584,7 +656,15 @@ void ViewportWidget::mouseReleaseEvent(QMouseEvent* event) {
             }
         }
     } else if (event->button() == Qt::LeftButton) {
-        if (sculptDragging_) {
+        if (naturalDragging_) {
+            naturalDragging_ = false;
+            const Reply reply = bridge_->call(QStringLiteral("terrain.end"));
+            if (!reply.ok) {
+                emit renderFailed(reply.explanation());
+            }
+            emit selectionChanged();  // refresh: one new undo step
+            update();
+        } else if (sculptDragging_) {
             sculptDragging_ = false;
             const Reply reply = bridge_->call(QStringLiteral("sculpt.end"));
             if (!reply.ok) {
@@ -605,6 +685,14 @@ void ViewportWidget::mouseReleaseEvent(QMouseEvent* event) {
             QJsonObject fields = pointerFields(event->pos());
             fields.insert(QStringLiteral("invert"), event->modifiers().testFlag(Qt::ControlModifier));
             const Reply reply = bridge_->call(QStringLiteral("path.point"), fields);
+            if (!reply.ok) {
+                emit renderFailed(reply.explanation());
+            }
+            emit selectionChanged();
+            update();
+        } else if (clickCandidate_ && naturalPathTool()) {
+            clickCandidate_ = false;
+            const Reply reply = bridge_->call(QStringLiteral("natural.point"), pointerFields(event->pos()));
             if (!reply.ok) {
                 emit renderFailed(reply.explanation());
             }

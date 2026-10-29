@@ -8,8 +8,8 @@ use petunia_world::{EntityHandle, PersistentId, Value, World};
 
 use crate::{
     BodyDescription, BodyKind, CharacterDescription, ColliderDescription, ColliderShape,
-    DEFAULT_LAYER, DEFAULT_MASK, MAX_HULL_POINTS, PhysicsSettings, Simulation, check_body,
-    check_collider,
+    DEFAULT_LAYER, DEFAULT_MASK, MAX_HULL_POINTS, PhysicsSettings, Simulation, WaterVolume,
+    check_body, check_collider,
 };
 
 /// What a world holds for physics, plus what was wrong with it.
@@ -19,18 +19,23 @@ pub struct SceneDescription {
     pub colliders: Vec<ColliderDescription>,
     /// Objects that walk (`Character` table): their body is kinematic.
     pub characters: Vec<CharacterDescription>,
+    /// Rivers (`River` table): current, buoyancy and swimming.
+    pub water: Vec<WaterVolume>,
     /// One line per collider or body that was left out, naming the object.
     pub problems: Vec<String>,
 }
 
 impl SceneDescription {
     pub fn is_empty(&self) -> bool {
-        self.colliders.is_empty() && self.bodies.iter().all(|body| body.kind == BodyKind::Static)
+        self.colliders.is_empty()
+            && self.water.is_empty()
+            && self.bodies.iter().all(|body| body.kind == BodyKind::Static)
     }
 
     pub fn build(&self, settings: PhysicsSettings) -> Result<Simulation, crate::PhysicsError> {
         let mut simulation = Simulation::build(settings, &self.bodies, &self.colliders)?;
         simulation.add_characters(&self.characters)?;
+        simulation.set_water(&self.water);
         Ok(simulation)
     }
 }
@@ -151,6 +156,57 @@ pub fn describe(world: &World, solids: &BTreeMap<u64, SolidShape>) -> SceneDescr
         scene.colliders.push(collider);
     }
 
+    // Terrain is solid: the carved bed of a river is the ground a walker stands on. An explicit
+    // `Collider` on a chunk wins over this surface.
+    for handle in world
+        .entities_with_table("TerrainChunk")
+        .unwrap_or_default()
+    {
+        let Ok(PersistentId(id)) = world.persistent_id(handle) else {
+            continue;
+        };
+        if owners.contains_key(&id) {
+            continue;
+        }
+        match read_terrain_collider(world, handle, id) {
+            Ok(collider) => {
+                owners.insert(id, ());
+                scene.colliders.push(collider);
+            }
+            Err(problem) => scene.problems.push(format!("terreno #{id}: {problem}")),
+        }
+    }
+
+    for handle in world.entities_with_table("River").unwrap_or_default() {
+        let Ok(PersistentId(id)) = world.persistent_id(handle) else {
+            continue;
+        };
+        let Ok(Value::Spline(spline)) = world.get(handle, "River", "spline") else {
+            scene
+                .problems
+                .push(format!("rio #{id}: sem spline; a água não move ninguém"));
+            continue;
+        };
+        let flow_speed = match world.get(handle, "River", "flow_speed") {
+            Ok(Value::Float(value)) => *value as f32,
+            _ => 1.0,
+        };
+        let float_force = match world.get(handle, "River", "float_force") {
+            Ok(Value::Float(value)) => *value as f32,
+            _ => 9.8,
+        };
+        let swim_force = match world.get(handle, "River", "swim_force") {
+            Ok(Value::Float(value)) => *value as f32,
+            _ => 4.0,
+        };
+        match WaterVolume::from_spline(id, spline, flow_speed, float_force, swim_force) {
+            Some(volume) => scene.water.push(volume),
+            None => scene
+                .problems
+                .push(format!("rio #{id}: a spline não tem um trecho utilizável")),
+        }
+    }
+
     // Characters walk: their body is kinematic, with or without a `RigidBody` row.
     for handle in world.entities_with_table("Character").unwrap_or_default() {
         let Ok(PersistentId(id)) = world.persistent_id(handle) else {
@@ -220,6 +276,92 @@ pub fn describe(world: &World, solids: &BTreeMap<u64, SolidShape>) -> SceneDescr
         .colliders
         .retain(|collider| known.contains_key(&collider.owner));
     scene
+}
+
+/// Collision surface of a terrain chunk: the heightfield as a triangle mesh in world coordinates.
+///
+/// The step grows only when a huge chunk would pass the triangle budget of the engine; the grid
+/// still reaches the last row and column, so neighbouring chunks keep meeting at the border.
+fn read_terrain_collider(
+    world: &World,
+    handle: EntityHandle,
+    id: u64,
+) -> Result<ColliderDescription, String> {
+    let size = match world.get(handle, "TerrainChunk", "size") {
+        Ok(Value::Int(value)) if (2..=256).contains(value) => *value as usize,
+        _ => return Err("o tamanho do bloco precisa estar entre 2 e 256".to_string()),
+    };
+    let cell_size = match world.get(handle, "TerrainChunk", "cell_size") {
+        Ok(Value::Float(value)) if value.is_finite() && *value > 0.0 => *value as f32,
+        _ => return Err("o tamanho da célula precisa ser um número positivo".to_string()),
+    };
+    let chunk_x = match world.get(handle, "TerrainChunk", "chunk_x") {
+        Ok(Value::Int(value)) => *value as i32,
+        _ => return Err("o bloco não diz a sua coluna".to_string()),
+    };
+    let chunk_z = match world.get(handle, "TerrainChunk", "chunk_z") {
+        Ok(Value::Int(value)) => *value as i32,
+        _ => return Err("o bloco não diz a sua linha".to_string()),
+    };
+    let Ok(Value::Floats(heights)) = world.get(handle, "TerrainChunk", "heights") else {
+        return Err("o bloco não tem alturas".to_string());
+    };
+    if heights.len() != size * size {
+        return Err(format!(
+            "o bloco tem {} alturas para {size}×{size}",
+            heights.len()
+        ));
+    }
+    if heights.iter().any(|height| !height.is_finite()) {
+        return Err("o bloco tem uma altura que não é um número finito".to_string());
+    }
+    let cells = size - 1;
+    let budget = petunia_math::MAX_SOLID_TRIANGLES;
+    let mut step = 1usize;
+    while step < cells && 2 * cells.div_ceil(step) * cells.div_ceil(step) > budget {
+        step += 1;
+    }
+    let grid = cells.div_ceil(step) + 1;
+    let origin_x = chunk_x as f32 * size as f32 * cell_size;
+    let origin_z = chunk_z as f32 * size as f32 * cell_size;
+    let mut points = Vec::with_capacity(grid * grid);
+    for grid_z in 0..grid {
+        let z = (grid_z * step).min(cells);
+        for grid_x in 0..grid {
+            let x = (grid_x * step).min(cells);
+            let Some(height) = heights.get(z * size + x).copied() else {
+                return Err("o bloco não tem altura para uma das células".to_string());
+            };
+            points.push(Vec3::new(
+                origin_x + x as f32 * cell_size,
+                height,
+                origin_z + z as f32 * cell_size,
+            ));
+        }
+    }
+    let mut triangles = Vec::with_capacity((grid - 1) * (grid - 1) * 2);
+    for grid_z in 0..(grid - 1) {
+        for grid_x in 0..(grid - 1) {
+            let first = (grid_z * grid + grid_x) as u32;
+            let second = first + 1;
+            let third = first + grid as u32;
+            let fourth = third + 1;
+            triangles.extend_from_slice(&[[first, third, second], [second, third, fourth]]);
+        }
+    }
+    Ok(ColliderDescription {
+        collider: AUTO_COLLIDER_FLAG | id,
+        owner: id,
+        name: format!("terreno {chunk_x},{chunk_z}"),
+        shape: ColliderShape::TriMesh { points, triangles },
+        center: Vec3::ZERO,
+        rotation_degrees: Vec3::ZERO,
+        trigger: false,
+        friction: 0.9,
+        restitution: 0.0,
+        layer: DEFAULT_LAYER,
+        mask: DEFAULT_MASK,
+    })
 }
 
 fn transform_of(world: &World, handle: EntityHandle) -> Transform {
@@ -472,6 +614,116 @@ mod tests {
             .expect("the ball moves");
         assert!((pose.position.y - 0.5).abs() < 0.05, "{:?}", pose.position);
         assert!(world.handle_of(PersistentId(ball)).is_ok());
+    }
+
+    #[test]
+    fn a_terrain_chunk_becomes_a_walkable_surface() {
+        let mut world = standard_world();
+        let terrain = spawn(&mut world, json!({ "Terrain": { "cell_size": 1.0 } }));
+        let size = 8i64;
+        let heights = json!(vec![0.0f64; (size * size) as usize]);
+        let chunk = spawn(
+            &mut world,
+            json!({
+                "TerrainChunk": {
+                    "owner": terrain,
+                    "chunk_x": 0,
+                    "chunk_z": 0,
+                    "size": size,
+                    "cell_size": 1.0,
+                    "heights": heights
+                }
+            }),
+        );
+        let walker = spawn(
+            &mut world,
+            json!({
+                "Transform": { "position": { "x": 3.0, "y": 3.0, "z": 3.0 } },
+                "Character": {
+                    "max_slope_degrees": 45.0,
+                    "step_height": 0.4,
+                    "jump_speed": 4.0,
+                    "coyote_seconds": 0.1,
+                    "gravity_scale": 1.0
+                }
+            }),
+        );
+        spawn(
+            &mut world,
+            json!({ "Collider": {
+                "owner": walker,
+                "name": "corpo",
+                "shape": "capsule",
+                "radius": 0.35,
+                "height": 1.8
+            }}),
+        );
+
+        let scene = describe(&world, &BTreeMap::new());
+        assert!(scene.problems.is_empty(), "{:?}", scene.problems);
+        let surface = scene
+            .colliders
+            .iter()
+            .find(|collider| collider.owner == chunk)
+            .expect("the chunk has a surface");
+        match &surface.shape {
+            ColliderShape::TriMesh { points, triangles } => {
+                assert_eq!(points.len(), (size * size) as usize);
+                assert_eq!(
+                    triangles.len(),
+                    2 * (size as usize - 1) * (size as usize - 1)
+                );
+            }
+            other => panic!("expected a surface, got {other:?}"),
+        }
+
+        let mut simulation = scene
+            .build(PhysicsSettings::default())
+            .expect("valid scene");
+        for _ in 0..240 {
+            for _ in simulation.step() {}
+        }
+        let position = simulation
+            .poses()
+            .into_iter()
+            .find(|pose| pose.entity == walker)
+            .expect("the walker moves")
+            .position;
+        assert!(
+            position.y > 0.5,
+            "stands on the terrain instead of falling through: {position:?}"
+        );
+        assert!(
+            simulation.character_grounded(walker).unwrap_or(false),
+            "the terrain counts as ground"
+        );
+    }
+
+    #[test]
+    fn a_broken_terrain_chunk_is_reported_and_left_out() {
+        let mut world = standard_world();
+        let terrain = spawn(&mut world, json!({ "Terrain": { "cell_size": 1.0 } }));
+        spawn(
+            &mut world,
+            json!({
+                "TerrainChunk": {
+                    "owner": terrain,
+                    "chunk_x": 0,
+                    "chunk_z": 0,
+                    "size": 8,
+                    "cell_size": 1.0,
+                    "heights": [0.0, 1.0, 2.0]
+                }
+            }),
+        );
+        let scene = describe(&world, &BTreeMap::new());
+        assert!(scene.colliders.is_empty());
+        assert_eq!(scene.problems.len(), 1, "{:?}", scene.problems);
+        assert!(
+            scene.problems[0].contains("alturas"),
+            "{:?}",
+            scene.problems
+        );
     }
 
     #[test]

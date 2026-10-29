@@ -1,12 +1,42 @@
 # Terreno, rios e estradas
 
-**Revisão:** 2026-10-24 · **Estado:** proposta; precisa de protótipos
+**Revisão:** 2026-10-28 · **Estado:** domínio, comandos, editor, desenho e física implementados; decals pendentes (`DR-12` é só proposta)
 
 ## Resumo (TL;DR)
 
 Terreno, rios e estradas são **a mesma família**: curvas (splines) + um perfil + regras que **modificam o terreno** ao redor.
 
 O Petunia3D já tem as peças centrais (`LOCAL`): spline Bézier com quadros por ponto, varredura de perfil ao longo de um caminho e "pontos presos a superfície". A engine reaproveita essas peças e acrescenta **redes**: estradas se ligam em cruzamentos, rios se juntam em confluências.
+
+## O que já existe no código (2026-10-28)
+
+Branch `feat/mundo-natural-rios-estradas`; decisão no `DR-33`.
+
+| Peça | Onde | Verificação |
+|---|---|---|
+| Spline Bézier, amostragem **por comprimento de arco**, quadros com parâmetro, largura/profundidade/extra por ponto | `petunia_math::spline` | testes de espaçamento, ortogonalidade dos quadros, curva fechada sem costura duplicada e entrada hostil |
+| Perfis normalizados, varredura com orçamento de vértices, fluxo e máscara de margem nos vértices | `petunia_sculpt::path_network` | malha gerada, largura por ponto, recusa de perfil vazio/grande |
+| Mapa de altura em blocos, pincel com falloff, aplainamento com patamar, **erosão**, blocos tocados por um carimbo | `petunia_world::heightfield` | centro abaixo da borda, alvo exato do aplainamento, borda de bloco contínua, erosão leva material do pico ao pé sem criar nem sumir com ele |
+| Escavação, aplainamento e aterro ao longo de spline; escavação de rio por largura/profundidade do ponto | `petunia_sculpt::terrain_along_path` | caminho cruza blocos; profundidade cresce ponto a ponto; argumentos hostis ignorados |
+| Descida do rio (`RiverDescentReport` + `lower_river_bed`) | `petunia_sculpt::path_network` | rio que sobe é reprovado e o leito é baixado |
+| Interseção, divisão por de Casteljau e polígono de cruzamento | `petunia_sculpt::road_crossings` | curvas perpendiculares, paralelas sem interseção, metades preservam a curva |
+| Lago, queda, confluências e volume de água para o jogo | `petunia_sculpt::water_features` | malha plana no nível da água, fluxo para baixo na queda, pontas que se encontram |
+| Grafo de navegação, pontas soltas, ilhas e arestas sem dois extremos | `petunia_graph::road_path` | grupos por aresta compartilhada, validação com problemas |
+| Comandos e consultas: `terrain.create`, `terrain.paint`, `path.create`, `path.set`, `road.detect_structures`; `terrain.sample`, `path.report` | `petunia_editor::natural_ops` e `petunia_commands::query` | testes pelo JSON com desfazer, refazer e gravação na cena |
+| Terreno e redes na cena (`Terrain`, `TerrainChunk`, `River`, `Road`, `Bridge`) | `petunia_project::standard` | salvar, fechar e reabrir devolve o mesmo terreno e as mesmas curvas |
+| Desenho: terreno com LOD e saia, água, estrada, defensas, **convés de ponte** (laje fechada + defensas) e fluxo/espuma no sombreador | `petunia_render::natural`, `petunia_render::frame`, `petunia_render_gl` | testes de malha (convés abaixo da estrada, faces de baixo não iluminadas como céu) e teste do editor que acha o convés no quadro entregue à janela |
+| Física: cada bloco de terreno vira malha sólida, então o leito do rio é chão andável; a água continua **meio** (empuxo, nado, correnteza) | `petunia_physics::scene` | bloco andável e bloco quebrado reportado e deixado de fora |
+
+**Ainda não existe:** decals de faixa (bloqueados: o `DR-12` ainda é `PROPOSTA`), erosão por **ruído** e carimbos de terreno, LOD em quadtree, tubo visível de bueiro e partículas na queda. O bueiro é **só dado**: dentro de um corte, o terreno é a estrutura. A evidência de janela é o teste de fumaça (`scripts/natural-smoke.sh`) no display virtual; nada foi visto na sessão real.
+
+## Interface e comandos (2026-10-28)
+
+| Onde | O que faz |
+|---|---|
+| Ferramenta **Terreno** (`T`) com o combo de modo (subir, descer, suavizar, nivelar, erosão), raio e força | `terrain.create` na primeira pincelada e `terrain.paint` a cada pincelada: **um** passo de desfazer por pincelada |
+| Ferramenta **Rio** (`Y`) e **Estrada** (`U`) | `path.create` ao confirmar com Enter; `path.set` muda spline, largura, acostamento, material e defensas |
+| Botão **Pontes e bueiros** | `road.detect_structures` compara a estrada selecionada com o terreno e cria as linhas `Bridge` |
+| Consultas | `terrain.sample` (altura num ponto) e `path.report` (pontos, comprimento e descida do rio) |
 
 ## Peça comum: curva + perfil + efeito no terreno
 
@@ -35,10 +65,10 @@ Escolhe um **bioma** com poucos controles (como no GameGuru MAX, `WEB`), esculpe
 |---|---|
 | Dados | Mapa de altura em **blocos (chunks)**; camadas de material com índice por célula |
 | Nível de detalhe | Blocos em quadtree com costura (sem buracos entre níveis) |
-| Pincéis | Subir, descer, suavizar, aplainar, ruído, erosão simples, **carimbos** |
+| Pincéis | **Existem** subir, descer, suavizar, aplainar e erosão simples; **faltam** ruído e **carimbos** |
 | Geração | Ruído fractal + controles de bioma (relevo, umidade, altitude) |
-| Colisão | Collider de **heightfield** para a física |
-| Desfazer | Uma pincelada = um passo; guarda só a diferença dos blocos tocados |
+| Colisão | Cada bloco vira **malha sólida** (TriMesh) na física; a água é **meio** (empuxo, nado, correnteza), não parede |
+| Desfazer | **Feito:** uma pincelada = um passo, pelo comando `terrain.paint` |
 | Teclado | Pincel "passo": subir/descer por valor numérico, sem arrastar o mouse |
 
 ## Rios
@@ -87,7 +117,7 @@ A estrada é um **grafo**: nós (pontos de ligação) e arestas (trechos de spli
 | **Cruzamento (3+ trechos)** | Ordenar por ângulo, calcular cantos pela meia largura, **preencher o polígono** (triangulação), arredondar cantos com raio |
 | Detecção de cruzamento | Pesquisa acadêmica descreve o problema (sobreposição e cintilação de texturas) e métodos com Bézier e SAT (`WEB`, DiVA 2022). Alternativa mais simples: dividir as splines no ponto de cruzamento e criar um nó |
 | Terreno | Aplainar ao longo do eixo; **aterro/corte** com falloff |
-| Pontes e bueiros | Se a diferença de altura passa de um limite: segmento de ponte ou bueiro |
+| Pontes e bueiros | Se a diferença de altura passa de um limite: segmento de **ponte** (convés e defensas desenhados) ou de **bueiro/corte** (só dado, o terreno é a estrutura) |
 | Marcações | **Decals** em faixa ao longo da curva (não entram na malha da estrada) |
 | Navegação | A rede vira um **grafo de navegação** para IA e veículos |
 | "Interligadas" | O Project Doctor avisa: pontas soltas e **ilhas desconectadas** |

@@ -19,12 +19,33 @@ use petunia_math::Vec3;
 mod field;
 mod generate;
 mod path;
+mod path_network;
+mod road_crossings;
 mod simplify;
+mod terrain_along_path;
+mod water_features;
 
 pub use field::{ChunkMesh, Sculpture, Update};
 pub use generate::{GenerateParams, generate_cave};
 pub use path::tunnel_strokes;
+pub use path_network::{
+    MAX_PATH_VERTICES, MAX_PROFILE_POINTS, PathMesh, PathMeshError, PathStroke, PathVertex,
+    ProfilePoint, RiverDescentReport, TerrainBrushAlongPath, lower_river_bed, path_brush_strokes,
+    river_bed_profile, river_profile, road_profile, sweep_profile, validate_river_descent,
+};
+pub use road_crossings::{
+    MINIMUM_CROSSING_ANGLE_DEGREES, RoadJunction, SplineIntersection, build_junction_polygon,
+    create_road_junction, crossing_angle_is_too_sharp, find_spline_intersection, split_spline_at,
+};
 pub use simplify::consolidate;
+pub use terrain_along_path::{
+    RoadStructure, RoadStructureKind, carve_along_spline, carve_river_channel,
+    detect_road_structures, embank_along_spline, flatten_along_spline, sample_along_spline,
+};
+pub use water_features::{
+    LakePolygon, MAX_LAKE_POINTS, find_confluences, generate_lake_mesh, generate_waterfall_mesh,
+    water_volume_for_spline,
+};
 
 /// A volume keeps at most this many strokes.
 pub const MAX_STROKES: usize = 4096;
