@@ -90,7 +90,7 @@ Ordem sugerida: **S0, S1, S2, S3, S4** → **S5, S9** → **S6, S7** → **S8** 
 ### Fase 5 — Mundo natural  *(Prova 2, parte 1)*
 **Entrega:** terreno, rios, estradas, vegetação, clima, decals, billboards 3D e pós leve.
 
-> **Adiantado no branch `feat/mundo-natural-rios-estradas` (2026-10-28):** terreno com pincéis (inclusive erosão, ruído, carimbos com forma nomeada e o passo por teclado, sem arrastar) e blocos sólidos na física, rios com escavação e espuma de margem, estradas em rede com cruzamentos e pontes, tudo com comandos e barra no editor. Falta a vegetação, o clima e os decals. Ver [estado da implementação](03-estado-da-implementacao.md) e [DR-33](../06-decisoes/registro-de-decisoes.md).
+> **Adiantado no branch `feat/mundo-natural-rios-estradas` (2026-10-28):** terreno com pincéis (inclusive erosão, ruído, carimbos com forma nomeada e giro próprio e o passo por teclado, sem arrastar) e blocos sólidos na física, rios com escavação e espuma de margem, estradas em rede com cruzamentos e pontes, tudo com comandos e barra no editor. Falta a vegetação, o clima e os decals. Ver [estado da implementação](03-estado-da-implementacao.md) e [DR-33](../06-decisoes/registro-de-decisoes.md).
 
 - Terreno (esculpir, pintar, blocos, colisão).
 - Rios (escavação, fluxo, espuma de margem); estradas em rede (cruzamentos, pontes).

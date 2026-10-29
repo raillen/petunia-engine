@@ -64,6 +64,29 @@ impl StampShape {
             Self::Ridge => ridge(offset_x, offset_z),
         }
     }
+
+    /// The same height, with the shape turned by `rotation_degrees` around the vertical axis.
+    ///
+    /// The shape does not change: the offset is turned the other way before it is evaluated. So a
+    /// ridge turned by 90° runs along z instead of x, and everything else still holds — the edge
+    /// stays at exactly `0` and `strength` is still how many meters the shape moves the ground.
+    /// A non-finite angle is ignored, which keeps the brush from writing an invalid height.
+    pub fn height_at_rotated(self, offset_x: f32, offset_z: f32, rotation_degrees: f32) -> f32 {
+        if !rotation_degrees.is_finite() {
+            return 0.0;
+        }
+        let angle = rotation_degrees
+            .to_radians()
+            .rem_euclid(std::f32::consts::TAU);
+        if angle == 0.0 {
+            return self.height_at(offset_x, offset_z);
+        }
+        let (sine, cosine) = angle.sin_cos();
+        self.height_at(
+            offset_x * cosine + offset_z * sine,
+            offset_z * cosine - offset_x * sine,
+        )
+    }
 }
 
 /// Raises the ground in the middle and comes back to zero at the edge.
@@ -202,6 +225,48 @@ mod tests {
         assert!((shape.height_at(0.0, 0.0) - 1.0).abs() < 1.0e-6);
         assert!(shape.height_at(0.5, 0.0) > 0.5, "the crest runs along x");
         assert!(shape.height_at(0.0, 0.6) < 0.05, "the crest is narrow in z");
+    }
+
+    #[test]
+    fn turning_a_ridge_by_ninety_degrees_swaps_the_axes() {
+        let shape = StampShape::Ridge;
+        assert!(
+            shape.height_at_rotated(0.5, 0.0, 0.0) > 0.5,
+            "no turn: along x"
+        );
+        assert!(
+            shape.height_at_rotated(0.0, 0.6, 0.0) < 0.05,
+            "no turn: narrow in z"
+        );
+        assert!(
+            shape.height_at_rotated(0.6, 0.0, 90.0) < 0.05,
+            "turned: narrow in x"
+        );
+        assert!(
+            shape.height_at_rotated(0.0, 0.5, 90.0) > 0.5,
+            "turned: along z"
+        );
+    }
+
+    #[test]
+    fn a_full_turn_and_a_missing_angle_give_the_same_height() {
+        for shape in StampShape::ALL {
+            for (offset_x, offset_z) in [(0.0, 0.0), (0.3, -0.4), (-0.75, 0.2)] {
+                let straight = shape.height_at(offset_x, offset_z);
+                assert!(
+                    (shape.height_at_rotated(offset_x, offset_z, 0.0) - straight).abs() < 1.0e-6
+                );
+                assert!(
+                    (shape.height_at_rotated(offset_x, offset_z, 360.0) - straight).abs() < 1.0e-5
+                );
+                assert!(
+                    (shape.height_at_rotated(offset_x, offset_z, -360.0) - straight).abs() < 1.0e-5
+                );
+            }
+            // A hostile angle never writes a height.
+            assert_eq!(shape.height_at_rotated(0.2, 0.2, f32::NAN), 0.0);
+            assert_eq!(shape.height_at_rotated(0.2, 0.2, f32::INFINITY), 0.0);
+        }
     }
 
     #[test]

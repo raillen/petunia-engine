@@ -168,6 +168,7 @@ impl EditorSession {
                 optional_number(request, "radius"),
                 optional_number(request, "strength"),
                 request.get("stamp").and_then(Json::as_str),
+                optional_number(request, "rotation"),
             ),
             "terrain.begin" => self.terrain_begin(pointer(request)?),
             "terrain.drag" => self.terrain_drag(pointer(request)?),

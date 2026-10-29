@@ -373,18 +373,22 @@ impl HeightChunk {
     ///
     /// `strength` is how many meters the shape reaches at its strongest point, and every shape
     /// returns to zero at the edge of the disc, so a stamp never leaves a step for the next one.
+    /// `rotation_degrees` turns the shape around the vertical axis, which is how a ridge faces a
+    /// river instead of always running along x.
     pub fn stamp_region(
         &mut self,
         world_position: Vec3,
         radius: f32,
         strength: f32,
         shape: StampShape,
+        rotation_degrees: f32,
     ) {
         if !world_position.is_finite()
             || !radius.is_finite()
             || radius <= 0.0
             || !strength.is_finite()
             || strength <= 0.0
+            || !rotation_degrees.is_finite()
         {
             return;
         }
@@ -401,7 +405,7 @@ impl HeightChunk {
                 // The shape works in units of the radius, so the same stamp fits any brush size.
                 let offset_x = (x as f32 - center_x) * self.cell_size / radius;
                 let offset_z = (z as f32 - center_z) * self.cell_size / radius;
-                let weight = shape.height_at(offset_x, offset_z);
+                let weight = shape.height_at_rotated(offset_x, offset_z, rotation_degrees);
                 if weight == 0.0 {
                     continue;
                 }
@@ -717,7 +721,7 @@ mod tests {
     fn a_crater_stamp_lowers_the_middle_and_banks_the_rim() {
         let mut chunk = HeightChunk::new([0, 0], 16, 1.0);
         let flat = chunk.heights.clone();
-        chunk.stamp_region(Vec3::new(8.0, 0.0, 8.0), 6.0, 2.0, StampShape::Crater);
+        chunk.stamp_region(Vec3::new(8.0, 0.0, 8.0), 6.0, 2.0, StampShape::Crater, 0.0);
         assert!(
             chunk.get(8, 8) < -1.5,
             "the middle is a bowl: {}",
@@ -734,7 +738,7 @@ mod tests {
     #[test]
     fn a_mound_stamp_never_lowers_the_ground() {
         let mut chunk = HeightChunk::new([0, 0], 16, 1.0);
-        chunk.stamp_region(Vec3::new(8.0, 0.0, 8.0), 5.0, 1.5, StampShape::Mound);
+        chunk.stamp_region(Vec3::new(8.0, 0.0, 8.0), 5.0, 1.5, StampShape::Mound, 0.0);
         assert!((chunk.get(8, 8) - 1.5).abs() < 1.0e-3);
         assert!(chunk.heights.iter().all(|height| *height >= 0.0));
     }
@@ -744,9 +748,24 @@ mod tests {
         let mut first = HeightChunk::new([0, 0], 16, 1.0);
         let mut second = HeightChunk::new([0, 0], 16, 1.0);
         for chunk in [&mut first, &mut second] {
-            chunk.stamp_region(Vec3::new(8.0, 0.0, 8.0), 6.0, 1.0, StampShape::Ridge);
+            chunk.stamp_region(Vec3::new(8.0, 0.0, 8.0), 6.0, 1.0, StampShape::Ridge, 0.0);
         }
         assert_eq!(first.heights, second.heights);
+    }
+
+    #[test]
+    fn a_turned_ridge_runs_across_the_other_axis() {
+        let mut straight = HeightChunk::new([0, 0], 16, 1.0);
+        let mut turned = HeightChunk::new([0, 0], 16, 1.0);
+        straight.stamp_region(Vec3::new(8.0, 0.0, 8.0), 6.0, 1.0, StampShape::Ridge, 0.0);
+        turned.stamp_region(Vec3::new(8.0, 0.0, 8.0), 6.0, 1.0, StampShape::Ridge, 90.0);
+        // Along x the crest of the turned stamp is gone; along z it is now there.
+        assert!(straight.get(12, 8) > 0.5, "straight: raised along x");
+        assert!(turned.get(12, 8) < 0.05, "turned: flat along x");
+        assert!(turned.get(8, 12) > 0.5, "turned: raised along z");
+        assert!(straight.get(8, 12) < 0.05, "straight: flat along z");
+        // The peak and the volume survive the turn: it orients the shape, it does not resize it.
+        assert!((straight.get(8, 8) - turned.get(8, 8)).abs() < 1.0e-6);
     }
 
     #[test]
@@ -754,10 +773,29 @@ mod tests {
         let mut chunk = HeightChunk::new([0, 0], 8, 1.0);
         chunk.set(4, 4, 5.0);
         let flat = chunk.heights.clone();
-        chunk.stamp_region(Vec3::new(4.0, 0.0, 4.0), 0.0, 1.0, StampShape::Crater);
-        chunk.stamp_region(Vec3::new(f32::NAN, 0.0, 4.0), 2.0, 1.0, StampShape::Crater);
-        chunk.stamp_region(Vec3::new(4.0, 0.0, 4.0), 2.0, f32::NAN, StampShape::Crater);
-        chunk.stamp_region(Vec3::new(4.0, 0.0, 4.0), 2.0, -3.0, StampShape::Crater);
+        chunk.stamp_region(Vec3::new(4.0, 0.0, 4.0), 0.0, 1.0, StampShape::Crater, 0.0);
+        chunk.stamp_region(
+            Vec3::new(f32::NAN, 0.0, 4.0),
+            2.0,
+            1.0,
+            StampShape::Crater,
+            0.0,
+        );
+        chunk.stamp_region(
+            Vec3::new(4.0, 0.0, 4.0),
+            2.0,
+            f32::NAN,
+            StampShape::Crater,
+            0.0,
+        );
+        chunk.stamp_region(Vec3::new(4.0, 0.0, 4.0), 2.0, -3.0, StampShape::Crater, 0.0);
+        chunk.stamp_region(
+            Vec3::new(4.0, 0.0, 4.0),
+            2.0,
+            1.0,
+            StampShape::Crater,
+            f32::NAN,
+        );
         assert_eq!(chunk.heights, flat);
     }
 

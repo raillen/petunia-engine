@@ -17,7 +17,7 @@ Branch `feat/mundo-natural-rios-estradas`; decisão no `DR-33`.
 | Spline Bézier, amostragem **por comprimento de arco**, quadros com parâmetro, largura/profundidade/extra por ponto | `petunia_math::spline` | testes de espaçamento, ortogonalidade dos quadros, curva fechada sem costura duplicada e entrada hostil |
 | Perfis normalizados, varredura com orçamento de vértices, fluxo e máscara de margem nos vértices | `petunia_sculpt::path_network` | malha gerada, largura por ponto, recusa de perfil vazio/grande |
 | Mapa de altura em blocos, pincel com falloff, aplainamento com patamar, **erosão**, **ruído**, **carimbos**, blocos tocados por um carimbo | `petunia_world::heightfield` | centro abaixo da borda, alvo exato do aplainamento, borda de bloco contínua, erosão leva material do pico ao pé sem criar nem sumir com ele, ruído acrescenta detalhe sem mudar o volume, carimbo cava a cratera e levanta a borda |
-| Carimbos de terreno: formas nomeadas (`crater`, `mound`, `plateau`, `ridge`) como função fechada do afastamento dentro do disco | `petunia_world::stamp` | todas as formas dão zero na borda (dois carimbos vizinhos não deixam degrau), cratera afunda o meio e levanta a borda, monte nunca afunda, platô é plano até a ombreira, crista é longa em x e estreita em z |
+| Carimbos de terreno: formas nomeadas (`crater`, `mound`, `plateau`, `ridge`) como função fechada do afastamento dentro do disco, com **giro** (`rotation`, em graus) que orienta a silhueta | `petunia_world::stamp` | todas as formas dão zero na borda (dois carimbos vizinhos não deixam degrau), cratera afunda o meio e levanta a borda, monte nunca afunda, platô é plano até a ombreira, crista é longa em x e estreita em z e **troca de eixo ao girar 90°**, sem mudar a altura do pico |
 | Ruído de valor e fractal determinístico (retículo de 1,5 m, 3 oitavas, sem biblioteca) | `petunia_math::noise` | mesma coordenada dá o mesmo valor, intervalo −1..1, continuidade entre vizinhos, coordenadas hostis achatadas |
 | Escavação, aplainamento e aterro ao longo de spline; escavação de rio por largura/profundidade do ponto | `petunia_sculpt::terrain_along_path` | caminho cruza blocos; profundidade cresce ponto a ponto; argumentos hostis ignorados |
 | Descida do rio (`RiverDescentReport` + `lower_river_bed`) | `petunia_sculpt::path_network` | rio que sobe é reprovado e o leito é baixado |
@@ -36,7 +36,7 @@ Branch `feat/mundo-natural-rios-estradas`; decisão no `DR-33`.
 | Onde | O que faz |
 |---|---|
 | Ferramenta **Terreno** (`T`) com o combo de modo (subir, descer, suavizar, nivelar, ruído, erosão, carimbo), raio e força | `terrain.create` na primeira pincelada e `terrain.paint` a cada pincelada: **um** passo de desfazer por pincelada |
-| Combo **Forma** (cratera, monte, platô, crista), que só aparece no modo carimbo | `terrain.mode` com `stamp`: a silhueta que o próximo carimbo grava; o modo e a forma ficam guardados entre pinceladas |
+| Combo **Forma** (cratera, monte, platô, crista) e campo **Girar**, que só aparecem no modo carimbo | `terrain.mode` com `stamp` e `rotation`: a silhueta e o ângulo que o próximo carimbo grava (15° por passo, `Ctrl` para 1°); o modo, a forma e o giro ficam guardados entre pinceladas |
 | **Passo por teclado** (barra de espaços com a ferramenta de terreno) | `terrain.step`: um carimbo do modo atual no ponteiro, **sem arrastar**; `times` repete no mesmo ponto e tudo continua sendo **um** `terrain.paint` (a rota de acessibilidade, `docs/04-acessibilidade/01-editor.md`) |
 | Ferramenta **Rio** (`Y`) e **Estrada** (`U`) | `path.create` ao confirmar com Enter; `path.set` muda spline, largura, acostamento, material e defensas |
 | Botão **Pontes e bueiros** | `road.detect_structures` compara a estrada selecionada com o terreno e cria as linhas `Bridge` |
@@ -69,7 +69,7 @@ Escolhe um **bioma** com poucos controles (como no GameGuru MAX, `WEB`), esculpe
 |---|---|
 | Dados | Mapa de altura em **blocos (chunks)**; camadas de material com índice por célula |
 | Nível de detalhe | Blocos em quadtree com costura (sem buracos entre níveis) |
-| Pincéis | **Existem** subir, descer, suavizar, aplainar, ruído, erosão simples e os **carimbos** (cratera, monte, platô e crista) |
+| Pincéis | **Existem** subir, descer, suavizar, aplainar, ruído, erosão simples e os **carimbos** (cratera, monte, platô e crista), que podem ser **girados** antes de carimbar |
 | Geração | Ruído fractal existe em `petunia_math::noise` (usado pelo pincel); faltam os controles de bioma (relevo, umidade, altitude) |
 | Colisão | Cada bloco vira **malha sólida** (TriMesh) na física; a água é **meio** (empuxo, nado, correnteza), não parede |
 | Desfazer | **Feito:** uma pincelada = um passo, pelo comando `terrain.paint` |

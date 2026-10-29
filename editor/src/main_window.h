@@ -162,8 +162,10 @@ private:
     QToolBar* sculptBar_ = nullptr;
     QToolBar* naturalBar_ = nullptr;
     QComboBox* naturalMode_ = nullptr;
-    // Which shape a "Carimbo" stroke stamps. Only shown while that mode is selected.
+    // Which shape a "Carimbo" stroke stamps and how far it is turned. Only shown while that mode
+    // is selected.
     QComboBox* naturalStampBox_ = nullptr;
+    QDoubleSpinBox* naturalRotationBox_ = nullptr;
     QDoubleSpinBox* naturalRadiusBox_ = nullptr;
     QDoubleSpinBox* naturalStrengthBox_ = nullptr;
     QDoubleSpinBox* naturalWidthBox_ = nullptr;

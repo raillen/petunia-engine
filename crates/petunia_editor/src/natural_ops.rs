@@ -219,7 +219,7 @@ fn terrain_paint_spec() -> CommandSpec {
         summary: "Aplica carimbos de pincel no terreno, criando blocos quando preciso.".to_string(),
         params: vec![
             ParamSpec::required("terrain", ParamKind::Entity, "Id do terreno."),
-            ParamSpec::required("stamps", ParamKind::Any, "Lista de carimbos {center, radius, strength, mode (raise, lower, smooth, flatten, noise, erode, stamp), target_height?, stamp?}."),
+            ParamSpec::required("stamps", ParamKind::Any, "Lista de carimbos {center, radius, strength, mode (raise, lower, smooth, flatten, noise, erode, stamp), target_height?, stamp?, rotation?}."),
             ParamSpec::optional("falloff", ParamKind::Float, "Suavidade da borda (0 a 1)."),
         ],
         returns: Some(ParamKind::Int),
@@ -259,6 +259,9 @@ struct TerrainStamp {
     target_height: Option<f32>,
     #[serde(default)]
     stamp: Option<StampShape>,
+    /// Turn of a stamp around the vertical axis, in degrees. Ignored by the radial brushes.
+    #[serde(default)]
+    rotation: Option<f32>,
 }
 
 #[derive(Deserialize)]
@@ -367,6 +370,12 @@ fn terrain_paint(world: &mut World, payload: &Json) -> Result<Outcome, CommandEr
                     .to_string(),
             });
         }
+        if stamp.rotation.is_some_and(|value| !value.is_finite()) {
+            return Err(CommandError::InvalidPayload {
+                command: "terrain.paint".to_string(),
+                message: "`rotation` precisa ser finito".to_string(),
+            });
+        }
         if matches!(stamp.mode, TerrainMode::Flatten)
             && stamp.target_height.is_some_and(|value| !value.is_finite())
         {
@@ -414,6 +423,7 @@ fn terrain_paint(world: &mut World, payload: &Json) -> Result<Outcome, CommandEr
                     radius,
                     strength,
                     stamp.stamp.unwrap_or(StampShape::Mound),
+                    stamp.rotation.unwrap_or(0.0),
                 ),
             }
         }

@@ -791,6 +791,71 @@ mod tests {
     }
 
     #[test]
+    fn a_stamp_turned_by_ninety_degrees_runs_the_other_way() {
+        let root = scratch_dir("terrain_stamp_turn");
+        let mut session = EditorSession::new().expect("session");
+        call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "Giro" }),
+        );
+        call(&mut session, json!({ "op": "tool.set", "tool": "terrain" }));
+        // A crest along x, the way the shape comes out of the box.
+        let options = call(
+            &mut session,
+            json!({ "op": "terrain.mode", "mode": "stamp", "stamp": "ridge", "rotation": 0.0, "radius": 8.0, "strength": 2.0 }),
+        );
+        assert_eq!(options["result"]["rotation"], 0.0, "{options}");
+        let straight = call(
+            &mut session,
+            json!({ "op": "terrain.step", "x": 720.0, "y": 560.0, "width": 1440.0, "height": 900.0 }),
+        );
+        assert_eq!(straight["ok"], true, "{straight}");
+        let terrain = straight["result"]["terrain"].as_u64().expect("terrain");
+        let x = straight["result"]["point"]["x"].as_f64().expect("x");
+        let z = straight["result"]["point"]["z"].as_f64().expect("z");
+        let height_at = |session: &mut EditorSession, x: f64, z: f64| -> f64 {
+            let sampled = call(
+                session,
+                json!({ "op": "query.run", "query": "terrain.sample", "payload": { "terrain": terrain, "x": x, "z": z } }),
+            );
+            sampled["result"]["height"].as_f64().unwrap_or(f64::NAN)
+        };
+        assert!(
+            height_at(&mut session, x + 5.0, z) > 0.5,
+            "the straight crest runs along x"
+        );
+        assert!(
+            height_at(&mut session, x, z + 5.0) < 0.05,
+            "the straight crest is narrow along z"
+        );
+
+        // Same shape, a quarter turn: the crest now runs along z.
+        assert_eq!(call(&mut session, json!({ "op": "edit.undo" }))["ok"], true);
+        let turned = call(
+            &mut session,
+            json!({ "op": "terrain.mode", "rotation": 90.0 }),
+        );
+        assert_eq!(turned["result"]["rotation"], 90.0, "{turned}");
+        let stamped = call(
+            &mut session,
+            json!({ "op": "terrain.step", "x": 720.0, "y": 560.0, "width": 1440.0, "height": 900.0 }),
+        );
+        assert_eq!(stamped["result"]["rotation"], 90.0, "{stamped}");
+        assert!(
+            height_at(&mut session, x, z + 5.0) > 0.5,
+            "the turned crest runs along z: {stamped}"
+        );
+        assert!(
+            height_at(&mut session, x + 5.0, z) < 0.05,
+            "the turned crest is narrow along x: {stamped}"
+        );
+        // The turn does not resize the shape: the peak is the same two meters.
+        let peak = height_at(&mut session, x, z);
+        assert!((peak - 2.0).abs() < 0.1, "the peak is {peak} m, not 2 m");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn a_road_above_the_terrain_gets_a_bridge_span_that_undo_removes() {
         let root = scratch_dir("bridge");
         let mut session = EditorSession::new().expect("session");

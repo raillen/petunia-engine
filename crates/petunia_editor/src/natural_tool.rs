@@ -82,6 +82,8 @@ pub(crate) struct NaturalState {
     pub mode: TerrainPaintMode,
     /// Which shape a `stamp` stroke uses. Kept across mode changes, like radius and strength.
     pub stamp: StampShape,
+    /// Turn of the stamp shape, in degrees counter-clockwise in the world x-z plane. Stamps only.
+    pub rotation: f32,
     pub radius: f32,
     pub strength: f32,
     pub path_kind: Option<NaturalPathKind>,
@@ -100,6 +102,7 @@ impl Default for NaturalState {
             terrain: None,
             mode: TerrainPaintMode::Raise,
             stamp: StampShape::Crater,
+            rotation: 0.0,
             radius: 4.0,
             strength: 0.5,
             path_kind: None,
@@ -216,6 +219,7 @@ impl EditorSession {
         radius: Option<f32>,
         strength: Option<f32>,
         stamp: Option<&str>,
+        rotation: Option<f32>,
     ) -> Result<Json, Failure> {
         if let Some(name) = mode {
             self.natural.mode = TerrainPaintMode::parse(name).ok_or_else(|| {
@@ -243,6 +247,15 @@ impl EditorSession {
             }
             self.natural.strength = strength.clamp(0.0, 32.0);
         }
+        if let Some(rotation) = rotation {
+            if !rotation.is_finite() {
+                return Err(Failure::bad_request(
+                    "o giro do carimbo precisa ser um número",
+                ));
+            }
+            // One full turn is the same as none, so the field never grows without a reason.
+            self.natural.rotation = rotation.rem_euclid(360.0);
+        }
         Ok(self.natural_json())
     }
 
@@ -263,6 +276,7 @@ impl EditorSession {
             && let Some(object) = stamp.as_object_mut()
         {
             object.insert("stamp".to_string(), json!(self.natural.stamp.name()));
+            object.insert("rotation".to_string(), json!(self.natural.rotation));
         }
         self.natural.stamps.push(stamp);
         self.natural.last_stamp = Some(point);
@@ -366,6 +380,7 @@ impl EditorSession {
             object.insert("strength".to_string(), json!(self.natural.strength));
             if self.natural.mode == TerrainPaintMode::Stamp {
                 object.insert("stamp".to_string(), json!(self.natural.stamp.name()));
+                object.insert("rotation".to_string(), json!(self.natural.rotation));
             }
             object.insert(
                 "point".to_string(),
@@ -529,6 +544,7 @@ impl EditorSession {
             "terrain": selected_terrain.or(self.natural.terrain),
             "mode": self.natural.mode.name(),
             "stamp": self.natural.stamp.name(),
+            "rotation": self.natural.rotation,
             "radius": self.natural.radius,
             "strength": self.natural.strength,
             "path_kind": self.natural.path_kind.map(NaturalPathKind::name),

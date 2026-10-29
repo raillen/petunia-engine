@@ -48,7 +48,7 @@ São **24 decisões**. Estados possíveis:
 | **DR-31** | Prefabs embutidos e o nó Esperar | **ACEITA** (2026-10-26, "prossiga com a implementação"; N4 implementado) | Porta, Item coletável e Ponto de nascimento como moldes de linhas + grafos; `Esperar` compila para uma função por espera |
 | **DR-24** | Workspaces e prioridades antes da API | **EM PARTE ACEITA** (andares, cavernas B) | Mapa (com Jogar), Pintura sem UV, Animação, Efeitos por nós; antes da API: andares, cavernas, terreno, prefabs, Jogar ([análise](../02-arquitetura/14-workspaces-e-prioridades.md)) |
 | **DR-33** | Terreno, rios e estradas | **FEITA NO BRANCH** (2026-10-28, `feat/mundo-natural-rios-estradas`) | Spline Bézier por comprimento de arco, perfis varridos, escavação/aplainamento/aterro, descida do rio, cruzamentos, lagos, quedas, confluências e grafo de navegação; depois da aceitação: comandos e consultas, barra no editor, gravação na cena, convés de ponte, leito sólido na física, pincel de erosão, pincel de ruído, pincel "passo" por teclado e carimbos de terreno. **Faltam** decals (`DR-12` é proposta), LOD em quadtree, tubo de bueiro e partículas ([arquitetura](../02-arquitetura/04-terreno-rios-estradas.md)) |
-| **DR-34** | Giro do carimbo de terreno | PROPOSTA | Ângulo por carimbo (`rotation`, em graus) aplicado ao deslocamento dentro do disco, campo **Girar** só no modo Carimbo e o mesmo estado no passo por teclado |
+| **DR-34** | Giro do carimbo de terreno | **ACEITA** (2026-10-29, opção 1; 15° por passo, Ctrl para 1°) | Ângulo por carimbo (`rotation`, em graus) aplicado ao deslocamento dentro do disco, campo **Girar** só no modo Carimbo (15° por passo, Ctrl = 1°) e o mesmo estado no passo por teclado |
 
 ---
 
@@ -676,13 +676,13 @@ Se uma biblioteca for necessária mais tarde, passa no checklist de admissão an
 
 **Continua fora:** decals (bloqueados pelo `DR-12`, que é proposta), LOD em quadtree, tubo visível de bueiro e partículas na queda.
 
-**Não verificado:** a janela na sessão real do usuário; a evidência de janela é o teste de fumaça no display virtual (terreno, alturas pintadas, erosão, ruído, **passo por teclado e desfazer**, **carimbo de cratera e de monte**, rio, estrada e **ponte**), nenhuma imagem foi tirada na sessão real. O convés da ponte é provado pelo teste de malha e pelo quadro entregue à janela, não pela captura do teste de fumaça, cuja câmera fica atrás do barranco levantado. O passo por teclado **não** foi testado com leitor de tela: o texto do rodapé existe, não se sabe se é anunciado. Os carimbos **não** giram (a crista corre sempre ao longo do eixo x do mundo; ver `DR-34`) e a forma **platô** só tem teste no domínio, não na janela.
+**Não verificado:** a janela na sessão real do usuário; a evidência de janela é o teste de fumaça no display virtual (terreno, alturas pintadas, erosão, ruído, **passo por teclado e desfazer**, **carimbo de cratera e de monte**, rio, estrada e **ponte**), nenhuma imagem foi tirada na sessão real. O convés da ponte é provado pelo teste de malha e pelo quadro entregue à janela, não pela captura do teste de fumaça, cuja câmera fica atrás do barranco levantado. O passo por teclado **não** foi testado com leitor de tela: o texto do rodapé existe, não se sabe se é anunciado. Os carimbos **não** giram sozinhos: o ângulo é digitado e vale **só** para carimbos (o `DR-34` entregou o campo **Girar** com 15° por passo e 1° com `Ctrl`); a previsualização da silhueta antes do clique não existe e a forma **platô** só tem teste no domínio, não na janela.
 
 **Reabrir se:** a integração com o editor precisar de outro formato de dados, ou se o custo de amostragem por comprimento de arco pesar em rios muito longos.
 
 ---
 
-## DR-34 — Giro do carimbo de terreno · PROPOSTA
+## DR-34 — Giro do carimbo de terreno · ACEITA (2026-10-29)
 
 **Pedido:** fechar o último limite declarado do carimbo do `DR-33`. Hoje a forma é sempre aplicada **alinhada ao mundo** — a crista corre ao longo do eixo x —, então não há como levantar uma crista perpendicular a um rio ou a uma estrada sem girar o terreno inteiro.
 
@@ -699,7 +699,15 @@ Se uma biblioteca for necessária mais tarde, passa no checklist de admissão an
 
 **Fora desta proposta:** espelhar a forma (a crista é simétrica; o espelho só faria diferença numa forma assimétrica futura) e pré-visualizar a silhueta no viewport antes do clique.
 
-**Para fechar:** aceitar a opção 1 e escolher o passo do campo. Depois disso o trabalho é o de sempre: `rotation` no registro do carimbo, teste no domínio (mesma forma girada 90° troca os eixos), teste de fluxo no editor e uma verificação no teste de fumaça.
+**Decisão (2026-10-29, "o giro do carimbo: ângulo por carimbo", "15°, com Ctrl para 1°"):** opção **1**, com o campo **Girar** a 15° por passo e 1° com `Ctrl` segurado. O giro vale **só** para carimbos; os pincéis radiais continuam sem ângulo, e o campo nem aparece neles.
+
+**Escolha:** opção 1 (ângulo por carimbo), passo de 15° e ajuste fino de 1° com `Ctrl`.
+**Motivo:** é o menor acréscimo que resolve o problema real (crista perpendicular a um rio ou a uma estrada, encosta virada para o vale), mantém "carimbo é dado, não gesto" e deixa o caminho sem ponteiro (o passo por teclado) com o mesmo resultado do caminho com mouse.
+**Reabrir se:** aparecer necessidade de espelhar a forma, de girar por eixo diferente do vertical, ou de orientar a silhueta pela direção de uma estrada ou de um rio (aí o giro passaria a ser derivado, não digitado).
+
+**Como ficou (LOCAL, verificado):** `StampShape::height_at_rotated` gira o deslocamento antes de avaliar a forma, então a borda continua zerando e a força continua em metros; `HeightChunk::stamp_region` recebe o ângulo e descarta um ângulo não finito. No comando, cada carimbo aceita `rotation` (padrão `0`, recusado se não for finito), então uma pincelada pode misturar ângulos. Na barra, o campo **Girar** aparece ao lado de **Forma**, só no modo Carimbo; `Ctrl`+seta dá 1° e a digitação é enviada ao soltar o campo ou apertar Enter. A frase do passo por teclado passa a dizer o ângulo — "Passo: Carimbo (Crista, 90°), raio 4,00 m…".
+
+**Verificação:** 2 testes novos em `petunia_world::stamp` (a crista vira 90° e troca os eixos; 0°/360° dão a mesma altura e um ângulo hostil não escreve nada), 1 no `heightfield` (a crista girada levanta ao longo de z e o pico não muda) e 1 de fluxo no `petunia_editor` (mesma forma, duas medidas, um desfazer entre elas). No teste de fumaça o mesmo carimbo de crista é aplicado reto e girado 90°: **16/16** (a medida ao longo de x cai e a ao longo de z cresce).
 
 ---
 
@@ -716,4 +724,4 @@ Reabrir se:  condição objetiva
 
 ## Próximo passo
 
-**Responder `DR-34`** (giro do carimbo, o último item declarado dos carimbos) e **`DR-11`, pergunta 1** (esta pasta é a retomada do `petunia-game-engine`?). A `DR-01` está decidida desde 2026-10-24.
+**Responder `DR-11`, pergunta 1** (esta pasta é a retomada do `petunia-game-engine`?), que destrava as outras. Dos itens declarados do `DR-33` ficam decals (bloqueado pelo `DR-12`, que é proposta), LOD em quadtree, tubo de bueiro e partículas na queda — cada um precisa de proposta antes do código.

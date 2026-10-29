@@ -3,11 +3,12 @@
 #
 # It drives the real window: paints the terrain with T, erodes part of it, roughens it with the noise
 # brush, applies one keyboard stamp (Space) and undoes it, stamps a crater and a mount with the
-# "Carimbo" mode, draws a river with Y and a road with U, lowers the ground under the road, asks for
-# the bridges and bueiros and saves. Then it checks the scene file for Terrain, raised TerrainChunk
-# heights, an erosion pass, a noise pass that moved material without losing it, a step that raised
-# the ground and an undo that gave it back, a crater that dug a bowl and banked the rim, a mount
-# that only rose, River, Road and Bridge.
+# "Carimbo" mode, stamps the same crest straight and turned by 90° (DR-34), draws a river with Y and
+# a road with U, lowers the ground under the road, asks for the bridges and bueiros and saves. Then
+# it checks the scene file for Terrain, raised TerrainChunk heights, an erosion pass, a noise pass
+# that moved material without losing it, a step that raised the ground and an undo that gave it
+# back, a crater that dug a bowl and banked the rim, a mount that only rose, a crest that runs along
+# x when straight and along z when turned, River, Road and Bridge.
 # It never touches your desktop session or your editor settings.
 #
 # The script takes every picture itself and kills the editor at the end. It does not pass
@@ -168,6 +169,24 @@ xdotool mousemove 760 470 click 1;               sleep 1.5
 import -window root "$output.stamp-mound.png"
 save_scene "$workdir/after-stamp-mound.json"
 
+# The turn of the shape (DR-34). Same crest twice: once straight (along x) and, after an undo back
+# to the mount, once turned by 90° (along z). Comparing each one with the mount snapshot is what
+# tells the two apart without knowing the screen-to-world scale.
+xdotool mousemove 700 88 click 1;                sleep 0.5   # "Forma" combo
+xdotool key Home;                                sleep 0.3   # first entry: Cratera
+xdotool key Down Down Down;                      sleep 0.3   # fourth entry: Crista
+xdotool key Return;                              sleep 0.8
+xdotool mousemove 760 470 click 1;               sleep 1.5   # crest straight, 0°
+save_scene "$workdir/after-ridge-x.json"
+xdotool key ctrl+z;                              sleep 1.2   # back to the mount, nothing turned
+xdotool mousemove 812 88 click 1;                sleep 0.5   # "Girar" field
+xdotool key ctrl+a;                              sleep 0.2
+xdotool type --delay 80 90;                      sleep 0.3
+xdotool key Return;                              sleep 0.8
+xdotool mousemove 760 470 click 1;               sleep 1.5   # the same crest, a quarter turn
+import -window root "$output.stamp-turned.png"
+save_scene "$workdir/after-ridge-z.json"
+
 xdotool key y;                                   sleep 0.8   # river tool
 xdotool mousemove 700 560 click 1;               sleep 0.5
 xdotool mousemove 780 540 click 1;               sleep 0.5
@@ -208,12 +227,13 @@ import -window root "$output"                                # the final frame: 
 
 python3 - "$scene" "$workdir/before-erode.json" "$workdir/after-erode.json" "$workdir/after-noise.json" \
     "$workdir/after-step.json" "$workdir/after-step-undo.json" \
-    "$workdir/after-stamp-crater.json" "$workdir/after-stamp-mound.json" <<'PY'
+    "$workdir/after-stamp-crater.json" "$workdir/after-stamp-mound.json" \
+    "$workdir/after-ridge-x.json" "$workdir/after-ridge-z.json" <<'PY'
 import json
 import sys
 
 (scene_path, before_path, after_path, noise_path, step_path, undo_path, crater_path,
- mound_path) = sys.argv[1:9]
+ mound_path, ridge_x_path, ridge_z_path) = sys.argv[1:11]
 
 
 def rows(path):
@@ -279,6 +299,36 @@ def shape_change(first_path, second_path):
     return bool(common), lowered, raised, net, deepest
 
 
+def stamp_extent(base_path, after_path):
+    """How far along x and z a stamp moved the ground, in meters (cells that moved over 0.25 m)."""
+    base = chunks(rows(base_path))
+    after = chunks(rows(after_path))
+    common = sorted(base.keys() & after.keys())
+    min_x = min_z = None
+    max_x = max_z = None
+    cells = 0
+    for key in common:
+        column = after[key]
+        size = column.get("size", 64)
+        cell = column.get("cell_size", 1.0)
+        corner_x = column.get("chunk_x", 0) * size * cell
+        corner_z = column.get("chunk_z", 0) * size * cell
+        for index, (old_height, new_height) in enumerate(
+                zip(base[key].get("heights", []), column.get("heights", []))):
+            if abs(new_height - old_height) <= 0.25:
+                continue
+            x = corner_x + (index % size) * cell
+            z = corner_z + (index // size) * cell
+            cells += 1
+            min_x = x if min_x is None else min(min_x, x)
+            max_x = x if max_x is None else max(max_x, x)
+            min_z = z if min_z is None else min(min_z, z)
+            max_z = z if max_z is None else max(max_z, z)
+    if cells < 8:
+        return 0.0, 0.0
+    return max_x - min_x, max_z - min_z
+
+
 now = rows(scene_path)
 checks = []
 checks.append(("Terrain criado", any("Terrain" in row for row in now)))
@@ -304,6 +354,19 @@ checks.append(("carimbo de cratera levantou a borda", crater_shared and crater_r
 mound_shared, mound_lowered, mound_raised, mound_net, _ = shape_change(crater_path, mound_path)
 checks.append(("carimbo de monte subiu sem cavar", mound_shared and mound_raised and not mound_lowered and mound_net > 0.5))
 
+# A crest is long one way and narrow the other; the turn swaps which way. The margin is in meters,
+# not a ratio, because the narrow side still measures its own footprint.
+ridge_x_long, ridge_x_across = stamp_extent(mound_path, ridge_x_path)
+checks.append((
+    "carimbo de crista corre ao longo de x",
+    ridge_x_long - ridge_x_across > 1.5,
+))
+ridge_z_across, ridge_z_long = stamp_extent(mound_path, ridge_z_path)
+checks.append((
+    "carimbo de crista girado 90° corre ao longo de z",
+    ridge_z_long - ridge_z_across > 1.5,
+))
+
 checks.append(("Rio criado", any("River" in row for row in now)))
 checks.append(("Estrada criada", any("Road" in row for row in now)))
 bridges = [row["Bridge"] for row in now if "Bridge" in row]
@@ -318,4 +381,4 @@ for bridge in bridges:
 sys.exit(1 if failed else 0)
 PY
 
-echo "imagem final: $output (passos: $output.tool.png, $output.terrain.png, $output.step.png, $output.erode-mode.png, $output.noise-mode.png, $output.stamp-crater.png, $output.stamp-mound.png, $output.road.png, $output.structures.png, $output.detected.png)"
+echo "imagem final: $output (passos: $output.tool.png, $output.terrain.png, $output.step.png, $output.erode-mode.png, $output.noise-mode.png, $output.stamp-crater.png, $output.stamp-mound.png, $output.stamp-turned.png, $output.road.png, $output.structures.png, $output.detected.png)"

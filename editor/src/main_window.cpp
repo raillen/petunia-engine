@@ -16,6 +16,8 @@
 #include <QDockWidget>
 #include <QColorDialog>
 #include <QDialog>
+#include <QEvent>
+#include <QKeyEvent>
 #include <QFormLayout>
 #include <QFrame>
 #include <QSlider>
@@ -59,6 +61,34 @@
 
 // Two taps on G, R or S within this time enter free mode (Petunia3D default: 350 ms).
 static constexpr qint64 kDoubleTapMilliseconds = 350;
+
+namespace {
+
+// A spin box steps by its singleStep. The stamp angle uses 15° so a quarter turn is six presses, and
+// 1° while Ctrl is held so a bank can be aimed without typing a number (DR-34).
+class FineStepFilter : public QObject {
+public:
+    FineStepFilter(QDoubleSpinBox* box, double fine_step) : QObject(box), box_(box), fine_step_(fine_step) {}
+
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        if (watched == box_ && event->type() == QEvent::KeyPress) {
+            auto* key = static_cast<QKeyEvent*>(event);
+            const bool vertical = key->key() == Qt::Key_Up || key->key() == Qt::Key_Down;
+            if (vertical && key->modifiers().testFlag(Qt::ControlModifier)) {
+                box_->setValue(box_->value() + (key->key() == Qt::Key_Up ? fine_step_ : -fine_step_));
+                box_->selectAll();
+                return true;
+            }
+        }
+        return QObject::eventFilter(watched, event);
+    }
+
+private:
+    QDoubleSpinBox* box_;
+    double fine_step_;
+};
+
+} // namespace
 
 MainWindow::MainWindow() : bridge_(std::make_unique<EngineBridge>()) {
     setWindowTitle(QStringLiteral("Petunia Editor[*]"));
@@ -1224,6 +1254,24 @@ void MainWindow::buildNaturalBar() {
         perform(QStringLiteral("terrain.mode"), QJsonObject{{"stamp", naturalStampBox_->itemData(index).toString()}}, false);
     });
 
+    // The turn belongs to the shape, so it only shows next to it. 15° per step and 1° with Ctrl
+    // (`FineStepFilter`); keyboardTracking is off so a typed number is sent once, on Enter.
+    naturalStampItems_.append(naturalBar_->addWidget(new QLabel(QStringLiteral("Girar"))));
+    naturalTerrainItems_.append(naturalStampItems_.last());
+    naturalRotationBox_ = new QDoubleSpinBox;
+    naturalRotationBox_->setRange(0.0, 360.0);
+    naturalRotationBox_->setSingleStep(15.0);
+    naturalRotationBox_->setKeyboardTracking(false);
+    naturalRotationBox_->setSuffix(QStringLiteral(" °"));
+    naturalRotationBox_->setAccessibleName(QStringLiteral("Giro do carimbo de terreno"));
+    naturalRotationBox_->setToolTip(QStringLiteral("Ângulo da forma: 15° por passo, Ctrl para 1°"));
+    naturalRotationBox_->installEventFilter(new FineStepFilter(naturalRotationBox_, 1.0));
+    naturalStampItems_.append(naturalBar_->addWidget(naturalRotationBox_));
+    naturalTerrainItems_.append(naturalStampItems_.last());
+    connect(naturalRotationBox_, &QDoubleSpinBox::valueChanged, this, [this](double degrees) {
+        perform(QStringLiteral("terrain.mode"), QJsonObject{{"rotation", degrees}}, false);
+    });
+
     // The step brush (Space) says what it did. The mode label comes from this combo, so it is the
     // same word the creator sees in the bar, and the height confirms the result without looking.
     connect(viewport_, &ViewportWidget::terrainStepped, this, [this](const QJsonObject& result) {
@@ -1238,7 +1286,9 @@ void MainWindow::buildNaturalBar() {
         if (result.value(QStringLiteral("stamp")).isString()) {
             const int shape = naturalStampBox_->findData(result.value(QStringLiteral("stamp")).toString());
             if (shape >= 0) {
-                text += QStringLiteral(" (%1)").arg(naturalStampBox_->itemText(shape));
+                const QString angle =
+                    QLocale().toString(result.value(QStringLiteral("rotation")).toDouble(), 'f', 0);
+                text += QStringLiteral(" (%1, %2°)").arg(naturalStampBox_->itemText(shape)).arg(angle);
             }
         }
         text += QStringLiteral(", raio %1 m")
@@ -1327,9 +1377,13 @@ void MainWindow::syncNaturalBar(const QJsonObject& snapshot) {
     const QSignalBlocker d(naturalWidthBox_);
     const QSignalBlocker e(naturalDepthBox_);
     const QSignalBlocker g(naturalStampBox_);
+    const QSignalBlocker h(naturalRotationBox_);
     naturalMode_->setCurrentIndex(qMax(0, naturalMode_->findData(state.value(QStringLiteral("mode")).toString())));
     naturalStampBox_->setCurrentIndex(
         qMax(0, naturalStampBox_->findData(state.value(QStringLiteral("stamp")).toString())));
+    if (!naturalRotationBox_->hasFocus()) {
+        naturalRotationBox_->setValue(state.value(QStringLiteral("rotation")).toDouble(0.0));
+    }
     if (!naturalRadiusBox_->hasFocus()) {
         naturalRadiusBox_->setValue(state.value(QStringLiteral("radius")).toDouble(4.0));
     }
