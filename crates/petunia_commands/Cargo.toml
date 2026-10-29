@@ -7,6 +7,7 @@ publish.workspace = true
 description = "Validated commands and queries with undo/redo. Commands are data records plus registered functions."
 
 [dependencies]
+petunia_curve.workspace = true
 petunia_math.workspace = true
 petunia_schema.workspace = true
 petunia_terrain.workspace = true

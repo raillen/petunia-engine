@@ -30,6 +30,7 @@ rapier3d = { version = "=0.36.1", default-features = false, features = ["dim3", 
 
 petunia_math = { path = "crates/petunia_math" }
 petunia_terrain = { path = "crates/petunia_terrain" }
+petunia_curve = { path = "crates/petunia_curve" }
 petunia_world = { path = "crates/petunia_world" }
 petunia_schema = { path = "crates/petunia_schema" }
 petunia_commands = { path = "crates/petunia_commands" }

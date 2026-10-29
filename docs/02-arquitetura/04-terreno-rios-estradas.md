@@ -152,14 +152,25 @@ Medição 3D, snap à superfície, grade configurável por andar, camadas de edi
        └──────────►  Efeito no terreno (aplainar, escavar, margem)
 ```
 
-| Peça | Existe no Petunia3D? | Fonte (`LOCAL`) |
+| Peça | Existe no Petunia3D? | Onde está aqui |
 |---|---|---|
-| Spline Bézier cúbica, handles, tolerância, limite de pontos | Sim | `project/spline.rs` |
-| Quadros por ponto (para orientar o perfil) | Sim | `SplineFrame` |
-| Varredura de perfil com orçamento de vértices | Sim | `path_generator.rs`, `mesh/sweep.rs` |
-| Ponto preso ao triângulo de uma superfície | Sim | `surface_attachment.rs` |
+| Spline Bézier cúbica, handles, limite de pontos | Sim (`project/spline.rs`) | **Feito** em `petunia_curve::Spline` (handles absolutos, 2 a 256 pontos) |
+| Quadros por ponto (para orientar o perfil) | Sim (`SplineFrame`) | **Feito**: `Spline::frames`, transporte paralelo e distribuição por distância |
+| Varredura de perfil com orçamento de vértices | Sim (`path_generator.rs`, `mesh/sweep.rs`) | **Feito**: `petunia_curve::sweep` (até 512 anéis × 64 vértices) |
+| Ponto preso ao triângulo de uma superfície | Sim (`surface_attachment.rs`) | Não: `surface_follow` cobre o caso do objeto |
 | **Rede** (nós de ligação, cruzamentos) | **Não** | novo |
 | **Efeito no terreno** (aplainar, escavar) | **Não** | novo |
+
+### Curva + perfil + varredura (`petunia_curve`)
+
+| Peça | Contrato |
+|---|---|
+| **Curva** | `SplinePoint { position, handle_in, handle_out }` em **metros absolutos**; `Spline::new` aceita handles prontos e `Spline::through` deriva handles suaves dos vizinhos (forma Catmull-Rom); aberta ou fechada; 2 a 256 pontos, coordenadas finitas |
+| **Amostragem** | `evaluate(t)` e `tangent(t)` com `t` em 0..=1 preso ao intervalo (uniforme por segmento); `length()` por tabela de arco com 16 amostras por segmento |
+| **Quadros** | `frames(n)` põe `n` anéis a **distância igual**, com `normal` projetada do quadro anterior (transporte paralelo) e `binormal = tangent × normal`; curva vertical usa eixo de reserva; curva sem direção volta `CurveError::Degenerate` |
+| **Perfil** | `Profile` com 2 a 64 vértices em metros (`x` direita, `y` cima): `ribbon(width, thickness)`, `trough(width, depth)`, `tube(radius, sides)`; perfil fechado é normalizado para **anti-horário** (o tubo sempre face para fora) |
+| **Varredura** | `sweep(&spline, &profile, &SweepSettings { steps, cap_ends })` devolve `PolygonMesh`; perfil **aberto** face para **cima** (estrada, leito de rio), **fechado** para **fora** (tubo); tampas só em perfil fechado; 1 a 512 anéis |
+| **Comando** | `spline.sweep` grava a malha na coluna `geometry` do objeto e desfaz com **um** passo |
 
 ## Terreno
 

@@ -12,6 +12,7 @@ mod builtin;
 mod dispatcher;
 mod error;
 mod query;
+mod spline;
 mod terrain;
 
 pub use builtin::{builtin_query_specs, builtin_schema};

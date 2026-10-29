@@ -20,10 +20,22 @@ Este documento é a lista viva do que foi implementado e do que falta no sistema
 | Erosão | Térmica determinística e hidráulica por gotas determinísticas, com desfazer | Ajuste visual fino | 90% |
 | Rios | — (outro agent) | Spline, escavação, malha de água, fluxo, espuma, confluências, lagos, quedas | 0% |
 | Estradas | — (outro agent) | Grafo, perfis, cruzamentos, aterro/corte, pontes, decals, navegação | 0% |
-| Spline/sweep | — (outro agent) | Portar Bézier + varredura do Petunia3D | 0% |
+| Spline/sweep | `petunia_curve`: Bézier cúbica com handles absolutos, quadros por transporte paralelo, perfis (faixa, calha, tubo), varredura em malha e comando `spline.sweep` | Verificação visual pela janela (desenho do caminho) | 70% |
 | Água (render) | — (outro agent) | Flow map, Gerstner 4–8, refração, espuma | 0% |
 
 ## Implementado
+
+### 2026-10-29 — spline e varredura
+
+| Item | Evidência |
+|---|---|
+| **Crate `petunia_curve`** (domínio puro, sem GPU): `Spline` de Bézier cúbica com **handles absolutos**, `Spline::through` (handles derivados dos vizinhos, forma Catmull-Rom), aberta ou fechada, com limite de 256 pontos | **22 testes**: pontas iguais ao primeiro/último ponto e entrada fora do intervalo presa no intervalo, anel fechado, comprimento de 20 m numa reta, handles absolutos e canto sem handle, recusa de 0/1 ponto, de 257 pontos e de coordenada não finita |
+| **Quadros por transporte paralelo**: `normal` projetada do quadro anterior sobre o plano do novo tangente, com eixo de reserva quando a curva sobe na vertical; `frames(n)` distribui os anéis por **distância igual** (tabela de comprimento de arco) | 3 testes: ortonormalidade e espaçamento de 5 m em 5 anéis de 20 m, produto escalar entre `binormal` vizinhos > 0,8 numa curva em S (não capota), curva vertical ainda tem quadro; curva sem direção volta erro |
+| **Perfis**: `Profile` de 2 a 64 vértices em metros (`x` para a direita, `y` para cima); `ribbon` (com ou sem espessura), `trough` (calha com margens), `tube` (anel de `sides` vértices); perfil fechado é **normalizado para anti-horário**, senão o tubo sairia do avesso | 3 testes: tamanhos, recusa de largura/raio/profundidade zero e de lado de tubo abaixo de 3, inversão do sentido horário |
+| **Varredura**: anéis por `SweepSettings { steps, cap_ends }`, quadriláteros entre anéis, tampas só em perfil fechado, `PolygonMesh` validada pelas regras do renderizador | 6 testes: faixa de 4 m × 20 m plana (5 anéis, 4 faces), **faixa virada para cima** e **tubo virado para fora**, tampas (3 × 8 + 2 faces), calha afundando 1,5 m, determinismo byte a byte, 1 anel sem faces e recusa de 0/513 passos |
+| **Comando `spline.sweep`**: recebe `points`, `closed`, `profile`, `width`, `depth`, `thickness`, `sides`, `steps`, `cap_ends`, grava a malha na coluna `geometry` do objeto e devolve `{vertices, faces, steps}`; **um** desfazer (`row.set` da geometria anterior) | **4 testes de comando**: registrado no schema, varredura grava 10 vértices/4 faces e o desfazer volta a malha vazia, caminho/perfil/passos inválidos recusados sem tocar no objeto, objeto sem tabela `Mesh` recusado com `WORLD_ROW_MISSING` |
+
+**O que ainda não existe:** o desenho do caminho na janela (clicar pontos no viewport), a UI de perfil (largura/profundidade na barra) e o efeito no terreno (escorvar leito, aplainar aterro). Rios e estradas se apoiam nesta peça, mas nenhum dos dois começou.
 
 ### 2026-10-29 — biomas
 

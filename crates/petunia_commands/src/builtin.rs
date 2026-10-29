@@ -34,6 +34,7 @@ pub(crate) fn commands() -> Vec<(CommandSpec, ApplyFn)> {
     ]
     .into_iter()
     .chain(crate::terrain::commands())
+    .chain(crate::spline::commands())
     .collect()
 }
 
@@ -142,7 +143,7 @@ fn parse<T: DeserializeOwned>(command: &str, payload: &Json) -> Result<T, Comman
     })
 }
 
-fn resolve(world: &World, entity: u64) -> Result<EntityHandle, CommandError> {
+pub(crate) fn resolve(world: &World, entity: u64) -> Result<EntityHandle, CommandError> {
     Ok(world.handle_of(PersistentId(entity))?)
 }
 

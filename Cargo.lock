@@ -1532,6 +1532,7 @@ dependencies = [
 name = "petunia_commands"
 version = "0.1.0"
 dependencies = [
+ "petunia_curve",
  "petunia_math",
  "petunia_schema",
  "petunia_terrain",
@@ -1539,6 +1540,13 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "petunia_curve"
+version = "0.1.0"
+dependencies = [
+ "petunia_math",
 ]
 
 [[package]]
