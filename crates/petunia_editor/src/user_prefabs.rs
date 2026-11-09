@@ -103,10 +103,7 @@ fn read_prefab(path: &std::path::Path) -> Result<Prefab, Failure> {
         .and_then(Json::as_str)
         .unwrap_or_default()
         .to_string();
-    let revision = document
-        .get("revision")
-        .and_then(Json::as_u64)
-        .unwrap_or(0);
+    let revision = document.get("revision").and_then(Json::as_u64).unwrap_or(0);
     let Some(objects) = document.get("objects").and_then(Json::as_array) else {
         return Err(file_failure("o prefab não tem a lista `objects`"));
     };
@@ -161,7 +158,10 @@ fn position_of(value: &Json) -> Option<Vec3> {
 }
 
 /// `(table, reference column)` of the things that hang on an object.
-fn attachment_of(world: &petunia_world::World, entity: u64) -> Option<(&'static str, &'static str)> {
+fn attachment_of(
+    world: &petunia_world::World,
+    entity: u64,
+) -> Option<(&'static str, &'static str)> {
     let handle = world.handle_of(PersistentId(entity)).ok()?;
     for (table, reference) in [
         ("Collider", "owner"),
@@ -244,7 +244,9 @@ impl EditorSession {
         let world = self.world()?;
         // A collider or a script attachment is part of an object, not a prefab of its own.
         let id = crate::colliders::owner_of(world, selected)
-            .or_else(|| crate::scripts::script_owner_of(world, selected).filter(|owner| *owner != selected))
+            .or_else(|| {
+                crate::scripts::script_owner_of(world, selected).filter(|owner| *owner != selected)
+            })
             .unwrap_or(selected);
         let handle = world.handle_of(PersistentId(id)).map_err(Failure::from)?;
         let snapshot = world.snapshot(handle).map_err(Failure::from)?;
@@ -273,7 +275,9 @@ impl EditorSession {
                 .into_iter()
                 .filter_map(|handle| world.persistent_id(handle).ok().map(|id| id.0))
                 .filter(|attachment| *attachment != id)
-                .filter(|attachment| crate::scripts::script_owner_of(world, *attachment) == Some(id)),
+                .filter(|attachment| {
+                    crate::scripts::script_owner_of(world, *attachment) == Some(id)
+                }),
         );
         let mut attachments: Vec<Json> = Vec::new();
         for attachment in found {
@@ -547,7 +551,11 @@ mod tests {
         let undone = call(&mut session, json!({ "op": "editor.snapshot" }))["entity_count"]
             .as_u64()
             .expect("count");
-        assert_eq!(undone, before + 2, "one undo took the copy and its collider");
+        assert_eq!(
+            undone,
+            before + 2,
+            "one undo took the copy and its collider"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -564,7 +572,10 @@ mod tests {
             json!({ "op": "create.brush", "shape": "box" }),
         );
         let source = made["entity"].as_u64().expect("box id");
-        call(&mut session, json!({ "op": "prefab.save", "name": "caixa" }));
+        call(
+            &mut session,
+            json!({ "op": "prefab.save", "name": "caixa" }),
+        );
         // Move the object away from where it was saved: the copy must land in front of the
         // camera, not back at the object's own place.
         let saved_at = position(&mut session, source);
@@ -601,9 +612,15 @@ mod tests {
             &mut session,
             json!({ "op": "create.brush", "shape": "box" }),
         );
-        let first = call(&mut session, json!({ "op": "prefab.save", "name": "torre" }));
+        let first = call(
+            &mut session,
+            json!({ "op": "prefab.save", "name": "torre" }),
+        );
         assert_eq!(first["revision"], 1);
-        let second = call(&mut session, json!({ "op": "prefab.save", "name": "torre" }));
+        let second = call(
+            &mut session,
+            json!({ "op": "prefab.save", "name": "torre" }),
+        );
         assert_eq!(second["revision"], 2, "{second}");
 
         // A broken file is refused with an explanation, and nothing is spawned.
