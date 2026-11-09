@@ -795,7 +795,11 @@ impl EditorSession {
     /// Recomputes the script findings of the Project Doctor (see `petunia_script::project_diagnostics`).
     pub(crate) fn refresh_script_diagnostics(&mut self) {
         let found = match (&self.project, self.world()) {
-            (Some(project), Ok(world)) => petunia_script::project_diagnostics(&project.root, world),
+            (Some(project), Ok(world)) => petunia_script::project_diagnostics(
+                &project.root,
+                world,
+                &project.manifest.programming_method,
+            ),
             _ => Vec::new(),
         };
         self.script_diagnostics = found;

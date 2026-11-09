@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use petunia_commands::{CommandRecord, Dispatcher};
 use petunia_math::Vec3;
 use petunia_project::{
-    ProjectManifest, Report, Severity, create_sample_project, load_project, save_scene,
+    ProjectManifest, Report, Severity, create_sample_project_with, load_project, save_scene,
 };
 use petunia_render::{
     FlyCamera, MeshCache, RenderFrame, extract_frame_cached, pick_entity, ray_through,
@@ -102,6 +102,25 @@ pub struct EditorSession {
     pub(crate) face_drag: Option<FaceDrag>,
     /// Short text for the heads-up display while dragging.
     pub(crate) hud: Option<String>,
+    /// A collider drag in progress (preview only, not in the history).
+    pub(crate) collider_resize: Option<crate::collider_handles::ColliderResize>,
+    /// The object being "soloed" in the outliner, if any (a view, not a scene change).
+    pub(crate) solo_object: Option<u64>,
+    /// How the viewport draws solid geometry (`QT-09`): solid, aramado or raio-X.
+    pub(crate) shading: Shading,
+    /// Objects playing a clip in the viewport (phase 4).
+    pub(crate) playing: Vec<crate::animation::Playing>,
+    /// The hour and the weather the viewport draws (phase 5). A view, not a scene change.
+    pub(crate) time_of_day: petunia_render::weather::TimeOfDay,
+    pub(crate) weather: petunia_render::weather::Weather,
+    /// The precipitation pool, stepped with the same clock as the animation.
+    pub(crate) precipitation: petunia_render::particles::ParticleSystem,
+    /// The accessibility preference that flattens the light (DR-13).
+    pub(crate) high_contrast: bool,
+    /// Vegetation mesh, keyed by the rules and the camera's facing, so a repaint does not
+    /// re-scatter the island (phase 5).
+    pub(crate) vegetation_cache:
+        std::cell::RefCell<Option<((usize, u64, i32), std::sync::Arc<petunia_render::MeshData>)>>,
     /// Gizmo rod length in logical pixels.
     pub(crate) gizmo_size: f32,
     /// Color and thickness of the selection outline (editor preference).
@@ -197,6 +216,20 @@ impl EditorSession {
             hovered_face: None,
             face_drag: None,
             hud: None,
+            collider_resize: None,
+            solo_object: None,
+            shading: Shading::Solid,
+            playing: Vec::new(),
+            time_of_day: petunia_render::weather::TimeOfDay::default(),
+            weather: petunia_render::weather::Weather::default(),
+            precipitation: petunia_render::particles::ParticleSystem::new(
+                petunia_render::particles::Kind::Rain,
+                4_800,
+                14.0,
+                7,
+            ),
+            high_contrast: false,
+            vegetation_cache: std::cell::RefCell::new(None),
             gizmo_size: Self::default_gizmo_size(),
             outline: crate::tools::OutlineStyle::default(),
             sculpt: SculptState::new(),
@@ -213,6 +246,17 @@ impl EditorSession {
     /// Read access for queries (the GUI never gets a mutable world).
     pub(crate) fn world_for_query(&self) -> Result<&World, Failure> {
         self.world()
+    }
+
+    /// Mutable access to the world, **only** for a live preview that is not a command (a drag).
+    ///
+    /// Everything that changes the scene for real goes through [`Self::execute`]; this exists for
+    /// the previews (gesture, collider resize), which are restored or committed when the drag ends.
+    pub(crate) fn world_mut(&mut self) -> Result<&mut World, Failure> {
+        self.project
+            .as_mut()
+            .map(|project| &mut project.world)
+            .ok_or_else(Failure::no_project)
     }
 
     pub(crate) fn world(&self) -> Result<&World, Failure> {
@@ -286,8 +330,15 @@ impl EditorSession {
     }
 
     /// Creates the sample room in a new folder and opens it.
-    pub fn new_sample_project(&mut self, root: &Path, name: &str) -> Result<Json, Failure> {
-        create_sample_project(root, name)?;
+    /// `project.new_sample`: creates the sample project and opens it. `method` picks how the
+    /// project is programmed (DR-40): `aipo` (default), `luau` or `nodes` (pNodes).
+    pub fn new_sample_project(
+        &mut self,
+        root: &Path,
+        name: &str,
+        method: &str,
+    ) -> Result<Json, Failure> {
+        create_sample_project_with(root, name, method)?;
         self.open_project(root)
     }
 
@@ -306,7 +357,7 @@ impl EditorSession {
     }
 
     /// True while a drag is changing the world outside the command history.
-    fn has_live_edit(&self) -> bool {
+    pub(crate) fn has_live_edit(&self) -> bool {
         self.gesture.is_some()
             || self.drag.is_some()
             || self.face_drag.is_some()
@@ -514,7 +565,16 @@ impl EditorSession {
 
     pub fn select(&mut self, entity: Option<u64>) -> Result<Json, Failure> {
         if let Some(id) = entity {
-            self.world()?.handle_of(PersistentId(id))?;
+            let world = self.world()?;
+            world.handle_of(PersistentId(id))?;
+            // A locked object is a background reference: it is drawn but not chosen (`QT-12`).
+            if petunia_world::locked_objects(world).contains(&id) {
+                return Err(Failure::new(
+                    "EDITOR_OBJECT_LOCKED",
+                    "o objeto está travado",
+                    "Destrave-o na Hierarquia (o cadeado ao lado do nome) para escolhê-lo.",
+                ));
+            }
         }
         self.selection = entity;
         Ok(json!({ "selection": entity }))
@@ -750,6 +810,17 @@ impl EditorSession {
             frame
         };
         self.apply_floor_visibility(&mut frame.items);
+        // Hidden objects leave the frame; the solo view keeps only the chosen one (QT-12).
+        self.apply_object_visibility(&mut frame.items);
+        // Aramado and raio-X are view modes, so they touch the frame and never the world.
+        for item in &mut frame.items {
+            item.wireframe = self.shading == Shading::Wireframe;
+            item.xray = self.shading == Shading::Xray;
+            // A mesh with a skin row gets its pose here, at the time of its playing clip.
+            self.apply_skin_to(item);
+        }
+        // Sky, vegetation and precipitation are views too (phase 5).
+        self.apply_weather_and_flora(&mut frame);
         frame.sculpts = self.sculpt_items();
         frame.mark_selected(self.selection);
         frame.mark_hovered(self.hovered.filter(|id| Some(*id) != self.selection));
@@ -797,6 +868,9 @@ impl EditorSession {
                 "diagnostics": diagnostics,
                 "camera": camera_json,
                 "natural": self.natural_json(),
+            // The window needs the hour and the preset to know whether to keep the clock running.
+                "weather": self.weather_get(),
+                "comfort": self.high_contrast,
             });
         };
         let world = &project.world;
@@ -839,18 +913,40 @@ impl EditorSession {
                 }));
                 continue;
             }
-            entities.push(json!({
+            // Visibility and locking from the outliner (QT-12): only when set, to keep the
+            // snapshot small on a scene with hundreds of objects.
+            let state = petunia_world::state_of(world, identity.0);
+            let parent = match world.get(handle, "Transform", "parent") {
+                Ok(petunia_world::Value::Int(id)) if *id > 0 => Some(*id as u64),
+                _ => None,
+            };
+            let mut row = json!({
                 "id": identity.0,
                 "name": display_name(world, identity.0),
                 "tables": tables,
-            }));
+            });
+            if let Some(parent) = parent {
+                if let Some(fields) = row.as_object_mut() {
+                    fields.insert("parent".to_string(), json!(parent));
+                }
+            }
+            if let Some(fields) = row.as_object_mut() {
+                if state.hidden {
+                    fields.insert("hidden".to_string(), json!(true));
+                }
+                if state.locked {
+                    fields.insert("locked".to_string(), json!(true));
+                }
+            }
+            entities.push(row);
         }
         json!({
             "project": {
                 "name": project.manifest.name,
                 "root": project.root.display().to_string(),
                 "scene": project.manifest.default_scene,
-                "scripting_language": project.manifest.scripting_language,
+                "scripting_language": project.manifest.scripting_language(),
+                "programming_method": project.manifest.programming_method,
                 "dirty": self.dirty,
             },
             "entities": entities,
@@ -875,6 +971,9 @@ impl EditorSession {
             "floor": self.floor_json(),
             "sculpt": self.sculpt_json(),
             "natural": self.natural_json(),
+            // The window needs the hour and the preset to know whether to keep the clock running.
+                "weather": self.weather_get(),
+                "comfort": self.high_contrast,
             "mesh_selection": self.components_json(),
         })
     }
@@ -913,6 +1012,7 @@ impl EditorSession {
                         ("Collider", "shape") => Some(&petunia_project::COLLIDER_SHAPES),
                         ("RigidBody", "kind") => Some(&petunia_project::BODY_KINDS),
                         ("Light", "kind") => Some(&petunia_project::LIGHT_KINDS),
+                        ("Camera", "mode") => Some(&["fixed", "third", "first", "isometric", "custom"]),
                         _ => None,
                     };
                     if let Some(choices) = choices {
@@ -990,5 +1090,118 @@ fn command_label(record: &CommandRecord) -> String {
         format!("{} {shortened}…", record.command)
     } else {
         format!("{} {shortened}", record.command)
+    }
+}
+
+/// How the viewport draws solid geometry (`QT-09`). A view mode: it changes the frame, not the scene.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Shading {
+    #[default]
+    Solid,
+    /// Triangles as lines.
+    Wireframe,
+    /// Solid, drawn through other geometry.
+    Xray,
+}
+
+impl Shading {
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Solid => "solid",
+            Self::Wireframe => "wireframe",
+            Self::Xray => "xray",
+        }
+    }
+
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "solid" => Some(Self::Solid),
+            "wireframe" => Some(Self::Wireframe),
+            "xray" => Some(Self::Xray),
+            _ => None,
+        }
+    }
+}
+
+impl EditorSession {
+    /// `view.shading`: solid, aramado or raio-X.
+    pub fn set_shading(&mut self, name: &str) -> Result<serde_json::Value, Failure> {
+        let shading = Shading::parse(name).ok_or_else(|| {
+            Failure::bad_request(&format!(
+                "modo `{name}` desconhecido (use solid, wireframe ou xray)"
+            ))
+        })?;
+        self.shading = shading;
+        Ok(serde_json::json!({ "shading": shading.name() }))
+    }
+}
+
+#[cfg(test)]
+mod shading_tests {
+    use serde_json::json;
+
+    use crate::session::EditorSession;
+
+    fn opened(label: &str) -> (EditorSession, std::path::PathBuf) {
+        // One folder per test: two tests sharing a path delete each other's project mid-run.
+        let root = std::env::temp_dir().join(format!(
+            "petunia_editor_test_shading_{label}_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let mut session = EditorSession::new().expect("session");
+        let reply = session.handle(&json!({
+            "op": "project.new_sample",
+            "path": root.display().to_string(),
+            "name": label
+        }));
+        assert_eq!(reply["ok"], true, "{reply}");
+        (session, root)
+    }
+
+    #[test]
+    fn the_shading_mode_changes_the_frame_and_not_the_scene() {
+        let (mut session, root) = opened("modos");
+        let made = session.handle(&json!({ "op": "create.brush", "shape": "box" }));
+        assert_eq!(made["ok"], true, "{made}");
+
+        // Solid by default: nothing is a wireframe and nothing shows through.
+        let solid = session.frame().expect("frame");
+        assert!(solid.items.iter().all(|item| !item.wireframe && !item.xray));
+
+        let changed = session.handle(&json!({ "op": "view.shading", "mode": "wireframe" }));
+        assert_eq!(changed["ok"], true, "{changed}");
+        let wired = session.frame().expect("frame");
+        assert!(
+            wired.items.iter().all(|item| item.wireframe),
+            "every solid item draws as lines"
+        );
+
+        let xray = session.handle(&json!({ "op": "view.shading", "mode": "xray" }));
+        assert_eq!(xray["ok"], true, "{xray}");
+        let through = session.frame().expect("frame");
+        assert!(
+            through
+                .items
+                .iter()
+                .all(|item| item.xray && !item.wireframe)
+        );
+
+        // A view mode is not an edit: nothing became undoable.
+        let can_undo = session.handle(&json!({ "op": "editor.snapshot" }))["result"]["can_undo"]
+            .as_bool()
+            .unwrap_or(true);
+        assert!(can_undo, "only the brush creation is undoable");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_unknown_mode_is_refused_by_name() {
+        let (mut session, root) = opened("recusa");
+        let reply = session.handle(&json!({ "op": "view.shading", "mode": "toon" }));
+        assert_eq!(reply["ok"], false, "{reply}");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

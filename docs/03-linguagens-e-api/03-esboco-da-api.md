@@ -1,6 +1,6 @@
 # Desenho da API da Petunia Engine (Módulos Core)
 
-**Revisão:** 2026-10-25 · **Estado:** proposta de desenho para discussão e homologação.
+**Revisão:** 2026-11-02 · **Estado:** o bloco `transform` abaixo está implementado ([DR-43](../06-decisoes/registro-de-decisoes.md)); o resto desta página continua proposta.
 **Arquivo de referência:** substitui o rascunho anterior de `docs/03-linguagens-e-api/03-esboco-da-api.md`.
 
 ---
@@ -38,37 +38,28 @@ A API segue os princípios fundamentais da linguagem **Aipo**:
 Gerencia a presença espacial da entidade no mundo.
 
 ```aipo
-# Movimento relativo (3 eixos ou por componente)
-transform.move(entity, x = 0.0, y = 0.0, z = 5.0 * dt)
-transform.move_x(entity, delta = 5.0 * dt)
-transform.move_y(entity, delta = 2.0 * dt)
-transform.move_z(entity, delta = -1.0 * dt)
+# O vetor inteiro é um Vec3. Um eixo continua uma função própria.
+var pos = transform.position(entity)
+pos.x = pos.x + 5.0 * dt
+transform.set_position(entity, pos)
+transform.move(entity, Vec3{ x: 0.0, y: 0.0, z: 5.0 * dt })
+transform.move_y(entity, 2.0 * dt)
 
-# Rotação relativa (graus Euler, 3 eixos ou por componente)
-transform.rotate(entity, x = 0.0, y = 90.0 * dt, z = 0.0)
-transform.rotate_x(entity, degrees = 15.0 * dt) # pitch
-transform.rotate_y(entity, degrees = 90.0 * dt) # yaw
-transform.rotate_z(entity, degrees = 30.0 * dt) # roll
+var rot = transform.rotation(entity)   # graus Euler
+rot.y = rot.y + 90.0 * dt
+transform.set_rotation(entity, rot)
+transform.rotate(entity, Vec3{ x: 0.0, y: 90.0 * dt, z: 0.0 })
+transform.rotate_y(entity, 90.0 * dt)
 
-# Leituras (devolvem dicionário {"x": Float, "y": Float, "z": Float})
-let pos = transform.get_position(entity)
-let rot = transform.get_rotation(entity)    # graus Euler
-let scl = transform.get_scale(entity)
+let scl = transform.scale(entity)
+transform.set_scale(entity, Vec3{ x: 2.0, y: 2.0, z: 2.0 })
 
-# Escritas absolutas
-transform.set_position(entity, x = 0.0, y = 1.0, z = 0.0)
-transform.set_rotation(entity, x = 0.0, y = 180.0, z = 0.0)
-transform.set_scale(entity, x = 2.0, y = 2.0, z = 2.0)
-
-# Vetores direcionais locais
-let forward = transform.forward(entity) # frente (-Z local rotacionado)
-let right   = transform.right(entity)   # direita (+X local rotacionado)
-let up      = transform.up(entity)      # cima (+Y local rotacionado)
-
-# Hierarquia (planejado)
-# transform.set_parent(child = espada, parent = mao)
-# transform.clear_parent(espada)
+let frente = transform.forward(entity)
+let direita = transform.right(entity)
+let cima = transform.up(entity)
 ```
+
+`world.get` de uma coluna `Vec3` ou `Color` devolve a mesma struct. `world.row` devolve um dicionário cujas células vetor e cor são structs. A hierarquia do editor (`Transform.parent`) ainda não tem função de script.
 
 ---
 

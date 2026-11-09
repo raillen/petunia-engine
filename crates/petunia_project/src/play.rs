@@ -108,7 +108,30 @@ pub fn ensure_player(world: &mut World) -> Result<Option<u64>, WorldError> {
         })),
     )?;
     world.insert_row_json(hero, "Character", &object(json!({ "player": true })))?;
-    Ok(Some(world.persistent_id(hero)?.0))
+    world.insert_row_json(
+        hero,
+        "Camera",
+        &object(json!({
+            "mode": "fixed",
+            "distance": 4.5,
+            "height": 1.5,
+            "fov_degrees": 50.0
+        })),
+    )?;
+    let id = world.persistent_id(hero)?.0;
+    let body = world.spawn()?;
+    world.insert_row_json(
+        body,
+        "Collider",
+        &object(json!({
+            "owner": id,
+            "name": "corpo",
+            "shape": "capsule",
+            "radius": 0.3,
+            "height": 1.8
+        })),
+    )?;
+    Ok(Some(id))
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 # Script Host (Aipo) e editor de código
 
-**Revisão:** 2026-10-25 · Estado: **implementado em primeira versão** ([DR-25](../06-decisoes/registro-de-decisoes.md)). Código: `crates/petunia_script`, painel `editor/src/code_*.{h,cpp}`.
+**Revisão:** 2026-11-02 · Estado: **implementado em primeira versão** ([DR-25](../06-decisoes/registro-de-decisoes.md), vetores em [DR-43](../06-decisoes/registro-de-decisoes.md)). Código: `crates/petunia_script`, painel `editor/src/code_*.{h,cpp}`.
 
 ## Resumo (TL;DR)
 
@@ -16,8 +16,9 @@ fn on_start(entity) {
 }
 
 fn on_update(entity, dt) {
-    let position = world.get(entity, "Transform", "position")
-    world.set(entity, "Transform", "position", { "x": position["x"] + dt, "y": position["y"], "z": position["z"] })
+    var position = transform.position(entity)
+    position.x = position.x + dt
+    transform.set_position(entity, position)
 }
 ```
 
@@ -32,6 +33,9 @@ fn on_update(entity, dt) {
 | `transform` | posição, rotação, escala, mover, girar, frente/direita/cima | `world.read` / `world.write` |
 | `character` | `grounded` | `world.read` |
 | `character` | `move` (velocidade no plano do chão), `jump` | `world.write` |
+| `interact` | `prompt` (texto do objeto mais perto, ou nada) | `world.read` |
+| `health` | `current` | `world.read` |
+| `health` | `damage`, `heal` | `world.write` |
 | `collision` | `list`, `get`, `overlaps` | `world.read` |
 | `collision` | `set` (muda uma coluna de uma colisão; a física se refaz no quadro seguinte) | `world.write` |
 | `physics` | `raycast`, `raycast_from` (ignora o próprio objeto), `velocity` | `world.read` |
@@ -45,7 +49,7 @@ A tabela está em **um lugar só** (`api.rs`) e gera o que o compilador aceita, 
 ```aipo
 fn on_update(entity, dt) {
     // Olha 1,2 m para baixo a partir do próprio objeto (as colisões dele são ignoradas).
-    let chao = physics.raycast_from(entity, {"x": 0.0, "y": -1.0, "z": 0.0}, 1.2)
+    let chao = physics.raycast_from(entity, Vec3{ x: 0.0, y: -1.0, z: 0.0 }, 1.2)
     if game.tick() % 60 == 0 {
         log.info("colisões", collision.list(entity))
     }
@@ -53,7 +57,7 @@ fn on_update(entity, dt) {
 
 fn on_collision(entity, outro, minha, dele) {
     if minha == "pés" {
-        physics.impulse(entity, {"x": 0.0, "y": 4.0, "z": 0.0})
+        physics.impulse(entity, Vec3{ x: 0.0, y: 4.0, z: 0.0 })
     }
 }
 ```

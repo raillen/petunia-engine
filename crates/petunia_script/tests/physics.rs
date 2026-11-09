@@ -154,7 +154,7 @@ fn on_start(entity) {
 fn on_update(entity, dt) {
     let v = physics.velocity(entity)
     if game.tick() == 1 {
-        log.info("subindo", v["y"] > 0.0)
+        log.info("subindo", v.y > 0.0)
     }
 }
 "#;
@@ -315,6 +315,7 @@ fn the_player_follows_the_keyboard_and_the_camera() {
             forward: 1.0,
             right: 0.0,
             jump: false,
+            interact: false,
             yaw_degrees: 90.0,
         });
         host.update(1.0 / 60.0);
@@ -342,6 +343,7 @@ fn the_player_follows_the_keyboard_and_the_camera() {
         forward: f32::NAN,
         right: 50.0,
         jump: false,
+        interact: false,
         yaw_degrees: f32::INFINITY,
     });
     host.update(1.0 / 60.0);

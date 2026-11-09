@@ -505,7 +505,7 @@ fn on_update(entity, dt) {
 fn fields_indices_lists_and_dicts_run_from_a_graph() {
     let text = r#"
 fn on_update(entity, dt) {
-    var position = transform.get_position(entity)
+    var position = transform.position(entity)
     var x = position.x
     var first = [1, 2, 3][0]
     var point = { "x": 1.0, "y": 2.0 }

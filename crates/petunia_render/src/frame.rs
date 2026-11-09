@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use petunia_anim::Mat4;
 use petunia_math::{Color, Transform, Vec3};
 use petunia_world::{EntityHandle, Value, World};
 
@@ -57,6 +58,55 @@ pub struct DrawItem {
     /// fingerprint of the polygon mesh they came from (renderers key GPU buffers by it).
     pub mesh: Option<Arc<MeshData>>,
     pub mesh_fingerprint: u64,
+    /// When the mesh is skinned: one joint weight per vertex, in `mesh.positions` order. The
+    /// renderer applies [`skin_mesh`] to the positions before uploading, so a character plays its
+    /// clip on screen (`DR-23`, phase 4). Empty for an unskinned mesh, which is the usual case.
+    pub skin: Vec<SkinWeight>,
+    /// The matrices of this frame, one per joint, already multiplied by the inverse bind.
+    pub skin_matrices: Vec<Mat4>,
+    /// Draw the triangles as lines (`QT-09`, aramado). The editor also puts the edges in the frame
+    /// so a wireframe preview needs no second draw call.
+    pub wireframe: bool,
+    /// Draw through other geometry (`QT-09`, raio-X): the depth test is off for this item.
+    pub xray: bool,
+}
+
+/// The four joint weights of one vertex, as the import keeps them. A local copy so the renderer
+/// does not depend on the importer's types.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SkinWeight {
+    pub joints: [u16; 4],
+    pub weights: [f32; 4],
+}
+
+impl SkinWeight {
+    /// The position of this vertex after the joints move it: a weighted sum of their matrices.
+    ///
+    /// A vertex with no influence stays where it is, which is what an unskinned part of a skinned
+    /// mesh should do.
+    #[must_use]
+    pub fn transform(&self, position: Vec3, matrices: &[Mat4]) -> Vec3 {
+        let mut moved = Vec3::ZERO;
+        let mut total = 0.0f32;
+        for (slot, weight) in self.weights.iter().enumerate() {
+            if *weight <= 0.0 {
+                continue;
+            }
+            let joint = usize::from(self.joints.get(slot).copied().unwrap_or(0));
+            let Some(matrix) = matrices.get(joint) else {
+                continue;
+            };
+            let point = matrix.transform_point(position);
+            moved.x += point.x * weight;
+            moved.y += point.y * weight;
+            moved.z += point.z * weight;
+            total += weight;
+        }
+        if total <= 1e-6 {
+            return position;
+        }
+        Vec3::new(moved.x / total, moved.y / total, moved.z / total)
+    }
 }
 
 /// A 2D-looking helper drawn on top of the scene (editor gizmos). Sizes are in pixels, so a
@@ -125,6 +175,51 @@ pub struct RenderFrame {
     pub grid_height: f32,
     pub clear_color: Color,
     pub lighting: Lighting,
+    /// Vegetation impostors to draw on top of the scene, in world coordinates (phase 5).
+    pub vegetation: Option<Arc<MeshData>>,
+    /// Precipitation (rain or snow), if the weather is falling (phase 4 and 5).
+    pub precipitation: Option<Arc<MeshData>>,
+    /// Fog colour and how far it reaches, when the air is not clear (phase 5).
+    pub fog: Option<(Color, f32)>,
+    /// The fused grade applied after the scene (DR-13, first cut).
+    pub grade: Grade,
+}
+
+/// One fullscreen grade: contrast, vignette, grain and a luminance ceiling.
+///
+/// `comfort` slows how fast the ceiling may rise, which is the flash limiter of this cut.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Grade {
+    pub contrast: f32,
+    pub vignette: f32,
+    pub grain: f32,
+    pub luma_ceiling: f32,
+    pub comfort: bool,
+}
+
+impl Default for Grade {
+    fn default() -> Self {
+        Self {
+            contrast: 1.06,
+            vignette: 0.28,
+            grain: 0.012,
+            luma_ceiling: 1.15,
+            comfort: false,
+        }
+    }
+}
+
+impl Grade {
+    /// Flatter light, no vignette, no grain, and a ceiling that cannot jump.
+    pub const fn comfort() -> Self {
+        Self {
+            contrast: 1.18,
+            vignette: 0.0,
+            grain: 0.0,
+            luma_ceiling: 0.82,
+            comfort: true,
+        }
+    }
 }
 
 impl RenderFrame {
@@ -157,12 +252,7 @@ fn vec3(world: &World, handle: EntityHandle, table: &str, column: &str) -> Optio
 }
 
 fn transform_of(world: &World, handle: EntityHandle) -> Transform {
-    Transform {
-        position: vec3(world, handle, "Transform", "position").unwrap_or(Vec3::ZERO),
-        rotation_degrees: vec3(world, handle, "Transform", "rotation_degrees")
-            .unwrap_or(Vec3::ZERO),
-        scale: vec3(world, handle, "Transform", "scale").unwrap_or(Vec3::ONE),
-    }
+    petunia_world::composed_transform(world, handle)
 }
 
 /// Builds the frame from the world: every entity with a `Brush` or a `Mesh`. Entities with
@@ -206,6 +296,10 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
             color,
             mesh: None,
             mesh_fingerprint: 0,
+            skin: Vec::new(),
+            skin_matrices: Vec::new(),
+            wireframe: false,
+            xray: false,
         });
     }
     for handle in world.entities_with_table("Mesh").unwrap_or_default() {
@@ -231,6 +325,10 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
             color,
             mesh: Some(cache.drawing(fingerprint, geometry)),
             mesh_fingerprint: fingerprint,
+            skin: Vec::new(),
+            skin_matrices: Vec::new(),
+            wireframe: false,
+            xray: false,
         });
     }
     // Terrain chunks: one draw item per chunk, in world coordinates.
@@ -313,6 +411,10 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
             color,
             mesh: Some(cache.store_drawing(fingerprint, mesh)),
             mesh_fingerprint: fingerprint,
+            skin: Vec::new(),
+            skin_matrices: Vec::new(),
+            wireframe: false,
+            xray: false,
         });
     }
 
@@ -332,9 +434,13 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
             size: Vec3::ZERO,
             detail: 0,
             transform: Transform::IDENTITY,
-            color: Color::new(0.18, 0.42, 0.72, 0.55),
+            color: Color::new(0.12, 0.32, 0.48, 0.62),
             mesh: Some(cache.store_drawing(fingerprint, mesh)),
             mesh_fingerprint: fingerprint,
+            skin: Vec::new(),
+            skin_matrices: Vec::new(),
+            wireframe: false,
+            xray: false,
         });
     }
 
@@ -362,9 +468,13 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
             size: Vec3::ZERO,
             detail: 0,
             transform: Transform::IDENTITY,
-            color: Color::rgb(0.42, 0.39, 0.35),
+            color: Color::rgb(0.22, 0.22, 0.24),
             mesh: Some(cache.store_drawing(fingerprint, mesh)),
             mesh_fingerprint: fingerprint,
+            skin: Vec::new(),
+            skin_matrices: Vec::new(),
+            wireframe: false,
+            xray: false,
         });
     }
 
@@ -394,6 +504,10 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
             color: Color::rgb(0.62, 0.60, 0.56),
             mesh: Some(cache.store_drawing(fingerprint, mesh)),
             mesh_fingerprint: fingerprint,
+            skin: Vec::new(),
+            skin_matrices: Vec::new(),
+            wireframe: false,
+            xray: false,
         });
     }
 
@@ -442,6 +556,10 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
             color: Color::rgb(0.66, 0.62, 0.55),
             mesh: Some(cache.store_drawing(fingerprint, mesh)),
             mesh_fingerprint: fingerprint,
+            skin: Vec::new(),
+            skin_matrices: Vec::new(),
+            wireframe: false,
+            xray: false,
         });
     }
 
@@ -455,6 +573,11 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
         grid_height: 0.0,
         clear_color: Color::rgb(0.53, 0.70, 0.88),
         lighting,
+        // Filled by whoever has the rules and the weather; an extracted frame carries only the world.
+        vegetation: None,
+        precipitation: None,
+        fog: None,
+        grade: Grade::default(),
     }
 }
 
@@ -584,4 +707,135 @@ pub fn solid_shapes(world: &World) -> std::collections::BTreeMap<u64, petunia_ma
         }
     }
     found
+}
+
+/// The mesh with its vertices moved by the skin (phase 4).
+///
+/// Returns `None` when the item is not skinned, so the caller keeps the cached, untouched mesh. When
+/// it is skinned the result is a **copy**: skinning changes every frame, and rewriting the cached
+/// bind-pose mesh would corrupt it for the next frame.
+#[must_use]
+pub fn skin_mesh(item: &DrawItem) -> Option<MeshData> {
+    if item.skin.is_empty() || item.skin_matrices.is_empty() {
+        return None;
+    }
+    let source = item.mesh.as_ref()?;
+    let mut moved = MeshData {
+        positions: source.positions.clone(),
+        ..source.as_ref().clone()
+    };
+    for (index, position) in moved.positions.iter_mut().enumerate() {
+        let Some(weight) = item.skin.get(index) else {
+            continue;
+        };
+        let moved_point = weight.transform(
+            Vec3::new(position[0], position[1], position[2]),
+            &item.skin_matrices,
+        );
+        *position = [moved_point.x, moved_point.y, moved_point.z];
+    }
+    Some(moved)
+}
+
+#[cfg(test)]
+mod skin_tests {
+    use super::*;
+
+    fn triangle() -> Arc<MeshData> {
+        Arc::new(MeshData {
+            positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+            normals: vec![[0.0, 1.0, 0.0]; 3],
+            indices: vec![0, 1, 2],
+            uvs: Vec::new(),
+            flows: Vec::new(),
+            margins: Vec::new(),
+        })
+    }
+
+    fn skinned_item() -> DrawItem {
+        DrawItem {
+            entity: 7,
+            selected: false,
+            hovered: false,
+            shape: Shape::Mesh,
+            size: Vec3::ONE,
+            detail: 0,
+            transform: Transform::IDENTITY,
+            color: Color::WHITE,
+            mesh: Some(triangle()),
+            mesh_fingerprint: 99,
+            skin: vec![
+                SkinWeight {
+                    joints: [0, 0, 0, 0],
+                    weights: [1.0, 0.0, 0.0, 0.0],
+                };
+                3
+            ],
+            // Every joint matrix moves the mesh 2 m along x.
+            skin_matrices: vec![petunia_anim::Mat4::translation(Vec3::new(2.0, 0.0, 0.0))],
+            wireframe: false,
+            xray: false,
+        }
+    }
+
+    #[test]
+    fn a_skinned_mesh_moves_every_vertex_and_leaves_the_original_alone() {
+        let item = skinned_item();
+        let moved = skin_mesh(&item).expect("it is skinned");
+        assert_eq!(moved.positions.len(), 3);
+        // The source triangle spans x = 0..1; a joint that adds 2 puts every vertex there plus 2.
+        for (index, position) in moved.positions.iter().enumerate() {
+            let original = item.mesh.as_ref().expect("mesh").positions[index][0];
+            assert!(
+                (position[0] - (original + 2.0)).abs() < 1e-5,
+                "the joint moved it by 2: {position:?} from {original}"
+            );
+        }
+        // The cached bind-pose mesh is untouched: the next frame needs it.
+        let original = item.mesh.as_ref().expect("mesh");
+        assert!(original.positions[0][0].abs() < 1e-6, "source unchanged");
+    }
+
+    #[test]
+    fn an_unskinned_item_gets_no_copy() {
+        let mut item = skinned_item();
+        item.skin.clear();
+        assert!(skin_mesh(&item).is_none(), "nothing to do");
+        item.skin = vec![SkinWeight::default(); 3];
+        item.skin_matrices.clear();
+        assert!(skin_mesh(&item).is_none(), "no matrices, no skinning");
+    }
+
+    #[test]
+    fn a_vertex_with_two_joints_takes_the_weighted_middle() {
+        let weight = SkinWeight {
+            joints: [0, 1, 0, 0],
+            weights: [0.5, 0.5, 0.0, 0.0],
+        };
+        let matrices = vec![
+            petunia_anim::Mat4::translation(Vec3::new(0.0, 0.0, 0.0)),
+            petunia_anim::Mat4::translation(Vec3::new(4.0, 0.0, 0.0)),
+        ];
+        let moved = weight.transform(Vec3::ZERO, &matrices);
+        assert!((moved.x - 2.0).abs() < 1e-5, "halfway: {moved:?}");
+    }
+
+    #[test]
+    fn a_vertex_with_no_influence_stays_put() {
+        let weight = SkinWeight::default();
+        let moved = weight.transform(Vec3::new(1.0, 2.0, 3.0), &[]);
+        assert_eq!(moved, Vec3::new(1.0, 2.0, 3.0));
+    }
+
+    #[test]
+    fn a_matrix_that_moves_the_skin_gets_a_different_fingerprint() {
+        // The GL adapter reuses a buffer while the fingerprint holds; a moving pose must change it.
+        let first = skinned_item();
+        let mut second = skinned_item();
+        second.skin_matrices = vec![petunia_anim::Mat4::translation(Vec3::new(3.0, 0.0, 0.0))];
+        assert_ne!(
+            first.skin_matrices[0].0, second.skin_matrices[0].0,
+            "the matrices differ"
+        );
+    }
 }

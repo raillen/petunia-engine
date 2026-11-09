@@ -1,6 +1,6 @@
 # Estado da implementação
 
-**Revisão:** 2026-10-29 (rios, estradas e terreno na `main`) · **Fase atual:** 1 (esqueleto) concluída no código; **fase 2 (editor e construção de mapas) começou**
+**Revisão:** 2026-10-30 (reverificação dos gates e defeitos do painel Lógica) · **Fase atual:** 1 (esqueleto) concluída no código; **fase 2 (editor e construção de mapas) começou**
 
 ## Resumo (TL;DR)
 
@@ -55,9 +55,184 @@ Decisão: [DR-36](../06-decisoes/registro-de-decisoes.md) e o complemento dela (
 
 **Navegação do combo por posição (2026-10-29):** o mesmo teste escolhia o modo com `End` (último item) e `End`+`Up` (penúltimo). Ao entrar **Carimbo** no fim da lista, os dois atalhos passaram a apontar para outros modos e a erosão virou carimbo sem nenhum aviso. Agora um auxiliar `pick_mode` conta `Home` + N × `Down`, e a ordem dos modos está escrita ao lado para conferência.
 
+**`editor-smoke.sh` quebrado por um comentário (2026-10-30):** o comentário sobre o
+`--screenshot-delay` foi inserido **entre** as linhas de continuação (`\`) e o comando `env`.
+A barra invertida deixou de continuar a linha, o `env` passou a imprimir o ambiente e a **nunca
+iniciar o editor**, e o teste morria em `a janela "Petunia Editor" não apareceu em 25 s` — sem
+que o produto tivesse defeito (aberto à mão, o editor mostra a janela em ~1 s). O comentário
+subiu para cima do `env` e o arquivo tem agora um aviso para não repetir. Depois da correção:
+`editor-smoke.sh` **11/11** e `natural-smoke.sh` **16/16**, no display virtual.
+
+**`Aplicar código`: promessa retirada (2026-10-30, feito):** o painel Lógica dizia ao usuário
+*"edite e use \"Aplicar código\" para voltar ao grafo"*, mas o botão **nunca foi criado**
+(`applyCodeButton_` era só declarado e ligado a `GraphPanel::applyCode`; nada o instanciava) e o campo
+de código é `setReadOnly(true)`. O `QObject::connect(...invalid nullptr parameter)` do log era esse
+`connect`. O `DR-40` tornou a ida e volta desnecessária — um projeto usa **um** método —, então a
+frase, o `connect` órfão, o slot `applyCode` e o membro `applyCodeButton_` foram **removidos** (não
+bastava consertar o botão: o fluxo deixou de existir). O texto do painel agora diz só o que é verdade:
+*"Só leitura: editar o grafo muda este texto, e editar o texto não muda o grafo."* O comando
+`graph.from_code` continua no protocolo, sem porta na janela. **Verificado:** o editor compila sem o
+aviso de `nullptr` e o log da janela no display virtual não traz mais nenhuma linha de `QObject::connect`.
+
+**Um método de programação por projeto (`DR-40`, 2026-10-30, implementado):** o manifesto ganhou
+`programming_method` (`aipo` | `luau` | `nodes`); arquivos antigos com `scripting_language` continuam
+abrindo (`serde(alias)`) e quem não tem o campo assume `aipo`. A janela **esconde a aba do outro
+método** (Cena · Código em Aipo/Luau; Cena · Lógica em pNodes) e `F4`/`F7` não abrem a aba oculta. O
+projeto novo pergunta o método ao criar (`--method` também na linha de comando). **Prefabs** seguem o
+método: em `aipo` compilam o grafo para `<nome>.aipo`, em `nodes` gravam `<nome>.graph.json`; um
+arquivo existente de qualquer extensão nunca é sobrescrito. O Project Doctor avisa quando os dois
+tipos convivem em `scripts/` (`project.method_script` / `project.method_graph`); e o **carregador
+passou a obedecer ao método** (`ScriptHost::load_directory`, `PlayerConfig` e o Jogar do editor), sem
+o que o aviso do Doctor seria falso — ver a correção no `DR-40`. Evidência: **7 testes novos**
+(5 de manifesto com a migração do campo antigo, 1 de prefab por método, 1 de carregamento por
+método), dois quadros do display virtual (Cena · Código num projeto Aipo; Cena · Lógica num pNodes)
+e uma execução manual num projeto real: `metodo=aipo carregados=[]`, `metodo=nodes
+carregados=["sobra"]`.
+
+**`../aipo-lang` é pré-requisito de build, e faltava aqui (2026-10-30):** `petunia_script`
+depende de `../../../aipo-lang/crates/...` e o build desta cópia de trabalho falhava antes de
+compilar qualquer coisa (`failed to load manifest ... /aipo-lang/crates/aipo-ast/Cargo.toml`).
+Um link simbólico `aipo-lang` ao lado do checkout resolveu nesta sessão e **não** é versionado,
+então quem clonar de novo repete o passo. O `docs/dependencies.md` diz que, para distribuir, isso
+vira dependência git fixada por commit; enquanto for de caminho, o primeiro build numa cópia nova
+falha com uma mensagem que não diz que o problema é a pasta irmã.
+
 **Ainda falta (declarado):** decals de faixa (bloqueado: `DR-12` é só proposta), LOD em quadtree, tubo visível de bueiro e partículas na queda.
 
 **Não verificado:** a janela na sua sessão real (a evidência é o display virtual); leitor de tela (o passo por teclado escreve no rodapé, mas **não foi testado** se o leitor de tela anuncia); o mesmo passo no pincel de esculpir caverna; campo numérico para `times` na barra; terreno grande (desempenho e memória); a forma **platô** só tem teste no domínio — na janela foram vistos a cratera, o monte e a crista (reta e girada); e a silhueta girada **não** é previsualizada antes do clique.
+
+## Etapa atual: vegetação, clima e partículas (2026-10-31)
+
+Trabalho feito **sem tocar na Aipo**, que outra sessão deixou quebrada (`aipo-formatter` não compila).
+Tudo aqui é domínio e render puros, com teste.
+
+| Entrega | Evidência |
+|---|---|
+| **Leitor de GLB com esqueleto** chega ao arquivo: `Skeleton`, `Clip`, `Skin`, `SkeletonLink` (feito nesta rodada) | 1 teste |
+| **`petunia_flora`:** vegetação por regras — espaçamento, faixa de altura, inclinação máxima, escala, cor com variação, semente e **orçamento**; determinística (hash de célula, nunca `rand()`) | **7 testes**: espaçamento, determinismo em 7 execuções, faixa/inclinação, escala e rumo, regra inválida pelo nome, faixa invertida, orçamento |
+| **Impostores no render:** cada planta vira duas faces viradas para a câmera; planta quebrada é pulada, não gera triângulo degenerado | **5 testes**: duas faces por planta, base no chão, o quad gira com a câmera, entrada hostil, tinta dentro da faixa |
+| **Clima e hora do dia:** sol, ambiente, horizonte, névoa, nublado e precipitação como **funções puras** da hora; **alto contraste** levanta o piso de luz e afina a névoa (`DR-13`) | **7 testes**: meio-dia/meia-noite, determinismo, noite mais escura, chuva traz névoa e granizo não, alto contraste, direção unitária, hora hostil embrulhada |
+| **Partículas:** pool limitado, chuva e neve, retorno ao topo da caixa, passo limitado a 0,1 s para um quadro longo não teletransportar nada | **7 testes**: teto do pool, mesma semente = mesma chuva, queda e caixa, neve mais lenta, quadro longo, passo inválido, presets |
+| **Operações do editor:** `flora.add` / `flora.list` / `flora.count`, `weather.set` / `weather.get`; o quadro recebe vegetação, névoa e chuva | **5 testes**: regra adicionada/listada/recusada, clima não vira desfazer, tempo limpo sem névoa, contagem, projeto sem regra não desenha |
+
+**Janela (2026-11-02):** menu **Mundo** — Clima (limpo, nublado, chuva, neblina, neve), **Hora do dia**
+e **Plantar regra**. O clima vale nesta sessão (não entra no arquivo nem no desfazer). A regra de
+planta grava uma linha e o `Ctrl+Z` desfaz. Chuva e neve ligam o mesmo relógio da animação, senão
+as gotas ficavam paradas. O `petunia_render_gl` já desenhava os impostores e a precipitação; o que
+faltava era a porta. Os **decals** continuam bloqueados pelo `DR-12`.
+
+**Corte para montar um jogo (2026-11-02, `DR-41`, `DR-42`, primeiro corte do `DR-13`).**
+Parentesco: `Transform.parent`, pose composta até 32 níveis, física e desenho usam essa pose.
+Arrastar na hierarquia ou **Tornar filho de…** / **Soltar da hierarquia**. Câmera fixa: tabela
+`Shot`; no Jogar, a de maior prioridade cuja caixa contém o jogador substitui a perseguição
+(menu da hierarquia: **Câmera fixa neste objeto**). Pós: a cena passa por um framebuffer com
+contraste, vinheta, grão e teto de brilho; **Exibir › Conforto visual** reduz isso e limita a
+subida do brilho. Chuva: traços mais longos e pool de 4.800 (era 12.000). Água ganha fresnel
+quando corre; a estrada ficou asfalto mais escuro. `play.start` informa quantos scripts estão
+ligados a objetos. O clima **ainda não** entra no arquivo. Bloom, AgX, SMAA, refração da água e
+decals **não** entraram. A janela destes itens **não foi clicada** nesta rodada.
+
+**API e jogador (2026-11-02, `DR-43`).** `Vec3` e `Color` entram em todo script como structs; `transform.position` / `rotation` / `scale` devolvem `.x` `.y` `.z`, e `set_*` / `move` / `rotate` recebem um `Vec3`. Os eixos (`rotate_y` e afins) ficam. A tabela `Camera` no personagem escolhe `fixed`, `third`, `first` ou `isometric`. O herói criado na hora ganha essa linha e a cápsula `corpo`. Testes de `petunia_script`, `petunia_project`, `petunia_graph` e `petunia_editor` (lib) passaram; a janela **não** foi aberta de novo com este binário.
+
+**Interagir e vida (2026-11-02, `DR-44`).** Tabela `Interact` (raio 2 m, texto, ligada). No Jogar, **E** avisa o objeto mais perto (`on_event` `"interact"`) e a barra mostra o texto. Tabela `Health`; `health.damage` / `health.heal`; `"died"` uma vez quando a vida chega a zero. Som, slot de partida e animação de três estados continuam de fora. A tecla **E** na janela está ligada no código; o clique nesta rodada **não** foi feito.
+
+**Modo edição e inspetor (2026-11-02, `DR-45`).** Empurrar e extrudar só no modo edição, e o clique nesse modo chega na face. O arame da malha fica claro, com marca no meio da aresta ou da face. `Camera.mode` é uma lista (`custom` deixa a câmera quieta). Interagir com um `Shot` olha por essa câmera. Adicionar tabela e adicionar script buscam pelo nome. Clima como entidade, vento, raio, skybox e campos do script no inspetor **não** entraram.
+
+## Etapa atual: personagem animado na cena (2026-10-31)
+
+Continuação da fase 4. O motor já calculava pose e skinning; o que faltava era **o dado chegar ao
+arquivo e o objeto da cena saber tocar um clipe**.
+
+| Entrega | Evidência |
+|---|---|
+| **Import grava o rig:** tabelas `Skeleton` (juntas), `Clip` (canais) e `Skin` (`owner` + pesos por vértice) e `SkeletonLink`; texto em formato legível, no mesmo lote dos meshes, então **um desfazer** leva o personagem inteiro | **1 teste**: GLB com esqueleto importado grava as quatro tabelas, e as três voltam a ser lidas (2 juntas, clipe de 1 s, 3 pesos) |
+| **`petunia_editor::rig`:** serializa e lê esqueleto, clipes e pesos em ida e volta; uma linha malformada invalida o bloco inteiro em vez de meia-leitura | **4 testes**: esqueleto, clipe com três tipos de canal, pesos, e entrada quebrada recusada |
+| **Tocar no viewport:** `anim.list`, `anim.play` (tempo inicial, velocidade, laço), `anim.stop`, `anim.advance`; o tempo vem da janela, nunca do relógio do sistema (determinismo) | **2 testes**: tocar move o mesh e avançar o tempo continua; parar volta à primeira pose |
+
+**Janela:** **Criar › Tocar animação…** escolhe o clipe do objeto selecionado e o relógio da janela
+chama `anim.advance`. **Parar animação** volta à pose de repouso.
+
+## Etapa atual: paridade do outliner e sombreamento (2026-10-31)
+
+Pedido: "prossiga com tudo que ainda está faltando, não pare até a paridade estar 1 para 1".
+**1 para 1 não é alcançável sem violar decisões já tomadas**, e isso está escrito na
+[matriz de paridade](../02-arquitetura/12-paridade-ui-petunia3d.md): três das 20 linhas são **fora de
+escopo por decisão registrada** (QT-03 cursor 3D, QT-04 Poly Pen, QT-10 operador de desenho — as duas
+últimas de modelagem de malha, que o `DR-22` recusou copiar). O que era **"planejado" chegou a zero**.
+
+| Entrega | Evidência |
+|---|---|
+| **Outliner: ocultar, travar e "ver só este"** (`QT-12`): tabela `EditorState` (objeto sem linha é visível e destravado), operações `object.hide` / `object.lock` / `object.solo`, olho e cadeado por linha, menu de contexto, e o estado viajando com o projeto | **6 testes**: domínio (2) e fluxo (4: oculto sai do quadro e um desfazer volta, travado é desenhado mas recusa seleção, solo mostra um e devolve a cena intacta, e o estado sobrevive a salvar e reabrir) |
+| **Sombreamento: sólido, aramado e raio-X** (`QT-09`): `view.shading`, menu **Exibir › Sombreamento**, o GL desenhando em linhas ou com o teste de profundidade desligado | **2 testes**: modo muda o quadro sem virar passo de desfazer; modo desconhecido recusado pelo nome |
+
+**Defeito que eu mesmo criei e consertei no caminho:** ao alargar a hierarquia para caber quatro
+colunas, **o viewport deslocou e os dois testes de fumaça caíram** (13→10 e 16→13). O layout voltou e o
+id foi para a dica; a largura volta a ser a de antes. Foi também a **segunda vez** que uma tabela nova
+(`EditorState`) empurrou `PlayerStart` no menu do inspetor: o teste de fumaça agora desce 8 itens, com
+a ordem escrita ao lado.
+
+**Ainda parcial, com o que falta listado:** QT-12 sem cor por linha, multisseleção e arrastar; QT-15
+sem painel de referências visuais; QT-07 sem layout nomeado em arquivo; QT-00 com a borda dos botões
+(a seu gosto); QT-01 e QT-11 sem passo de teste de fumaça para "apagar tudo" e "cena vazia".
+
+## Etapa atual: animação esquelética (2026-10-31)
+
+Pedido: "A e depois C" — animação esquelética primeiro, depois uma revisão do que foi feito.
+O **núcleo de reprodução** e a **leitura de GLB com esqueleto** estão prontos e testados.
+
+`DR-23` propunha copiar ~3,8 mil linhas do Petunia3D. **O Petunia3D não está nesta máquina**, então
+o caminho foi o que a própria pesquisa do `DR-23` mandava fazer primeiro: importar o GLB e escrever
+o núcleo. O resultado é código novo, sem legado para migrar.
+
+| Entrega | Evidência |
+|---|---|
+| **Crate `petunia_anim`:** `Mat4` (coluna-maior) e `Quat` (slerp pelo caminho curto), esqueleto que recusa ciclo e limite, clipes com canais de translação/rotação/escala, amostragem **degrau** e **linear**, **um passo** para a pose (pais antes dos filhos, garantido na construção), matrizes de skinning, mistura com a pose de repouso | **10 testes**: o pai move o filho, degrau segura e linear interpola, 9 execuções dão a mesma pose, duração é a última chave, mistura 0 = repouso, bind pose não move o vértice, ciclo recusado, junta inexistente recusada, chaves fora de ordem recusadas, esqueleto acima do limite recusado |
+| **Leitura de GLB com esqueleto** (`petunia_import/src/animation.rs`): primeiro *skin*, matrizes de bind, todas as animações; **leitor de accessor próprio** (a `gltf` 1.4 não expõe um), com stride, checagem de truncamento, números não finitos viram 0 e interpolação cúbica **recusada pelo nome** | **1 teste com um GLB montado byte a byte**: 2 juntas, 1 clipe, o clipe move a raiz e o filho acompanha; mais 1 teste que prova que um arquivo sem esqueleto continua importando igual |
+
+**Regressão de fase 1 consertada no caminho:** a tabela nova `FaceColor` ordena antes de
+`PlayerStart` no menu **Adicionar tabela**, então o passo que escolhia a 6ª linha passou a escolher a
+errada. O teste agora conta 7, com a ordem escrita ao lado para conferir. O script também passou a
+**reportar as duas fases** mesmo quando uma reprova: antes o `set -e` matava a execução no primeiro
+`python3` que saísse com erro e a fase pNodes nunca rodava — por isso uma queda de 13 para 9
+verificações parecia "fase 2 quebrada" quando era só a fase 1 escondendo o resto.
+
+**Skinning até o desenho (2026-10-31):** a cadeia está completa — o GLB traz os pesos, o import
+guarda um peso por vértice, o `DrawItem` carrega as matrizes da pose, e o renderizador aplica o
+deslocamento antes de subir a malha.
+
+| Entrega | Evidência |
+|---|---|
+| **Pesos por vértice no import:** `ImportSkin` com até 4 juntas por vértice, normalizados; soldar posições que têm pesos diferentes é **costura** e vira aviso, com o primeiro peso vencendo | teste com o GLB montado: os pesos chegam e movem o vértice |
+| **`DrawItem` com skin:** `skin` (os pesos) e `skin_matrices` (a pose do quadro); `skin_mesh` devolve uma **cópia** deslocada e nunca toca a malha em cache | 6 testes: todo vértice se move, a origem fica intacta, item sem skin não copia, dois pesos dão a média, peso zero fica parado, matrizes diferentes dão impressão digital diferente |
+| **GL:** `SkinCache` com buffers próprios (escritos de novo quando a pose muda, teto de 256) e um caminho de desenho separado; o layout de vértice é o mesmo do caminho estático, então o sombreador é compartilhado | compila; o cache é liberado junto com as outras malhas |
+
+**Decisão de custo:** o skinning roda na **CPU**, não numa paleta de ossos no sombreador. O vértice
+não tem atributo de junta nem de peso, e acrescentar dois atributos a **toda** malha por causa das
+poucas que são animadas custaria memória em todas. Fica local em `petunia_render_gl/src/skin.rs`;
+uma paleta na GPU passa a valer a pena quando uma cena tiver muitos personagens animados ao mesmo
+tempo.
+
+**O que ainda não existe (declarado):** IK, interpolação cúbica e a autoria de esqueleto (fora de
+escopo pelo `DR-23`); e não há ainda um caminho do **editor** que ligue um objeto da cena a um
+esqueleto importado e a um clipe — o motor sabe desenhar um personagem animado, mas o editor ainda
+não oferece "toque este clipe" numa cena salva.
+
+## Etapa atual: fechamento da fase 2 e o módulo `grid` (2026-10-30)
+
+Pedido: "feche tudo que precisa da fase 1 a fase 4". A fase 2 está **fechada**; da fase 3 entrou
+o módulo `grid`. O que resta das fases 3 e 4 está listado abaixo, com o motivo.
+
+| Entrega | Evidência |
+|---|---|
+| **Autosave:** `editor.autosave` grava quando há trabalho não salvo e **espera** quando um arrasto ao vivo muda o mundo sem comando; um `QTimer` de 60 s na janela pede, o motor decide | 1 teste (limpo → grava → limpo de novo → `busy` com prévia ao vivo, e o arquivo não recebe a prévia) + timer compilado |
+| **Painel de assets:** lista `assets/` com tamanho legível, total, botão **Importar modelo…** e estado vazio explicado | compila; `asset.list`/`asset.import` já tinham teste; o painel é a porta |
+| **Material por face:** tabela `FaceColor` (`owner`, `face`, `color`) e `mesh.paint_face`; a face sem linha usa a cor do objeto; índice de face obsoleto é ignorado | 3 testes do domínio (`petunia_world`) + 1 de fluxo no editor (pintar duas vezes deixa **uma** linha, um desfazer por pincelada) |
+| **Alças de colisão no viewport:** `collider.resize_begin/drag/end/cancel` — prévia ao vivo e **um** desfazer ao soltar; cancelar devolve a linha exata | 2 testes (arrasto commita em um passo; cancelar restaura) |
+| **`petunia_grid`** (fase 3): quadrado 4/8 direções e hexagonal axial, A\* **próprio** com custo inteiro (1000 reto, 1414 diagonal), heurística admissível, desempate por célula, orçamento e recusas nomeadas | **10 testes**: linha reta, desvio de parede, determinismo (9 execuções iguais), diagonal que não corta esquina, inalcançável, fora dos limites, seis vizinhos do hex, losango do hex, célula cara evitada, orçamento hostil |
+
+**Correção de documento:** a página do editor afirmava que as colisões aparecem **em verde** no
+viewport; o desenho existe (`collider_overlay`), e o que faltava era **arrastar** as alças, agora
+implementado.
 
 ## Antes: intercâmbio Aipo ⇄ IR e isolamento por objeto (2026-10-28)
 
@@ -70,7 +245,7 @@ Decisão: [DR-36](../06-decisoes/registro-de-decisoes.md) e o complemento dela (
 | **IR → grafo** (evento, funções auxiliares, globais, variáveis locais, `while`, `loop`, `repeat`, `each`, `break`/`continue`, `return`, chamadas, `if`/`elif` e expressões) | 15 testes: execução ponta a ponta, condição/`elif`, `repeat` com índice, `while`, `loop` com `break`/`continue`, `each` com uma e duas variáveis, função auxiliar, global/local, chamada de valor, variáveis e escopo por handler, e recusas de `let` reatribuído/`break` fora de laço |
 | **Editor:** `script.to_graph` e menu **Transformar em grafo…** no script | teste de operação cria o grafo, abre, compila e converte função auxiliar; recusa lista como valor e nome ocupado. O menu não foi exercitado no smoke |
 | **Schema v2 e migração** | **implementado:** grafos v1 são lidos e migrados para v2; `flow.while`, `flow.loop`, `flow.break`, `flow.continue` e `flow.each.with_index`; 14 testes de modelo e 21 testes públicos de grafo |
-| **Edição contínua das duas vistas** | **implementado no recorte suportado:** `graph.code` gera Aipo e `graph.from_code` recria o grafo; botão **Aplicar código** no painel Lógica. Fora do subconjunto, diagnóstico |
+| **Um método por projeto (`DR-40`)** | **implementado:** `programming_method` no manifesto; a janela esconde a aba do outro método; prefabs gravam `.aipo` ou `.graph.json`; o Doctor avisa a mistura. `graph.from_code` continua no protocolo, mas deixou de ser o fluxo normal |
 
 ## Antes: renomear e apagar scripts/grafos (2026-10-27)
 
@@ -404,6 +579,7 @@ Primeira versão do redesenho (uma barra no topo, hierarquia em árvore, inspeto
 | `petunia_player` | 437 | Janela simples com câmera livre |
 | `petunia_cli` | 184 | `petunia new / check / run / schema / version` |
 | `petunia_mesh` | 15479 | **Edição de malha**: booleanos, inset, loop cut, bevel… (14100 linhas de legado do Petunia3D + API validada) |
+| `petunia_physics` | 2972 | Corpos rígidos, colisões e consultas (Rapier **só aqui dentro**), água, personagem; física determinística |
 | `petunia_editor` | 16141 | Sessão, operações JSON, **gizmo**, **gestos**, snap a objetos, Modo Livre, **operações de brush**, andares, **esculpir**, **edição de malha**, **terreno/rio/estrada** |
 | `petunia_editor_ffi` | 212 | Fronteira C |
 | `editor/` (C++/Qt, próprio) | 10918 | Janela, barras de ferramenta, workspaces, paleta de comandos, docas, inspetor, editor de código, painel de grafo |
@@ -415,15 +591,16 @@ Detalhes: [editor](../02-arquitetura/11-editor.md), [paridade](../02-arquitetura
 
 | Item | Estado | Evidência |
 |---|---|---|
-| `cargo fmt`, `cargo clippy --workspace --all-targets -D warnings` | **passou** | limpo |
+| `cargo fmt`, `cargo clippy --workspace --all-targets -D warnings` | **passou (2026-10-30, refeito nesta revisão)** | limpo; o `fmt` foi conferido **por crate** (`cargo fmt -p <crate> -- --check`), como a nota abaixo explica |
+| `cargo test --workspace` (2026-10-31) | **passou: 590, 0 falhas** | 541 da revisão anterior + 4 de fase 2 (autosave, pintura por face, 2 de alça de colisão) + 3 de domínio da cor por face + 10 do `petunia_grid` |
 | `cargo fmt --all` (literal) | **não passa neste repositório** | `--all` também formata a dependência de caminho `../aipo-lang` (27 diferenças, já existentes, nenhuma nos crates `petunia_*`). O que se mede aqui é `cargo fmt -p <cada crate petunia> -- --check`, e esse passa. |
-| Suíte completa, **535 testes** (2026-10-29, `main` com a linha dos rios mesclada) | **passou** | math 21, world 42, sculpt 41, graph 39, physics 29, render 22, editor 70, script 67, mesh 181, project 6, commands 6, import 6, input 3, schema 2 |
+| Suíte completa, **590 testes** (2026-10-31, com personagem animado na cena) | **passou** | math 21, world 47 (45 + 2 do outliner), sculpt 41, graph 31, grid 10, anim 10, physics 22, render 27 (22 + 5 de skin), editor 88 (81 + 4 do rig + 2 da animação + 1 do import), script 83, mesh 181, project 10, commands 6, import 8, input 3, schema 2 |
 | Suíte completa, **441 testes** (2026-10-28) | **passou** | inclui 6 de Aipo → IR, 14 de IR → grafo, 1 de `script.to_graph` no editor, 1 de isolamento por objeto e 14 de modelo de grafo com migração v1→v2 |
 | Suíte completa, **414 testes** (2026-10-27) | **passou** | mesh 181 (164 do Petunia3D), script 55 (15 + 16 do host + 7 de física + 17 de grafo), editor 57, graph 22 (13 + 9 de edição), physics 18, sculpt 17, render 16, world 14, math 11, commands 6, import 6, input 3, project 6, schema 2 |
 | Formas orientadas para fora (caixa, rampa, cilindro, cone, esfera, escada) | **passou** | teste por geometria, em vários níveis de detalhe |
 | Gizmo: acertar a alça, mover só no eixo e no snap, girar em passos, escalar sem zerar | **passou** | 6 testes em `petunia_editor` |
 | Um arrasto vira **um** passo de desfazer; sem mudança, nenhum | **passou** | teste de gesto |
-| Editor Qt compila e liga | **passou (Qt 6.4.2, 2026-10-27)** | `scripts/editor.sh build`; teste de fumaça **8/8** |
+| Editor Qt compila e liga | **passou (Qt 6.4.2, 2026-10-30)** | `scripts/editor.sh build`; `editor-smoke.sh` **13/13** (10 da fase Aipo + 3 da fase pNodes) e `natural-smoke.sh` **16/16**. O teste de fumaça **não** exercita os quatro itens novos da fase 2 (autosave, painel de assets, pintura, alças) |
 | Janela: selecionar, **arrastar a seta X**, **adicionar tabela pelo combo**, duplicar, criar, andar, girar, salvar | **passou (display virtual)** | `scripts/editor-smoke.sh` **confere o arquivo salvo** (`x=4.5`, só no eixo X, na grade; tabela `PlayerStart` adicionada) |
 | Aparência: tema escuro, ícones, campos XYZ, trilho, barra do viewport | **visto (display virtual)** | imagens |
 | Gizmos de girar e de escalar, cone, esfera e escada renderizados | **visto (display virtual)** | imagens |
@@ -509,6 +686,8 @@ No editor:
 | **Abrir outro projeto** mantinha gesto/drag presos ao mundo antigo | Revisão do código | `open_project` zera gesto, drag, escultura, componentes e andar; teste |
 | **Inspetor de colisores** mostrava os valores da coluna anterior após o primeiro reload | Revisão do código | `refill` pula a coluna `owner` como o `rebuild` já fazia |
 | Campos do inspetor podiam ser liberados antes de os widgets escondidos emitirem sinal | Revisão do código | Esconde primeiro, libera depois; `tearingDown_` bloqueia callbacks durante a troca |
+| **Painel Lógica prometia um botão "Aplicar código" que nunca existiu** e o log soltava `QObject::connect(...invalid nullptr parameter)` a cada abertura | Leitura do código ao investigar o teste de fumaça (2026-10-30) | O `DR-40` aposentou a edição contínua: frase, `connect`, slot e membro removidos; o texto agora descreve só leitura |
+| **`editor-smoke.sh` nunca abria o editor**: um comentário entre a barra de continuação e o `env` fazia o `env` imprimir o ambiente e sair | O teste reprovava com "a janela não apareceu em 25 s" | Comentário movido para cima do `env`, com aviso no arquivo; 13/13 |
 
 ## Limites conhecidos
 
@@ -555,5 +734,6 @@ capacidade que falte à demo.
 
 1. **Você abrir o editor** (`scripts/editor.sh`), `F4`, criar um script e executar com `F5`.
 2. Rodar `petunia run` num projeto com scripts e conferir o console.
-3. Event Sheet / Gameplay IR (regras sem código) sobre o mesmo Script Host.
+3. **Método não se troca** (decisão de 2026-10-30): escolhe-se ao criar e vale até o fim. Não há
+   botão nem conversão entre métodos, e não há trabalho pendente nisso.
 4. Rodar a **bateria restante** (`xtask`, regressão visual pixel a pixel quando implementadas).

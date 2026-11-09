@@ -11,7 +11,7 @@ use petunia_physics::{BodyKind, ContactEvent, PhysicsSettings, Simulation, Solid
 use petunia_world::{PersistentId, World};
 use serde_json::json;
 
-use crate::convert::{json_to_value, value_to_json};
+use crate::convert::{json_to_value, value_to_json, vec3_value};
 use crate::natives::{
     GameCell, GameState, Native, context, entity_arg, failure, float_arg, internal, read_transform,
     run_command, text_arg, vec3_to_value, wrong_type,
@@ -48,6 +48,8 @@ pub struct PlayerInput {
     /// -1 to 1: left to right.
     pub right: f32,
     pub jump: bool,
+    /// True on the frame the person asks to use whatever is in front of them.
+    pub interact: bool,
     /// The direction the camera looks, in degrees around the vertical axis.
     pub yaw_degrees: f32,
 }
@@ -529,13 +531,27 @@ pub(crate) fn physics_raycast_from(vm: &mut Vm, args: &[Value]) -> Native {
 
 fn hit_value(hit: Result<Option<petunia_physics::RayHit>, String>) -> Native {
     match hit {
-        Ok(Some(hit)) => Ok(json_to_value(&json!({
-            "entity": hit.collider.owner,
-            "collider": hit.collider.name,
-            "point": { "x": hit.point.x, "y": hit.point.y, "z": hit.point.z },
-            "normal": { "x": hit.normal.x, "y": hit.normal.y, "z": hit.normal.z },
-            "distance": hit.distance,
-        }))),
+        Ok(Some(hit)) => {
+            let entries = vec![
+                (
+                    Value::string("entity"),
+                    Value::Int(i64::try_from(hit.collider.owner).unwrap_or(0)),
+                ),
+                (
+                    Value::string("collider"),
+                    Value::string(hit.collider.name.clone()),
+                ),
+                (Value::string("point"), vec3_value(hit.point)),
+                (Value::string("normal"), vec3_value(hit.normal)),
+                (
+                    Value::string("distance"),
+                    Value::Float(f64::from(hit.distance)),
+                ),
+            ];
+            Ok(Value::Dict(std::rc::Rc::new(std::cell::RefCell::new(
+                aipo_vm::DictMap::from_entries(entries),
+            ))))
+        }
         Ok(None) => Ok(Value::None),
         Err(message) => failure(message),
     }

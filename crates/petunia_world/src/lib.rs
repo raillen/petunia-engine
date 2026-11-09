@@ -10,7 +10,10 @@
 //!   never another entity.
 
 mod buffer;
+mod hierarchy;
+mod editor_state;
 mod error;
+mod face_color;
 mod heightfield;
 mod ids;
 mod limits;
@@ -22,8 +25,11 @@ mod value;
 mod world;
 
 pub use buffer::{CommandBuffer, DeferredOp};
+pub use editor_state::{EDITOR_STATE_TABLE, ObjectState, hidden_objects, locked_objects, state_of};
 pub use error::WorldError;
+pub use face_color::{FACE_COLOR_TABLE, face_colors};
 pub use heightfield::{HEIGHT_CHUNK_SIZE, HeightChunk, Heightfield};
+pub use hierarchy::{ShotPose, active_shot, composed_transform, parent_id, shot_of};
 pub use ids::{EntityHandle, PersistentId};
 pub use limits::Limits;
 pub use path_network::{PathEdge, PathNetwork, PathNode, PathNodeType, WaterVolume};

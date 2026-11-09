@@ -7,6 +7,7 @@ publish.workspace = true
 description = "Adapter around the gltf crate: reads a GLB/glTF file into editable polygon meshes in Petunia's own types."
 
 [dependencies]
+petunia_anim.workspace = true
 petunia_math.workspace = true
 gltf.workspace = true
 thiserror.workspace = true

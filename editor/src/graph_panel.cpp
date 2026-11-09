@@ -313,8 +313,8 @@ GraphPanel::GraphPanel(EngineBridge* bridge, QWidget* parent) : QWidget(parent),
     codeLayout->setContentsMargins(8, 6, 8, 0);
     codeLayout->setSpacing(4);
     auto* codeHint = new QLabel(
-        QStringLiteral("Código gerado pelo grafo. Mudar o grafo muda este texto; "
-                       "edite e use \"Aplicar código\" para voltar ao grafo."),
+        QStringLiteral("Código gerado pelo grafo. Só leitura: editar o grafo muda este texto, "
+                       "e editar o texto não muda o grafo."),
         codePage);
     codeHint->setWordWrap(true);
     codeHint->setProperty("role", QStringLiteral("muted"));
@@ -433,7 +433,6 @@ GraphPanel::GraphPanel(EngineBridge* bridge, QWidget* parent) : QWidget(parent),
     connect(redoButton_, &QToolButton::clicked, this, &GraphPanel::redo);
     connect(attachButton_, &QToolButton::clicked, this, &GraphPanel::attach);
     connect(asScriptButton_, &QToolButton::clicked, this, &GraphPanel::asScript);
-    connect(applyCodeButton_, &QToolButton::clicked, this, &GraphPanel::applyCode);
     connect(code_, &QPlainTextEdit::cursorPositionChanged, this, [this] {
         if (codeLines_.isEmpty()) {
             return;
@@ -974,21 +973,6 @@ void GraphPanel::showDebug(const QJsonObject& debug) {
         item->setData(Qt::AccessibleDescriptionRole, text);
     }
     debugRows_->show();
-}
-
-void GraphPanel::applyCode() {
-    if (openName_.isEmpty()) {
-        return;
-    }
-    const Reply reply = bridge_->call(
-        QStringLiteral("graph.from_code"),
-        QJsonObject{{QStringLiteral("text"), code_->toPlainText()}});
-    if (!reply.ok) {
-        emit message(QStringLiteral("Não foi possível aplicar o código: %1").arg(reply.explanation()));
-        return;
-    }
-    refreshView();
-    emit message(QStringLiteral("Código aplicado ao grafo."));
 }
 
 void GraphPanel::showCode() {

@@ -44,6 +44,10 @@ pub struct PlayerConfig {
     pub height: u32,
     /// The project's `scripts/` folder. When set, the scripts run every frame.
     pub scripts: Option<std::path::PathBuf>,
+    /// How the project is programmed (DR-40): `aipo`, `luau` or `nodes`. Only the files of that
+    /// method load; a leftover file of the other one is ignored instead of running behind the
+    /// person's back.
+    pub programming_method: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -136,7 +140,7 @@ impl App {
             match ScriptHost::new(world.clone()) {
                 Ok(mut host) => {
                     if let Some(folder) = config.scripts.as_deref() {
-                        report_scripts(&host.load_directory(folder));
+                        report_scripts(&host.load_directory(folder, &config.programming_method));
                     }
                     if physical {
                         // Someone to walk with, and everything drawn is solid.
@@ -226,6 +230,7 @@ impl App {
                         forward,
                         right,
                         jump,
+                        interact: false,
                         yaw_degrees: -self.fly.camera.yaw_degrees,
                     });
                 }

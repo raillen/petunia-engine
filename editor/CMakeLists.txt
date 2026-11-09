@@ -31,6 +31,7 @@ add_executable(petunia-editor
     src/hierarchy_panel.cpp
     src/inspector_panel.cpp
     src/info_panels.cpp
+    src/assets_panel.cpp
     src/code_editor.cpp
     src/code_panel.cpp
     src/graph_panel.cpp

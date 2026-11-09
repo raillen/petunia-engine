@@ -6,6 +6,9 @@
 //! out and reported in `warnings`. The file is untrusted: sizes, depth and counts are limited
 //! before anything is built, and an external file is only read through the caller's `resolve`.
 
+mod animation;
+pub mod skin;
+
 use std::collections::HashMap;
 
 use gltf::mesh::Mode;
@@ -32,12 +35,19 @@ pub struct ImportedNode {
     pub scale: Vec3,
     /// In the node's own coordinates (before the node's transform).
     pub mesh: PolygonMesh,
+    /// Per-vertex joint weights, in `mesh.positions` order, when the file skins this mesh
+    /// (`DR-23`, phase 4). `None` means the mesh is not skinned.
+    pub skin: Option<crate::skin::ImportSkin>,
     pub color: Color,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ImportedModel {
     pub nodes: Vec<ImportedNode>,
+    /// The skeleton the file carries, when it has one (phase 4, `DR-23`).
+    pub skeleton: Option<petunia_anim::Skeleton>,
+    /// The clips of the file, ready to play.
+    pub clips: Vec<petunia_anim::Clip>,
     /// What was left out or changed, one sentence each (for the person to read).
     pub warnings: Vec<String>,
 }
@@ -116,15 +126,9 @@ pub fn import_gltf(
             "as texturas foram ignoradas: só a cor base de cada material é usada".to_string(),
         );
     }
-    if document.animations().count() > 0 {
-        model
-            .warnings
-            .push("as animações foram ignoradas".to_string());
-    }
-    if document.skins().count() > 0 {
-        model
-            .warnings
-            .push("o esqueleto (skin) foi ignorado: a malha vem na pose de repouso".to_string());
+    // Skeleton and clips (phase 4). A file without them keeps working exactly as before.
+    if document.skins().count() > 0 || document.animations().count() > 0 {
+        crate::animation::read_animation(&parsed.document, &buffers, &mut model);
     }
     if model.nodes.is_empty() {
         return Err(ImportError::Refused(
@@ -184,17 +188,22 @@ fn walk(
             .or_else(|| mesh.name())
             .map_or_else(|| format!("Nó {}", node.index()), str::to_string);
         match build_mesh(&mesh, buffers, total_vertices) {
-            Ok(Some((polygon, color, note))) => {
+            Ok(Some((polygon, color, skin_weights, note))) => {
                 let (position, rotation_degrees, scale) = decompose(&world);
                 if let Some(note) = note {
                     model.warnings.push(format!("{name}: {note}"));
                 }
+                let skin = skin_weights.map(|weights| crate::skin::ImportSkin {
+                    skeleton: node.skin().map(|skin| skin.index()).unwrap_or(0),
+                    weights,
+                });
                 model.nodes.push(ImportedNode {
                     name,
                     position,
                     rotation_degrees,
                     scale,
                     mesh: polygon,
+                    skin,
                     color,
                 });
             }
@@ -223,14 +232,27 @@ fn walk(
 
 /// All triangle primitives of a mesh, joined and welded into one polygon mesh.
 #[allow(clippy::type_complexity)]
+/// What one primitive contributes: the welded polygon, its colour, the skin weights per welded
+/// vertex (when the primitive is skinned), and a sentence to show when something was left out.
+type BuiltMesh = (
+    PolygonMesh,
+    Color,
+    Option<Vec<crate::skin::VertexWeights>>,
+    Option<String>,
+);
+
 fn build_mesh(
     mesh: &gltf::Mesh<'_>,
     buffers: &[Vec<u8>],
     total_vertices: &mut usize,
-) -> Result<Option<(PolygonMesh, Color, Option<String>)>, ImportError> {
+) -> Result<Option<BuiltMesh>, ImportError> {
     let mut positions: Vec<Vec3> = Vec::new();
     let mut faces: Vec<Vec<u32>> = Vec::new();
     let mut lookup: HashMap<[i64; 3], u32> = HashMap::new();
+    // Skin weights, one per welded vertex, carried beside the mesh (`DR-23`, phase 4).
+    let mut weights: Vec<crate::skin::VertexWeights> = Vec::new();
+    let mut skinned = false;
+    let mut seam_note = false;
     let mut color = None;
     let mut materials = 0usize;
     for primitive in mesh.primitives() {
@@ -265,9 +287,34 @@ fn build_mesh(
                 "um triângulo aponta para um vértice que não existe".to_string(),
             ));
         }
+        // Skin weights of this primitive, when it has any. `None` means "not a skinned primitive".
+        let primitive_weights: Option<Vec<crate::skin::VertexWeights>> =
+            if let (Some(joints), Some(weights_read)) =
+                (reader.read_joints(0), reader.read_weights(0))
+            {
+                let joints: Vec<[u16; 4]> = joints.into_u16().collect();
+                let weights_read: Vec<[f32; 4]> = weights_read.into_f32().collect();
+                let count = joints.len().min(weights_read.len());
+                Some(
+                    (0..count)
+                        .map(|index| {
+                            crate::skin::VertexWeights::read(
+                                joints.get(index).copied().unwrap_or([0; 4]),
+                                weights_read.get(index).copied().unwrap_or([0.0; 4]),
+                            )
+                            .unwrap_or_default()
+                        })
+                        .collect(),
+                )
+            } else {
+                None
+            };
+        if primitive_weights.is_some() {
+            skinned = true;
+        }
         // Weld by position so editing tools see one vertex where the file split them for normals.
         let mut remap: Vec<u32> = Vec::with_capacity(source.len());
-        for point in &source {
+        for (source_index, point) in source.iter().enumerate() {
             let key = [
                 (point[0] / WELD_STEP).round() as i64,
                 (point[1] / WELD_STEP).round() as i64,
@@ -275,10 +322,29 @@ fn build_mesh(
             ];
             let next = u32::try_from(positions.len())
                 .map_err(|_| ImportError::Refused("vértices demais".to_string()))?;
+            let mut fresh = false;
             let index = *lookup.entry(key).or_insert_with(|| {
                 positions.push(Vec3::new(point[0], point[1], point[2]));
+                fresh = true;
                 next
             });
+            if fresh {
+                // The first vertex that owns this position keeps its weights. A second one with a
+                // different weight set is a seam (two limbs meeting); merging them would bend the
+                // model where the artist put a crease, so the first wins and the file says so.
+                let take = primitive_weights
+                    .as_ref()
+                    .and_then(|list| list.get(source_index).copied())
+                    .unwrap_or_default();
+                weights.push(take);
+            } else if let (Some(list), Some(taken)) = (
+                primitive_weights.as_ref(),
+                weights.get(usize::try_from(index).unwrap_or(0)),
+            ) && let Some(other) = list.get(source_index)
+                && (other.weights[0] - taken.weights[0]).abs() > 1e-3
+            {
+                seam_note = true;
+            }
             remap.push(index);
         }
         let triangle = |a: u32, b: u32, c: u32, faces: &mut Vec<Vec<u32>>| {
@@ -355,9 +421,26 @@ fn build_mesh(
     polygon
         .validate()
         .map_err(|error| ImportError::Refused(error.0))?;
-    let note = (materials > 1)
-        .then(|| format!("tem {materials} materiais; a malha usa a cor do primeiro"));
-    Ok(Some((polygon, color.unwrap_or(Color::WHITE), note)))
+    let mut notes: Vec<String> = Vec::new();
+    if materials > 1 {
+        notes.push(format!(
+            "tem {materials} materiais; a malha usa a cor do primeiro"
+        ));
+    }
+    if seam_note {
+        notes.push(
+            "duas partes da malha caem na mesma posição com pesos diferentes; ficou o primeiro              (costura entre membros)"
+                .to_string(),
+        );
+    }
+    let note = (!notes.is_empty()).then(|| notes.join("; "));
+    let skin_weights = skinned.then_some(weights);
+    Ok(Some((
+        polygon,
+        color.unwrap_or(Color::WHITE),
+        skin_weights,
+        note,
+    )))
 }
 
 /// Position, engine Euler degrees and scale of a world matrix. A mirrored matrix gets a negative
@@ -638,5 +721,192 @@ mod tests {
     fn the_same_file_gives_the_same_model() {
         let file = cube_glb("", r#""translation":[0.5,0.5,0.5]"#);
         assert_eq!(import_gltf(&file, &nothing), import_gltf(&file, &nothing));
+    }
+
+    /// A tiny GLB with one skinned triangle: 2 joints, an animation that moves the root.
+    ///
+    /// Built byte by byte because the crate has no fixture and a real model would be a large binary
+    /// in the repository; the bytes are the smallest document that exercises skin + clip reading.
+    fn skinned_glb() -> Vec<u8> {
+        // One skinned triangle: 3 vertices, 2 joints, and a clip that moves the root.
+        //
+        // The float block, in order: positions (3 x vec3), weights (3 x vec4), inverse binds
+        // (2 x mat4), clip times (2), clip translations (2 x vec3). The joints are `u16` and live
+        // in their own region after the floats, because glTF requires an integer accessor there.
+        let mut floats: Vec<f32> = Vec::new();
+        // Triangle on the ground.
+        floats.extend([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]);
+        let positions_len = floats.len() * 4;
+        // Every vertex: joint 0, full weight.
+        for _ in 0..3 {
+            floats.extend([1.0, 0.0, 0.0, 0.0]);
+        }
+        let weights_at = floats.len() * 4 - 48;
+        let weights_len = 48;
+        // Inverse binds: identity for both joints.
+        for _ in 0..2 {
+            floats.extend([
+                1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            ]);
+        }
+        let binds_at = weights_at + weights_len;
+        let binds_len = floats.len() * 4 - binds_at;
+        let times_at = floats.len() * 4;
+        floats.extend([0.0, 1.0]);
+        let translations_at = floats.len() * 4;
+        floats.extend([0.0, 0.0, 0.0, 2.0, 0.0, 0.0]);
+        let translations_len = floats.len() * 4 - translations_at;
+        // Joints: u16, four per vertex, all zero.
+        let joints_at = floats.len() * 4;
+        let joints_len = 3 * 4 * 2;
+        let indices_at = joints_at + joints_len + 2; // keep the block 4-aligned below
+        let indices_len = 6;
+
+        let mut binary = Vec::new();
+        for value in &floats {
+            binary.extend(value.to_le_bytes());
+        }
+        while binary.len() < joints_at {
+            binary.push(0);
+        }
+        for _ in 0..3 {
+            for _ in 0..4 {
+                binary.extend(0u16.to_le_bytes());
+            }
+        }
+        while binary.len() % 4 != 0 {
+            binary.push(0);
+        }
+        for index in [0u16, 1, 2] {
+            binary.extend(index.to_le_bytes());
+        }
+        let indices_at = indices_at.min(binary.len() - indices_len);
+        while binary.len() % 4 != 0 {
+            binary.push(0);
+        }
+
+        let json = format!(
+            r#"{{
+  "asset": {{ "version": "2.0" }},
+  "scene": 0,
+  "scenes": [{{ "nodes": [0] }}],
+  "nodes": [
+    {{ "name": "raiz", "children": [1, 2], "translation": [0, 0, 0] }},
+    {{ "name": "filho", "translation": [0, 1, 0] }},
+    {{ "name": "malha", "mesh": 0, "skin": 0 }}
+  ],
+  "skins": [{{ "joints": [0, 1], "inverseBindMatrices": 2 }}],
+  "meshes": [{{
+    "primitives": [{{
+      "attributes": {{ "POSITION": 0, "JOINTS_0": 5, "WEIGHTS_0": 1 }},
+      "indices": 6,
+      "mode": 4
+    }}]
+  }}],
+  "animations": [{{
+    "name": "anda",
+    "channels": [
+      {{ "sampler": 0, "target": {{ "node": 0, "path": "translation" }} }}
+    ],
+    "samplers": [{{ "input": 3, "output": 4, "interpolation": "LINEAR" }}]
+  }}],
+  "bufferViews": [
+    {{ "buffer": 0, "byteOffset": 0, "byteLength": {positions_len} }},
+    {{ "buffer": 0, "byteOffset": {weights_at}, "byteLength": {weights_len} }},
+    {{ "buffer": 0, "byteOffset": {binds_at}, "byteLength": {binds_len} }},
+    {{ "buffer": 0, "byteOffset": {times_at}, "byteLength": 8 }},
+    {{ "buffer": 0, "byteOffset": {translations_at}, "byteLength": {translations_len} }},
+    {{ "buffer": 0, "byteOffset": {joints_at}, "byteLength": {joints_len} }},
+    {{ "buffer": 0, "byteOffset": {indices_at}, "byteLength": {indices_len} }}
+  ],
+  "accessors": [
+    {{ "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3",
+       "min": [0, 0, 0], "max": [1, 0, 1] }},
+    {{ "bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC4" }},
+    {{ "bufferView": 2, "componentType": 5126, "count": 2, "type": "MAT4" }},
+    {{ "bufferView": 3, "componentType": 5126, "count": 2, "type": "SCALAR" }},
+    {{ "bufferView": 4, "componentType": 5126, "count": 2, "type": "VEC3" }},
+    {{ "bufferView": 5, "componentType": 5123, "count": 3, "type": "VEC4" }},
+    {{ "bufferView": 6, "componentType": 5123, "count": 3, "type": "SCALAR" }}
+  ],
+  "buffers": [{{ "byteLength": {binary_len} }}]
+}}"#,
+            binary_len = binary.len(),
+        );
+
+        let json_bytes = json.as_bytes();
+        let json_padding = (4 - json_bytes.len() % 4) % 4;
+        let mut json_chunk = json_bytes.to_vec();
+        json_chunk.extend(std::iter::repeat_n(b' ', json_padding));
+        let mut out = Vec::new();
+        out.extend(0x4654_6C67u32.to_le_bytes()); // "glTF"
+        out.extend(2u32.to_le_bytes());
+        let total = 12 + 8 + json_chunk.len() + 8 + binary.len();
+        out.extend((total as u32).to_le_bytes());
+        out.extend((json_chunk.len() as u32).to_le_bytes());
+        out.extend(0x4E4F_534Au32.to_le_bytes()); // "JSON"
+        out.extend(&json_chunk);
+        out.extend((binary.len() as u32).to_le_bytes());
+        out.extend(0x004E_4942u32.to_le_bytes()); // "BIN\0"
+        out.extend(&binary);
+        out
+    }
+
+    #[test]
+    fn a_glb_with_a_skeleton_and_a_clip_is_read() {
+        let bytes = skinned_glb();
+        let model = import_gltf(&bytes, &nothing).expect("the file imports");
+        let skeleton = model.skeleton.expect("the file has a skeleton");
+        assert_eq!(skeleton.len(), 2, "two joints");
+        assert_eq!(model.clips.len(), 1, "one clip");
+        let clip = model.clips.first().expect("clip");
+        assert_eq!(clip.name, "anda");
+        assert!(
+            (clip.duration() - 1.0).abs() < 1e-5,
+            "{:?}",
+            clip.duration()
+        );
+        // At the end the root is at x=2, and the child rides along at its own y=1.
+        let pose = skeleton.pose(clip, 1.0, 1.0);
+        assert!(
+            (pose[0].0[12] - 2.0).abs() < 1e-5,
+            "root moved: {:?}",
+            pose[0]
+        );
+        assert!(
+            (pose[1].0[12] - 2.0).abs() < 1e-5,
+            "child follows: {:?}",
+            pose[1]
+        );
+        assert!(
+            (pose[1].0[13] - 1.0).abs() < 1e-5,
+            "child keeps its y: {:?}",
+            pose[1]
+        );
+
+        // The mesh carries its weights: every welded vertex belongs to joint 0 with full weight.
+        let node = model.nodes.first().expect("mesh node");
+        let skin = node.skin.as_ref().expect("the mesh is skinned");
+        assert_eq!(skin.weights.len(), node.mesh.positions.len());
+        let first = skin.weights.first().expect("weights");
+        assert!((first.weights[0] - 1.0).abs() < 1e-5, "{first:?}");
+        // With the clip's matrices, the weighted vertex follows the root to x=2.
+        let matrices = skeleton.skinning_matrices(clip, 1.0, 1.0);
+        let point = node.mesh.positions.first().copied().expect("vertex");
+        let moved = first.transform(point, &matrices);
+        assert!(
+            (moved.x - 2.0).abs() < 1e-4,
+            "the vertex is skinned: {moved:?}"
+        );
+    }
+
+    #[test]
+    fn a_file_without_a_skeleton_keeps_working() {
+        // The existing cube fixture: no skin, no animation.
+        let bytes = cube_glb("", "\"translation\":[0,0,0]");
+        let model = import_gltf(&bytes, &|_| None).expect("imports");
+        assert!(model.skeleton.is_none());
+        assert!(model.clips.is_empty());
+        assert_eq!(model.nodes.len(), 1, "the mesh is still there");
     }
 }

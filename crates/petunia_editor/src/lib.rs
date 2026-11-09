@@ -7,20 +7,27 @@
 //!
 //! This crate knows nothing about windows, Qt or the GPU.
 
+mod animation;
 mod assets;
+mod autosave;
 mod brush_ops;
+mod collider_handles;
 mod colliders;
 mod failure;
 mod floors;
+mod flora_weather;
 mod gizmo;
 mod graph_ops;
 mod lights;
 mod mesh_tool;
 mod natural_ops;
 mod natural_tool;
+mod object_state;
 mod play;
 mod prefabs;
 mod protocol;
+mod rig;
+mod scene_graph;
 mod scripts;
 mod sculpt_tool;
 mod session;
@@ -53,6 +60,60 @@ mod tests {
     fn count(session: &mut EditorSession) -> u64 {
         let snapshot = call(session, json!({ "op": "editor.snapshot" }));
         snapshot["result"]["entity_count"].as_u64().unwrap_or(0)
+    }
+
+    #[test]
+    fn autosave_saves_unsaved_work_and_waits_while_a_drag_is_live() {
+        let root = scratch_dir("autosave");
+        let mut session = EditorSession::new().expect("session");
+        call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "auto" }),
+        );
+        // A fresh project is saved: nothing to do.
+        let clean = call(&mut session, json!({ "op": "editor.autosave" }));
+        assert_eq!(clean["result"]["saved"], false, "{clean}");
+        assert_eq!(clean["result"]["reason"], "clean", "{clean}");
+
+        // A command marks the scene dirty; autosave writes it.
+        call(
+            &mut session,
+            json!({ "op": "create.brush", "shape": "box" }),
+        );
+        let saved = call(&mut session, json!({ "op": "editor.autosave" }));
+        assert_eq!(saved["result"]["saved"], true, "{saved}");
+        let scene = std::fs::read_to_string(root.join("scenes/room.scene.json")).expect("scene");
+        assert!(scene.contains("\"Brush\""), "the box reached the file");
+
+        // Nothing new: the second ask is a no-op, so the timer never rewrites the file.
+        let again = call(&mut session, json!({ "op": "editor.autosave" }));
+        assert_eq!(again["result"]["reason"], "clean", "{again}");
+
+        // While a live preview is changing the world without a command, saving would store the
+        // preview instead of the committed scene, so autosave waits.
+        let made = call(
+            &mut session,
+            json!({ "op": "create.brush", "shape": "box" }),
+        );
+        let entity = made["result"]["entity"].as_u64().expect("entity");
+        let before = std::fs::read_to_string(root.join("scenes/room.scene.json")).expect("scene");
+        let preview = call(
+            &mut session,
+            json!({
+                "op": "gesture.preview",
+                "entity": entity,
+                "table": "Transform",
+                "column": "position",
+                "value": { "x": 9.0, "y": 0.0, "z": 0.0 },
+            }),
+        );
+        assert_eq!(preview["ok"], true, "{preview}");
+        let busy = call(&mut session, json!({ "op": "editor.autosave" }));
+        assert_eq!(busy["result"]["reason"], "busy", "{busy}");
+        let after = std::fs::read_to_string(root.join("scenes/room.scene.json")).expect("scene");
+        assert_eq!(before, after, "the file did not take the live preview");
+        call(&mut session, json!({ "op": "gesture.cancel" }));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

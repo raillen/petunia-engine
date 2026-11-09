@@ -7,6 +7,9 @@ publish.workspace = true
 description = "Renderer boundary: camera, matrices, meshes and the frame extracted from the world. No GPU code."
 
 [dependencies]
+petunia_flora.workspace = true
+serde.workspace = true
+petunia_anim.workspace = true
 petunia_math.workspace = true
 petunia_world.workspace = true
 petunia_sculpt.workspace = true

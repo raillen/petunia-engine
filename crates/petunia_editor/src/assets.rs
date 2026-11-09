@@ -284,10 +284,17 @@ impl EditorSession {
             target.z - (low.z + high.z) * 0.5,
         );
 
-        let mut records: Vec<CommandRecord> = model
-            .nodes
-            .iter()
-            .map(|node| {
+        // The skeleton and its clips travel in the same batch as the meshes: one undo takes the
+        // whole character away instead of leaving an orphan skeleton behind (`DR-23`, phase 4).
+        let has_rig = model.skeleton.is_some();
+        let mut records: Vec<CommandRecord> = Vec::new();
+        if let Some(skeleton) = model.skeleton.as_ref() {
+            for row in crate::rig::model_rows(skeleton, &model.clips, &stored.display().to_string())
+            {
+                records.push(CommandRecord::new("world.create", json!({ "rows": row })));
+            }
+        }
+        records.extend(model.nodes.iter().map(|node| {
                 CommandRecord::new(
                     "world.create",
                     json!({ "rows": {
@@ -303,9 +310,10 @@ impl EditorSession {
                         }
                     } }),
                 )
-            })
-            .collect();
-        let count = records.len();
+            }));
+
+        // `count` is meshes, not rows: the skeleton and clips are extra rows in the same batch.
+        let count = model.nodes.len();
         let record = match records.len() {
             0 => {
                 return Err(failure(
@@ -325,6 +333,67 @@ impl EditorSession {
         };
         let first = first.and_then(Json::as_u64);
         self.selection = first;
+
+        // The entity ids the batch produced, in order. The skeleton and clip rows come first, so the
+        // meshes are the last `count` entries.
+        let produced: Vec<u64> = if result.is_array() {
+            result
+                .as_array()
+                .map(|rows| {
+                    rows.iter()
+                        .filter_map(|row| row.get("entity").and_then(Json::as_u64))
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            result
+                .get("entity")
+                .and_then(Json::as_u64)
+                .into_iter()
+                .collect()
+        };
+        let mesh_entities: Vec<u64> = produced
+            .iter()
+            .rev()
+            .take(count)
+            .copied()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+
+        // Skin weights come last: they point at the skeleton row, whose id only exists once the
+        // batch above ran. A mesh whose weights could not be written keeps its bind pose, and its
+        // name is reported instead of a character that silently does not move.
+        let mut unskinned: Vec<String> = Vec::new();
+        if has_rig && let Some(skeleton_row) = self.newest_skeleton_row() {
+            let mut records = Vec::new();
+            for (node, entity) in model.nodes.iter().zip(mesh_entities.iter()) {
+                let Some(skin) = node.skin.as_ref() else {
+                    continue;
+                };
+                records.push((
+                    *entity,
+                    CommandRecord::new(
+                        "world.create",
+                        json!({ "rows": {
+                            "Skin": {
+                                "owner": *entity as i64,
+                                "skeleton": skeleton_row as i64,
+                                "weights": crate::rig::skin_to_text(skeleton_row, skin)
+                            },
+                            "SkeletonLink": { "skeleton": skeleton_row as i64 }
+                        } }),
+                    ),
+                ));
+            }
+            for (entity, record) in records {
+                if self.execute(&record).is_err() {
+                    unskinned.push(entity.to_string());
+                }
+            }
+        }
+
         let names: Vec<&str> = model.nodes.iter().map(|node| node.name.as_str()).collect();
         Ok(json!({
             "imported": count,
@@ -332,7 +401,20 @@ impl EditorSession {
             "asset": format!("{ASSETS_DIRECTORY}/{}", stored.display()),
             "warnings": model.warnings,
             "entity": first,
+            "unskinned": unskinned,
         }))
+    }
+}
+
+impl EditorSession {
+    /// The skeleton row created by the most recent import (the last one in the world).
+    fn newest_skeleton_row(&self) -> Option<u64> {
+        let world = self.world().ok()?;
+        let handles = world.entities_with_table("Skeleton").ok()?;
+        handles
+            .into_iter()
+            .filter_map(|handle| world.persistent_id(handle).ok().map(|id| id.0))
+            .max()
     }
 }
 
@@ -497,5 +579,178 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A GLB with two joints and one clip, built byte by byte.
+    fn skinned_glb() -> Vec<u8> {
+        let mut floats: Vec<f32> = Vec::new();
+        floats.extend([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]);
+        let positions_len = floats.len() * 4;
+        for _ in 0..3 {
+            floats.extend([1.0, 0.0, 0.0, 0.0]);
+        }
+        let weights_at = floats.len() * 4 - 48;
+        for _ in 0..2 {
+            floats.extend([
+                1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            ]);
+        }
+        let binds_at = weights_at + 48;
+        let binds_len = floats.len() * 4 - binds_at;
+        let times_at = floats.len() * 4;
+        floats.extend([0.0, 1.0]);
+        let translations_at = floats.len() * 4;
+        floats.extend([0.0, 0.0, 0.0, 2.0, 0.0, 0.0]);
+        let translations_len = floats.len() * 4 - translations_at;
+        let joints_at = floats.len() * 4;
+        let joints_len = 3 * 4 * 2;
+
+        let mut binary = Vec::new();
+        for value in &floats {
+            binary.extend(value.to_le_bytes());
+        }
+        while binary.len() < joints_at {
+            binary.push(0);
+        }
+        for _ in 0..3 {
+            for _ in 0..4 {
+                binary.extend(0u16.to_le_bytes());
+            }
+        }
+        while binary.len() % 4 != 0 {
+            binary.push(0);
+        }
+        let indices_at = binary.len();
+        for index in [0u16, 1, 2] {
+            binary.extend(index.to_le_bytes());
+        }
+        while binary.len() % 4 != 0 {
+            binary.push(0);
+        }
+
+        let json = format!(
+            r#"{{
+  "asset": {{ "version": "2.0" }},
+  "scene": 0,
+  "scenes": [{{ "nodes": [0] }}],
+  "nodes": [
+    {{ "name": "raiz", "children": [1, 2] }},
+    {{ "name": "filho", "translation": [0, 1, 0] }},
+    {{ "name": "malha", "mesh": 0, "skin": 0 }}
+  ],
+  "skins": [{{ "joints": [0, 1], "inverseBindMatrices": 2 }}],
+  "meshes": [{{ "primitives": [{{
+      "attributes": {{ "POSITION": 0, "JOINTS_0": 5, "WEIGHTS_0": 1 }},
+      "indices": 6, "mode": 4 }}] }}],
+  "animations": [{{ "name": "anda", "channels": [
+      {{ "sampler": 0, "target": {{ "node": 0, "path": "translation" }} }}],
+    "samplers": [{{ "input": 3, "output": 4, "interpolation": "LINEAR" }}] }}],
+  "bufferViews": [
+    {{ "buffer": 0, "byteOffset": 0, "byteLength": {positions_len} }},
+    {{ "buffer": 0, "byteOffset": {weights_at}, "byteLength": 48 }},
+    {{ "buffer": 0, "byteOffset": {binds_at}, "byteLength": {binds_len} }},
+    {{ "buffer": 0, "byteOffset": {times_at}, "byteLength": 8 }},
+    {{ "buffer": 0, "byteOffset": {translations_at}, "byteLength": {translations_len} }},
+    {{ "buffer": 0, "byteOffset": {joints_at}, "byteLength": {joints_len} }},
+    {{ "buffer": 0, "byteOffset": {indices_at}, "byteLength": 6 }}
+  ],
+  "accessors": [
+    {{ "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3",
+       "min": [0, 0, 0], "max": [1, 0, 1] }},
+    {{ "bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC4" }},
+    {{ "bufferView": 2, "componentType": 5126, "count": 2, "type": "MAT4" }},
+    {{ "bufferView": 3, "componentType": 5126, "count": 2, "type": "SCALAR" }},
+    {{ "bufferView": 4, "componentType": 5126, "count": 2, "type": "VEC3" }},
+    {{ "bufferView": 5, "componentType": 5123, "count": 3, "type": "VEC4" }},
+    {{ "bufferView": 6, "componentType": 5123, "count": 3, "type": "SCALAR" }}
+  ],
+  "buffers": [{{ "byteLength": {binary_len} }}]
+}}"#,
+            binary_len = binary.len(),
+        );
+        let json_bytes = json.as_bytes();
+        let padding = (4 - json_bytes.len() % 4) % 4;
+        let mut chunk = json_bytes.to_vec();
+        chunk.extend(std::iter::repeat_n(b' ', padding));
+        let mut out = Vec::new();
+        out.extend(0x4654_6C67u32.to_le_bytes());
+        out.extend(2u32.to_le_bytes());
+        let total = 12 + 8 + chunk.len() + 8 + binary.len();
+        out.extend((total as u32).to_le_bytes());
+        out.extend((chunk.len() as u32).to_le_bytes());
+        out.extend(0x4E4F_534Au32.to_le_bytes());
+        out.extend(&chunk);
+        out.extend((binary.len() as u32).to_le_bytes());
+        out.extend(0x004E_4942u32.to_le_bytes());
+        out.extend(&binary);
+        out
+    }
+
+    #[test]
+    fn importing_a_character_writes_its_skeleton_clip_and_skin() {
+        let root =
+            std::env::temp_dir().join(format!("petunia_editor_test_rig_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let mut session = EditorSession::new().expect("session");
+        call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "rig" }),
+        );
+        std::fs::create_dir_all(root.join("assets")).expect("assets");
+        std::fs::write(root.join("assets/personagem.glb"), skinned_glb()).expect("glb");
+
+        let imported = call(
+            &mut session,
+            json!({ "op": "asset.import", "path": "assets/personagem.glb" }),
+        );
+        assert_eq!(imported["imported"], 1, "{imported}");
+        assert_eq!(
+            imported["unskinned"].as_array().map(Vec::len),
+            Some(0),
+            "{imported}"
+        );
+
+        let world = session.world().expect("world");
+        let skeletons = world.entities_with_table("Skeleton").expect("table");
+        assert_eq!(skeletons.len(), 1, "one skeleton");
+        let clips = world.entities_with_table("Clip").expect("table");
+        assert_eq!(clips.len(), 1, "one clip");
+        let skins = world.entities_with_table("Skin").expect("table");
+        assert_eq!(skins.len(), 1, "one skinned mesh");
+
+        let skeleton_row = skeletons.first().copied().expect("row");
+        let joints = world
+            .get(skeleton_row, "Skeleton", "joints")
+            .expect("joints");
+        let parsed = crate::rig::skeleton_from_text(match joints {
+            petunia_world::Value::Text(text) => text,
+            _ => panic!("joints are text"),
+        })
+        .expect("the skeleton parses back");
+        assert_eq!(parsed.len(), 2);
+
+        let clip_row = clips.first().copied().expect("row");
+        let channels = world.get(clip_row, "Clip", "channels").expect("channels");
+        let clip = crate::rig::clip_from_text(
+            "anda",
+            match channels {
+                petunia_world::Value::Text(text) => text,
+                _ => panic!("channels are text"),
+            },
+        )
+        .expect("the clip parses back");
+        assert_eq!(clip.channels.len(), 1);
+        assert!((clip.duration() - 1.0).abs() < 1e-4);
+
+        let skin_row = skins.first().copied().expect("row");
+        let weights = world.get(skin_row, "Skin", "weights").expect("weights");
+        let (_, parsed_weights) = crate::rig::skin_from_text(match weights {
+            petunia_world::Value::Text(text) => text,
+            _ => panic!("weights are text"),
+        })
+        .expect("the weights parse back");
+        assert_eq!(parsed_weights.len(), 3, "one weight per welded vertex");
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

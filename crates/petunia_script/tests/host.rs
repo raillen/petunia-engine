@@ -10,7 +10,7 @@
 
 use petunia_commands::{CommandRecord, Dispatcher};
 use petunia_project::register_standard_tables;
-use petunia_script::{API, ScriptHost, ScriptLimits, api_json, simulate};
+use petunia_script::{API, PlayerInput, ScriptHost, ScriptLimits, api_json, simulate};
 use petunia_world::{PersistentId, Value, World};
 use serde_json::json;
 
@@ -71,8 +71,9 @@ fn on_start(entity) {
 }
 
 fn on_update(entity, dt) {
-    let position = world.get(entity, "Transform", "position")
-    world.set(entity, "Transform", "position", { "x": position["x"] + 1.0, "y": position["y"], "z": position["z"] })
+    var position = world.get(entity, "Transform", "position")
+    position.x = position.x + 1.0
+    world.set(entity, "Transform", "position", position)
 }
 "#;
 
@@ -290,7 +291,7 @@ var elapsed = 0.0
 
 fn on_update(entity, dt) {
     elapsed = elapsed + dt
-    transform.set_position(entity, elapsed, 0.0, 0.0)
+    transform.set_position(entity, Vec3{ x: elapsed, y: 0.0, z: 0.0 })
 }
 "#,
     )
@@ -428,26 +429,26 @@ fn on_start(entity) {
     transform.move_y(entity, delta = 1.5)
     transform.move_z(entity, delta = -2.0)
     transform.rotate_y(entity, degrees = 90.0)
-    transform.set_scale(entity, x = 2.0, y = 2.0, z = 2.0)
+    transform.set_scale(entity, Vec3{ x: 2.0, y: 2.0, z: 2.0 })
 
-    let pos = transform.get_position(entity)
-    let rot = transform.get_rotation(entity)
-    let scl = transform.get_scale(entity)
+    let pos = transform.position(entity)
+    let rot = transform.rotation(entity)
+    let scl = transform.scale(entity)
     let fwd = transform.forward(entity)
     let rgt = transform.right(entity)
     let up = transform.up(entity)
 
-    log.info("pos", pos["x"], pos["y"], pos["z"])
-    log.info("rot", rot["x"], rot["y"], rot["z"])
-    log.info("scl", scl["x"], scl["y"], scl["z"])
-    log.info("fwd", fwd["x"], fwd["y"], fwd["z"])
-    log.info("rgt", rgt["x"], rgt["y"], rgt["z"])
-    log.info("up", up["x"], up["y"], up["z"])
+    log.info("pos", pos.x, pos.y, pos.z)
+    log.info("rot", rot.x, rot.y, rot.z)
+    log.info("scl", scl.x, scl.y, scl.z)
+    log.info("fwd", fwd.x, fwd.y, fwd.z)
+    log.info("rgt", rgt.x, rgt.y, rgt.z)
+    log.info("up", up.x, up.y, up.z)
 }
 
 fn on_update(entity, dt) {
-    transform.move(entity, x = -1.0, y = 0.5, z = 1.0)
-    transform.rotate(entity, x = 10.0, y = 10.0, z = 10.0)
+    transform.move(entity, Vec3{ x: -1.0, y: 0.5, z: 1.0 })
+    transform.rotate(entity, Vec3{ x: 10.0, y: 10.0, z: 10.0 })
 }
 "#,
     )
@@ -535,7 +536,7 @@ fn transform_on_missing_entity_is_a_recoverable_failure() {
         r#"
 fn on_start(entity) {
     attempt {
-        let pos = transform.get_position(999999)?
+        let pos = transform.position(999999)?
     } failed erro {
         log.info("recuperado", erro.message)
     }
@@ -618,4 +619,141 @@ fn on_start(entity) {
         "{lines:?}"
     );
     assert!(host.take_faults().is_empty());
+}
+
+/// DR-40: a project runs the files of its own programming method. A leftover of the other one is
+/// not loaded, so the Doctor's warning ("this does not run") is true instead of a lie.
+#[test]
+fn only_the_projects_own_method_is_loaded() {
+    let root =
+        std::env::temp_dir().join(format!("petunia_script_test_method_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("dir");
+    std::fs::write(
+        root.join("script.aipo"),
+        "fn on_start(entity) {\n    log.info(\"aipo\", entity)\n}\n",
+    )
+    .expect("aipo");
+    std::fs::write(
+        root.join("graph.graph.json"),
+        r#"{"schema_version":2,"nodes":[{"id":1,"kind":"event.on_start","params":{}}],"edges":[]}"#,
+    )
+    .expect("graph");
+
+    // An Aipo project loads the script and not the graph.
+    let mut aipo_world = World::new(7);
+    register_standard_tables(&mut aipo_world).expect("tables");
+    let mut aipo = ScriptHost::new(aipo_world).expect("host");
+    let report = aipo.load_directory(&root, "aipo");
+    assert_eq!(report.loaded, vec!["script".to_string()], "{report:?}");
+
+    // A pNodes project loads the graph and not the script.
+    let mut nodes_world = World::new(7);
+    register_standard_tables(&mut nodes_world).expect("tables");
+    let mut nodes = ScriptHost::new(nodes_world).expect("host");
+    let report = nodes.load_directory(&root, "nodes");
+    assert_eq!(report.loaded, vec!["graph".to_string()], "{report:?}");
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn pressing_interact_reaches_the_nearest_door_and_zero_life_is_one_event() {
+    let mut world = World::new(7);
+    register_standard_tables(&mut world).expect("tables");
+    let mut dispatcher = Dispatcher::with_builtin().expect("dispatcher");
+    dispatcher
+        .execute(
+            &mut world,
+            &CommandRecord::new(
+                "world.create",
+                json!({ "rows": {
+                    "Name": { "text": "Jogador" },
+                    "Transform": { "position": { "x": 0.0, "y": 0.0, "z": 0.0 } },
+                    "Character": { "player": true }
+                }}),
+            ),
+        )
+        .expect("player");
+    dispatcher
+        .execute(
+            &mut world,
+            &CommandRecord::new(
+                "world.create",
+                json!({ "rows": {
+                    "Name": { "text": "Porta" },
+                    "Transform": { "position": { "x": 0.0, "y": 0.0, "z": 1.0 } },
+                    "Script": { "file": "porta", "enabled": true },
+                    "Interact": { "radius": 2.0, "prompt": "Abrir" },
+                    "Health": { "current": 30.0, "maximum": 100.0 }
+                }}),
+            ),
+        )
+        .expect("door");
+    let far = dispatcher
+        .execute(
+            &mut world,
+            &CommandRecord::new(
+                "world.create",
+                json!({ "rows": {
+                    "Name": { "text": "Longe" },
+                    "Transform": { "position": { "x": 20.0, "y": 0.0, "z": 0.0 } },
+                    "Script": { "file": "porta", "enabled": true },
+                    "Interact": { "radius": 2.0, "prompt": "Longe" }
+                }}),
+            ),
+        )
+        .expect("far");
+    let far_id = far["entity"].as_u64().expect("id");
+    let mut host = ScriptHost::new(world).expect("host");
+    host.load(
+        "porta",
+        r#"
+fn on_event(entity, name) {
+    log.info(name, entity)
+    if name == "interact" {
+        health.damage(entity, 30.0)
+    }
+}
+"#,
+    )
+    .expect("compiles");
+    assert_eq!(host.interact_prompt().as_deref(), Some("Abrir"));
+    host.set_player_input(PlayerInput {
+        interact: true,
+        ..PlayerInput::default()
+    });
+    host.update(0.016);
+    let lines: Vec<String> = host.take_log().into_iter().map(|line| line.text).collect();
+    assert!(
+        lines.iter().any(|line| line.starts_with("interact ")),
+        "{lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.starts_with("died ")),
+        "{lines:?}"
+    );
+    let world = host.world();
+    let door = lines
+        .iter()
+        .find(|line| line.starts_with("interact "))
+        .expect("interact line");
+    let id: u64 = door.split(' ').nth(1).expect("id").parse().expect("number");
+    assert_ne!(id, far_id);
+    let handle = world.handle_of(PersistentId(id)).expect("door");
+    let Value::Float(life) = world.get(handle, "Health", "current").expect("life") else {
+        panic!("life is not a number");
+    };
+    assert!(*life <= 0.0, "{life}");
+    drop(world);
+    host.set_player_input(PlayerInput {
+        interact: true,
+        ..PlayerInput::default()
+    });
+    host.update(0.016);
+    let again: Vec<String> = host.take_log().into_iter().map(|line| line.text).collect();
+    assert!(
+        again.iter().all(|line| !line.starts_with("interact ")),
+        "holding the key must not fire again: {again:?}"
+    );
 }

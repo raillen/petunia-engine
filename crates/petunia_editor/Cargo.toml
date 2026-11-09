@@ -7,6 +7,8 @@ publish.workspace = true
 description = "Editor session: open project, selection, camera, undo history and the JSON operations a GUI (or an agent) drives."
 
 [dependencies]
+petunia_anim.workspace = true
+petunia_flora.workspace = true
 petunia_commands.workspace = true
 petunia_import.workspace = true
 petunia_graph.workspace = true

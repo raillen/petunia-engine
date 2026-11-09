@@ -87,6 +87,7 @@ int main(int argc, char** argv) {
     parser.addHelpOption();
     parser.addOption({{"p", "project"}, QStringLiteral("Abre a pasta de projeto."), QStringLiteral("pasta")});
     parser.addOption({"sample", QStringLiteral("Cria o projeto de exemplo nesta pasta e abre."), QStringLiteral("pasta")});
+    parser.addOption({"method", QStringLiteral("Método de programação do projeto de exemplo: aipo (padrão), luau ou nodes."), QStringLiteral("metodo"), QStringLiteral("aipo")});
     parser.addOption({"select", QStringLiteral("Seleciona a entidade com este id."), QStringLiteral("id")});
     parser.addOption({"screenshot", QStringLiteral("Salva uma imagem da janela e sai (para testes)."), QStringLiteral("arquivo.png")});
     parser.addOption({"screenshot-delay", QStringLiteral("Espera antes da imagem, em milissegundos (padrão 1500)."), QStringLiteral("ms"), QStringLiteral("1500")});
@@ -144,7 +145,8 @@ int main(int argc, char** argv) {
     window.show();
 
     if (parser.isSet("sample")) {
-        window.createSampleAt(parser.value("sample"), QStringLiteral("Sala de exemplo"), false);
+        window.createSampleAt(parser.value("sample"), QStringLiteral("Sala de exemplo"), false,
+                              parser.value("method"));
     } else if (parser.isSet("project")) {
         window.openProjectAt(parser.value("project"), false);
     }

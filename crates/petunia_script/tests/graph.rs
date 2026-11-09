@@ -508,7 +508,7 @@ fn hostile_files_are_refused_before_anything_runs() {
 }
 
 #[test]
-fn a_graph_file_loads_from_the_scripts_folder_and_clashes_are_reported() {
+fn a_graph_file_loads_from_the_scripts_folder_and_the_other_method_is_left_out() {
     let root = std::env::temp_dir().join(format!("petunia_graph_test_dir_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("folder");
@@ -520,23 +520,27 @@ fn a_graph_file_loads_from_the_scripts_folder_and_clashes_are_reported() {
         &[("1.then", "2.in")],
     );
     std::fs::write(root.join("anda.graph.json"), &text).expect("write graph");
+    // A leftover of the other method, even with the same base name: a pNodes project loads the
+    // graph only, so there is no clash to report any more (DR-40). The Doctor is what warns about
+    // the leftover, and it names the file.
     std::fs::write(root.join("dupla.aipo"), "fn on_start(entity) { }\n").expect("write script");
-    std::fs::write(root.join("dupla.graph.json"), &text).expect("write clash");
+    std::fs::write(root.join("dupla.graph.json"), &text).expect("write same name");
     let (world, id) = world_with("anda");
     let mut host = ScriptHost::new(world).expect("host");
-    let report = host.load_directory(&root);
+    let report = host.load_directory(&root, "nodes");
     assert!(
         report.loaded.contains(&"anda".to_string()),
         "{:?}",
         report.loaded
     );
     assert!(
-        report
-            .failed
-            .iter()
-            .any(|(name, found)| name == "dupla"
-                && found.iter().any(|d| d.code == "GRAPH_NAME_CLASH")),
-        "{:?}",
+        report.loaded.contains(&"dupla".to_string()),
+        "the graph loads; the .aipo of the same name is simply not this method's file: {:?}",
+        report.loaded
+    );
+    assert!(
+        report.failed.is_empty(),
+        "nothing failed to load: {:?}",
         report.failed
     );
     host.update(0.016);

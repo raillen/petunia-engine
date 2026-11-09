@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QJsonObject>
+#include <QStringList>
 #include <QJsonValue>
 #include <QSet>
 #include <QWidget>
@@ -35,6 +36,8 @@ signals:
     // A value is being changed live (a drag): redraw the viewport, do not rebuild the panel.
     void previewed();
     void editFailed(const QString& explanation);
+    // The owner should open this script in the code workspace.
+    void scriptOpenRequested(const QString& name);
 
 private:
     struct Field {
@@ -57,6 +60,9 @@ private:
     void commitValue(Field* field, const QJsonValue& value);
     void cancelValue();
     void runCommand(const QString& command, const QJsonObject& payload);
+    void addTable();
+    void attachScript();
+    QString chooseName(const QString& title, const QStringList& names, const QString& empty) const;
     // An editor operation that is not a plain command (`collider.add`, `collider.fit`).
     void runOperation(const QString& operation, const QJsonObject& fields);
 
@@ -64,6 +70,7 @@ private:
     QVBoxLayout* content_;
     QString signature_;
     quint64 entity_ = 0;
+    QStringList addableTables_;
     std::vector<std::unique_ptr<Field>> fields_;
     // Tables the user folded; kept while the panel is rebuilt for other objects.
     QSet<QString> collapsed_;

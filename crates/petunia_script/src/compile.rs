@@ -97,6 +97,23 @@ pub(crate) fn convert(source: &Source, diagnostic: &Diagnostic) -> ScriptDiagnos
 }
 
 /// Compiles `text` as the script called `name`.
+/// Structs every game script can build. Prepended so `Vec3{ x: 1.0, y: 0.0, z: 0.0 }`
+/// and `rot.y` are the language's own fields, not dictionary keys.
+const VALUE_TYPES: &str = "\
+struct Vec3 {\n\
+    var x: Float = 0.0\n\
+    var y: Float = 0.0\n\
+    var z: Float = 0.0\n\
+}\n\
+\n\
+struct Color {\n\
+    var r: Float = 1.0\n\
+    var g: Float = 1.0\n\
+    var b: Float = 1.0\n\
+    var a: Float = 1.0\n\
+}\n\
+\n";
+
 pub fn compile(name: &str, text: &str, surface: &PreludeSurface) -> Compiled {
     if text.len() > MAX_SCRIPT_BYTES {
         return Compiled {
@@ -110,7 +127,12 @@ pub fn compile(name: &str, text: &str, surface: &PreludeSurface) -> Compiled {
             )],
         };
     }
-    let source = Source::new(SourceId::next(), name, text);
+    let (full_text, line_offset) = if text.contains("struct Vec3") {
+        (text.to_string(), 0)
+    } else {
+        (format!("{VALUE_TYPES}{text}"), VALUE_TYPES.lines().count())
+    };
+    let source = Source::new(SourceId::next(), name, &full_text);
     let (ast, mut raw) = aipo_syntax::parse(&source);
     let mut failed = raw
         .iter()
@@ -149,7 +171,20 @@ pub fn compile(name: &str, text: &str, surface: &PreludeSurface) -> Compiled {
     }
     let mut diagnostics: Vec<ScriptDiagnostic> = raw
         .iter()
-        .map(|diagnostic| convert(&source, diagnostic))
+        .map(|diagnostic| {
+            let mut converted = convert(&source, diagnostic);
+            if converted.line > line_offset {
+                converted.line -= line_offset;
+            } else {
+                converted.line = 1;
+            }
+            if converted.end_line > line_offset {
+                converted.end_line -= line_offset;
+            } else {
+                converted.end_line = 1;
+            }
+            converted
+        })
         .collect();
     diagnostics.sort_by_key(|diagnostic| (diagnostic.line, diagnostic.column));
     Compiled {

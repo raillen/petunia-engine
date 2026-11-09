@@ -1,10 +1,10 @@
 # Registro de decisões
 
-**Revisão:** 2026-10-24 (atualizada após ler a [especificação anterior](../01-pesquisa/05-especificacao-anterior.md))
+**Revisão:** 2026-11-02 (`DR-41` câmeras fixas, `DR-42` parentesco, `DR-43` `Vec3`/`Color` e câmera do personagem, `DR-44` interagir e vida; primeiro corte do `DR-13`) · 2026-10-30 (índice completado; `DR-27`/`DR-28` duplicados renumerados para `DR-38`/`DR-39`) · primeira leitura da [especificação anterior](../01-pesquisa/05-especificacao-anterior.md) em 2026-10-24
 
 ## Resumo (TL;DR)
 
-São **37 decisões**. Estados possíveis:
+São **45 decisões**. Estados possíveis:
 
 - **HERDADA:** já decidida na especificação anterior (10/10/2026). Esta documentação **mantém**; só reabre com um ADR.
 - **PROPOSTA:** recomendação minha, aguardando você ou um experimento.
@@ -28,7 +28,7 @@ São **37 decisões**. Estados possíveis:
 | DR-10 | Formatos | **HERDADA** (texto difável; GLB) + detalhes **PROPOSTOS** | Pasta de texto no desenvolvimento; ZIP ao exportar |
 | DR-11 | Relação com Petunia3D, Poppy e nome | **ABERTA** | Produtos separados; ponte por GLB e `petunia-libs` |
 | DR-12 | Decals | PROPOSTA | Etapa 1 simples; etapa 2 se precisar |
-| DR-13 | Pós-processamento | PROPOSTA | AgX + passe fundido + conforto sensorial |
+| DR-13 | Pós-processamento | **PRIMEIRO CORTE ACEITO** (2026-11-02); AgX, bloom e SMAA continuam proposta | Passe fundido de conforto (contraste, vinheta, grão, teto de brilho) |
 | DR-14 | Escopo e ordem das fases | PROPOSTA | Base primeiro, mundo natural depois |
 | DR-15 | Gates de qualidade | PROPOSTA | Pirâmide do Petunia3D + acessibilidade |
 | **DR-16** | Prova de conceito (Digi-Tactics + Ilha) | PROPOSTA | Duas provas; fatia mínima; criaturas originais no público |
@@ -46,12 +46,21 @@ São **37 decisões**. Estados possíveis:
 | **DR-29** | Luzes de cena e importação de modelos GLB | **ACEITA** (2026-10-26, "Fase 2: aprovado") | Tabela `Light` (sol e pontual); `gltf` só em `petunia_import`; modelo vira malhas editáveis ([editor](../02-arquitetura/11-editor.md)) |
 | **DR-30** | Sistema de nós (no lugar do Event Sheet) | **ACEITA** (2026-10-26, "tudo aprovado"; N1 implementado) | Grafo tipado 1:1 com a API; compila para Aipo; vista em contorno completa como primeira entrega; tela de nós própria sem biblioteca nova |
 | **DR-31** | Prefabs embutidos e o nó Esperar | **ACEITA** (2026-10-26, "prossiga com a implementação"; N4 implementado) | Porta, Item coletável e Ponto de nascimento como moldes de linhas + grafos; `Esperar` compila para uma função por espera |
+| **DR-32** | Tela de caixas e fios e depuração (N3 e N5) | **ACEITA** (2026-10-26) | O canvas é mais uma vista do mesmo grafo, com as mesmas operações; o contorno continua sendo a interface acessível; marcas de depuração no compilador e "por que esta condição falhou?" |
 | **DR-24** | Workspaces e prioridades antes da API | **EM PARTE ACEITA** (andares, cavernas B) | Mapa (com Jogar), Pintura sem UV, Animação, Efeitos por nós; antes da API: andares, cavernas, terreno, prefabs, Jogar ([análise](../02-arquitetura/14-workspaces-e-prioridades.md)) |
 | **DR-33** | Vários scripts por objeto | **ACEITA** (2026-10-27, "prossiga") | Primeiro script na linha legada; os seguintes são entidades-filhas com `owner` e `order`; todos rodam |
 | **DR-34** | Intercâmbio Aipo ⇄ IR | **EM IMPLEMENTAÇÃO** (2026-10-28, "continue") | IR com subconjunto explícito; recusa o resto com diagnóstico; uma VM por anexo |
 | **DR-35** | Schema de grafo v2 e migração | **DECIDIDA** (2026-10-28, "continue") | `SCHEMA_VERSION` 2; grafos v1 são lidos e migrados ao abrir; nós de laço e `with_index` |
 | **DR-36** | Terreno, rios e estradas | **ACEITA e MESCLADA** (2026-10-29) | Spline Bézier por comprimento de arco, perfis varridos, escavação/aplainamento/aterro, descida do rio, cruzamentos, lagos, quedas, confluências e grafo de navegação; comandos e consultas, barra no editor, gravação na cena, convés de ponte, leito sólido na física, erosão, ruído, passo por teclado e carimbos. Terreno em `petunia_world`. **Faltam** decals (`DR-12` é proposta), LOD em quadtree, tubo de bueiro e partículas ([arquitetura](../02-arquitetura/04-terreno-rios-estradas.md)) |
 | **DR-37** | Giro do carimbo de terreno | **ACEITA** (2026-10-29; 15° por passo, `Ctrl` para 1°) | Ângulo por carimbo (`rotation`, em graus) aplicado ao deslocamento dentro do disco, campo **Girar** só no modo Carimbo e o mesmo estado no passo por teclado |
+| **DR-38** | Cubo orbital e projeções da câmera | **ACEITA** (2026-10-25; antes numerada `DR-27`) | Arrastar o cubo orbita; menu alterna perspectiva/ortográfica com isométrico verdadeiro e games 2:1; estado só da sessão |
+| **DR-39** | Seleção de componentes e correção da extrusão | **ACEITA** (2026-10-25; antes numerada `DR-28`) | `Tab` edita componentes (`1` vértices, `2` arestas, `3` faces); extrudar brush é um gesto reversível |
+| **DR-40** | Um método de programação por projeto | **ACEITA** (2026-10-30, seu pedido) | Aipo, Luau ou nós, escolhido ao criar e mantido até o fim; a aba do outro método some; nós de gameplay continuam compilando para Aipo |
+| **DR-41** | Câmeras fixas (várias por cena) | **ACEITA** (2026-11-02, seu pedido) | Tabela `Shot`: caixa em volta do objeto, prioridade e campo de visão; no Jogar, a de maior prioridade que contém o jogador substitui a câmera de perseguição |
+| **DR-42** | Parentesco na hierarquia | **ACEITA** (2026-11-02, seu pedido) | Coluna `Transform.parent`; a posição gravada continua local; arrastar ou o menu do botão direito define o pai |
+| **DR-43** | Vetores no script e câmera do personagem | **ACEITA** (2026-11-02, seu pedido) | `Vec3` e `Color` são structs da Aipo; `transform.position` devolve `.x` `.y` `.z`; a tabela `Camera` escolhe primeira pessoa, terceira, isométrica ou fixa |
+| **DR-44** | Interagir e vida | **ACEITA** (2026-11-02, continuação do kit) | Tabela `Interact` (raio, aviso) e tecla E; tabela `Health`; o evento `died` quando a vida chega a zero |
+| **DR-45** | Modo de edição e inspetor | **ACEITA** (2026-11-02, teste na janela) | Empurrar e extrudar só no modo edição; `Camera.mode` é uma lista, inclusive `custom`; interagir com um `Shot` olha por essa câmera |
 
 ---
 
@@ -230,14 +239,16 @@ Pool e fade (herdados, `LOCAL`) valem em todas.
 
 ---
 
-## DR-13 — Pós-processamento · PROPOSTA
+## DR-13 — Pós-processamento · PRIMEIRO CORTE ACEITO (2026-11-02)
 
 **Opções (tonemap padrão)**
-1. **AgX.** — **recomendada**
+1. **AgX.** — **recomendada**, ainda não feita
 2. **Khronos PBR Neutral.**
 3. **ACES.**
 
 **Obrigatório:** passe fundido e **conforto sensorial** (limitador de flash, reduzir movimento, perfis).
+
+**Primeiro corte (2026-11-02, pedido explícito de pós-processamento).** A cena vai para um framebuffer e um triângulo de tela inteira devolve contraste, vinheta, grão e um teto de luminância. **Exibir › Conforto visual** tira vinheta e grão, abaixa o teto e só deixa esse teto subir 0,04 por quadro. Bloom, AgX, LUT e SMAA ficam para um corte seguinte. O limitador é global (não por pixel): um flash verdadeiro por pixel precisaria ler a imagem de volta.
 
 ---
 
@@ -411,6 +422,25 @@ Pool e fade (herdados, `LOCAL`) valem em todas.
 
 Números, opções e o que mudaria a recomendação: [pintura e animação](../01-pesquisa/07-pintura-e-animacao.md).
 
+**Execução (2026-10-30/31) — reprodução feita, sem copiar do Petunia3D.** O Petunia3D **não está
+nesta máquina**, então o plano original (copiar ~3,8 mil linhas) não podia ser seguido. A pesquisa
+deste mesmo documento já dizia qual era o pré-requisito e a ordem: *"fazer a importação de GLB com
+esqueleto e só então copiar o núcleo; sem o GLB, não há como validar"*. Foi o que se fez, com
+código **novo e próprio**:
+
+| Peça | Onde | O que faz |
+|---|---|---|
+| `petunia_anim` | crate novo | `Mat4`/`Quat` (slerp, inversa rígida), esqueleto com pais-antes-de-filhos, clipes com canais de translação/rotação/escala, amostragem degrau/linear, **um passo** para a pose, matrizes de skinning e mistura com a pose de repouso |
+| Leitor de GLB | `petunia_import/src/animation.rs` | lê o primeiro *skin*, as matrizes de bind e todas as animações; leitor de accessor próprio (a `gltf` 1.4 não expõe um), com limite de tamanho, recusa de arquivo truncado e recusa **por nome** de interpolação cúbica |
+
+**Determinismo:** custo e amostragem são inteiros e explícitos, sem dependência e sem desempate por
+ponto flutuante; 9 execuções dão a mesma pose (teste).
+
+**O que ficou de fora, declarado:** IK (o `ik.rs` do Petunia3D segue no `DR-23` como proposta),
+autoria de esqueleto e poses, interpolação cúbica, e o desenho de malha com skinning no
+renderizador (hoje o esqueleto e os clipes são lidos e calculados, mas a GPU ainda desenha a malha
+na pose de repouso).
+
 ---
 
 ## DR-24 — Workspaces e prioridades antes da API · EM PARTE ACEITA
@@ -467,7 +497,12 @@ Números, opções e o que mudaria a recomendação: [pintura e animação](../0
 
 ---
 
-## DR-27 — Cubo orbital e projeções da câmera · ACEITA (2026-10-25)
+## DR-38 — Cubo orbital e projeções da câmera · ACEITA (2026-10-25)
+
+> **Renumerada em 2026-10-30.** Esta seção nasceu como `DR-27`, número que já pertencia a
+> [Colisão e corpos físicos](#dr-27--colisão-e-corpos-físicos--aceita-2026-10-25) e que o índice
+> do registro usa para ela. Duas decisões com o mesmo número tornavam `DR-27` ambíguo em qualquer
+> referência; o conteúdo não mudou.
 
 **DECLARADO:** pedido de arrastar o cubo global, alternar projeção e acrescentar a vista de games 2:1.
 
@@ -479,7 +514,12 @@ Números, opções e o que mudaria a recomendação: [pintura e animação](../0
 
 ---
 
-## DR-28 — Seleção de componentes e correção da extrusão · ACEITA (2026-10-25)
+## DR-39 — Seleção de componentes e correção da extrusão · ACEITA (2026-10-25)
+
+> **Renumerada em 2026-10-30.** Esta seção nasceu como `DR-28`, número que já pertencia a
+> [Personagem, modo Jogar e solidez automática](#dr-28--personagem-modo-jogar-e-solidez-automática--aceita-2026-10-26)
+> e que o índice do registro usa para ela. Duas decisões com o mesmo número tornavam `DR-28`
+> ambíguo em qualquer referência; o conteúdo não mudou.
 
 **DECLARADO:** selecionar arestas e vértices dos objetos e corrigir a extrusão de brushes (`E`). Confirmado: modo de edição por `Tab`, com `1` vértices, `2` arestas e `3` faces.
 
@@ -782,6 +822,164 @@ Se uma biblioteca for necessária mais tarde, passa no checklist de admissão an
 **Como ficou (LOCAL, verificado):** `StampShape::height_at_rotated` gira o deslocamento antes de avaliar a forma, então a borda continua zerando e a força continua em metros; `HeightChunk::stamp_region` recebe o ângulo e descarta um ângulo não finito. No comando, cada carimbo aceita `rotation` (padrão `0`, recusado se não for finito), então uma pincelada pode misturar ângulos. Na barra, o campo **Girar** aparece ao lado de **Forma**, só no modo Carimbo; `Ctrl`+seta dá 1° e a digitação é enviada ao soltar o campo ou apertar Enter. A frase do passo por teclado passa a dizer o ângulo — "Passo: Carimbo (Crista, 90°), raio 4,00 m…".
 
 **Verificação:** 2 testes novos em `petunia_world::stamp` (a crista vira 90° e troca os eixos; 0°/360° dão a mesma altura e um ângulo hostil não escreve nada), 1 no `heightfield` (a crista girada levanta ao longo de z e o pico não muda) e 1 de fluxo no `petunia_editor` (mesma forma, duas medidas, um desfazer entre elas). No teste de fumaça o mesmo carimbo de crista é aplicado reto e girado 90°: **16/16** (a medida ao longo de x cai e a ao longo de z cresce).
+
+---
+
+## DR-40 — Um método de programação por projeto · ACEITA (2026-10-30)
+
+**Pedido:** "manter o grafo/node-system separado da programação em si e o usuário poder escolher só
+um método/caminho de programação para o projeto, parece que isso está deixando o fluxo mais
+confuso"; completado por "Aipo, Luau ou NodeSystem, o usuário deve seguir até o fim apenas com um
+desses modos".
+
+**O problema real (LOCAL).** Não eram dois métodos: eram **três coisas na mesma tela**. As abas
+**Cena** (montar o mundo), **Código** (Aipo) e **Lógica** (nós) apareciam sempre as três, e
+Código e Lógica são duas vistas do **mesmo** motor. O `ProjectManifest` **já** tinha
+`scripting_language` (`"aipo"` | `"luau"`), validado e com teste, mas **ninguém lia esse campo**:
+`editor/src/*.cpp` não o consulta, então as três abas apareciam em qualquer projeto. A confusão não
+era da ideia de escolher um método — era de o campo existir e ser ignorado.
+
+**Decisão.**
+
+1. **Um método por projeto, escolhido ao criar e mantido até o fim.** O manifesto passa a ter
+   `programming_method` com três valores: `aipo`, `luau` ou `nodes` (nome do valor em discussão, ver
+   o item 5). Scripts `.aipo` e grafos `.graph.json` **não se misturam** no mesmo projeto.
+2. **A janela mostra o método escolhido.** Em `aipo`/`luau` a aba **Código** aparece e a aba
+   **Lógica** some; em `nodes` a aba **Lógica** aparece e a aba **Código** some. A aba **Cena**
+   continua em todos, porque montar o mundo não é programar.
+3. **Os nós de gameplay continuam compilando para Aipo** (`petunia_graph::compile`). `nodes` é uma
+   vista de autoria, não uma quarta linguagem de execução: por baixo, o grafo vira o mesmo texto
+   Aipo que o Script Host já roda. Isso evita segundo runtime, segundo depurador e segundo conjunto
+   de erros.
+4. **A ponte `graph.from_code` deixa de ser o fluxo normal** e passa a ser uma ação pontual e
+   consciente ("ver isto como texto"), disponível só quando o projeto é `nodes`. Hoje ela está
+   quebrada na janela: o botão **Aplicar código** nunca foi criado (`applyCodeButton_` só é
+   declarado e ligado), o campo é `setReadOnly(true)` e o texto promete um botão inexistente. Com
+   esta decisão, o conserto certo é **converter para Aipo de verdade** (`analysis`, não ida e
+   volta contínua) e não reabrir a edição contínua que o `DR-30`/`DR-32` fecharam.
+5. **Nome do método.** O valor do manifesto é técnico e o rótulo da interface fica em português.
+   **Nome de produto decidido: `pNodes`** (grafia exata, "p" minúsculo) — provisório, para não
+   travar o código; pode mudar sem tocar no formato dos arquivos, porque o valor gravado continua
+   sendo `nodes`.
+6. **Grafos que sobrevivem a um projeto `aipo`/`luau`.** No futuro haverá grafos de **outras
+   coisas** (animação, processos procedurais), que não são programação de gameplay. Este `DR`
+   vale só para o grafo de **gameplay**; os outros terão decisão própria.
+7. **Prefab no formato do projeto (decidido).** Um prefab entrega os mesmos grafos nos dois
+   métodos: em `nodes` grava `<nome>.graph.json`; em `aipo` **compila e grava `<nome>.aipo`**
+   (`petunia_graph::compile`, o texto já usado por "Ver como código"). Nos dois casos a regra de
+   nunca sobrescrever um arquivo que já existe continua valendo, e agora precisa considerar **as
+   duas extensões** como "já existe": um projeto em `aipo` com `porta.graph.json` de uma migração
+   não pode ganhar um `porta.aipo` por cima sem aviso.
+
+**Consequências que precisam ser tratadas ao implementar**
+
+| Ponto | Situação hoje |
+|---|---|
+| Prefabs | `prefabs.rs` grava **`.graph.json`** (`porta`, `item`). **Decidido:** com o projeto em `aipo`, o prefab compila o grafo e grava `.aipo` (item 7) |
+| Projeto de exemplo | não cria script algum, então não é afetado |
+| Project Doctor | `petunia_script::project_diagnostics` varre a pasta `scripts/`; precisa avisar quando houver `.aipo` num projeto `nodes` (e o inverso), em vez de carregar os dois em silêncio |
+| Migração | projeto sem `programming_method` assume `aipo` (é o padrão de hoje) e continua abrindo; um projeto com os dois tipos de arquivo recebe aviso, não erro |
+| `luau` | continua "planejado, backend não existe": escolher Luau hoje dá aviso e não executa (`project.manifest.luau_pending`) |
+
+**Correção de 2026-10-30 (o aviso era falso):** o Project Doctor passou a avisar
+`project.method_graph`/`project.method_script`, mas o **carregador continuava lendo os dois tipos**
+— `ScriptHost::load_directory` varria `.aipo` e `.graph.json` sempre. Na prática o aviso dizia "não
+roda" enquanto o arquivo **rodava**, que é pior do que não avisar. Agora o método é um parâmetro do
+carregador (`load_directory(directory, programming_method)`), o `PlayerConfig` leva
+`programming_method` (o `petunia run` passa o do manifesto) e o **Jogar** do editor carrega só o
+método escolhido. Com isso o conflito de nomes entre `.aipo` e `.graph.json` deixou de existir: cada
+projeto lê só os seus. Verificado por `only_the_projects_own_method_is_loaded` (um projeto Aipo com
+um grafo na pasta carrega o script e **não** o grafo; o pNodes, o contrário) e por uma execução
+manual sobre um projeto real: `metodo=aipo carregados=[]`, `metodo=nodes carregados=["sobra"]`.
+
+**Fora desta decisão:** escolher método **por objeto** (fica um método por projeto), tradução
+automática Aipo ⇄ Luau, e o catálogo de nós das outras áreas.
+
+**Decisão de 2026-10-30 — não há troca de método.** "Como já falei, quero um único modo de seleção
+para o jogador, portanto, não precisa disso." A escolha é feita ao criar o projeto e vale até o fim.
+Fica **fechado** o item que este `DR` deixava em aberto: não se constrói botão de troca nem
+conversão de lógica entre métodos. Quem editar `programming_method` à mão não recebe apoio: o
+editor não converte nada, e os arquivos do outro método deixam de rodar (o Doctor avisa). Isso é
+coerente com a assimetria já registrada acima — grafo → Aipo sempre compila, Aipo → grafo só num
+subconjunto —, então uma troca "de verdade" prometeria algo que falha em metade dos projetos.
+
+**Reabrir se:** um projeto real precisar dos dois métodos ao mesmo tempo (aí a regra vira "um método
+por objeto ou por pasta de scripts"), ou se o Luau entrar e a escolha em tempo de criação se
+mostrar irreversível demais na prática.
+
+---
+
+## DR-41 — Câmeras fixas · ACEITA (2026-11-02)
+
+**Pedido:** sistema de câmera, inclusive várias câmeras, para jogos de câmera fixa no estilo Resident Evil.
+
+**Decisão.** Um objeto com `Transform` pode ganhar a tabela `Shot`: campo de visão, prioridade, meia-caixa (`half_extents`) e se está ligada. A caixa fica em volta da pose **composta** do objeto. No modo Jogar, `active_shot` escolhe a de maior prioridade que contém o jogador; empate fica com o id menor. Fora de toda caixa, a câmera de perseguição (distância 4,5 m, altura 1,5 m) continua. A hierarquia oferece **Câmera fixa neste objeto** (prioridade 1).
+
+**Fora deste corte:** corte entre câmeras com curva, gatilho por volume de colisão separado do objeto, e várias câmeras desenhadas ao mesmo tempo (tela dividida).
+
+**Escolha:** uma câmera ativa por vez, escolhida pela posição do jogador.
+**Motivo:** é o mínimo que permite uma sala com ângulos fixos sem um grafo de cena novo.
+**Reabrir se:** um jogo precisar de tela dividida ou de um volume de ativação que não seja a caixa do próprio objeto.
+
+---
+
+## DR-42 — Parentesco · ACEITA (2026-11-02)
+
+**Pedido:** arrastar na hierarquia com opção de parentesco entre os elementos.
+
+**Decisão.** `Transform` ganha a coluna `parent` (inteiro, 0 = raiz). A posição gravada continua **local**. `composed_transform` sobe até 32 pais e para em ciclo ou em pai ausente. Física, desenho e a posição do jogador para scripts usam essa pose. Cenas antigas não têm a coluna: o leitor preenche 0. Arrastar solta no pai (ou na raiz, o que zera o pai). O menu do botão direito faz o mesmo sem o mouse: **Soltar da hierarquia** e **Tornar filho de…**. Com o filtro de busca preenchido o arrasto desliga, porque linhas ocultas receberiam o objeto no lugar errado.
+
+**Limite:** soltar o pai **não** grava a posição mundial de volta. O deslocamento local permanece, então o objeto pode saltar. O `Ctrl+Z` desfaz o parentesco.
+
+**Escolha:** coluna `parent` mais pose composta, sem uma classe de grafo de cena.
+**Motivo:** a arquitetura já dizia que a hierarquia é uma coluna, não uma árvore de objetos.
+**Reabrir se:** soltar o pai tiver de manter o objeto visualmente parado (aí o comando grava a pose composta antes de zerar).
+
+---
+
+## DR-43 — Vetores no script e câmera do personagem · ACEITA (2026-11-02)
+
+**Pedido:** a API em Aipo fácil de ler, com campos por ponto (não chaves de dicionário), e o jogador provisório no mesmo molde do prefab jogável (câmera e colisão).
+
+**Decisão.** Todo script compilado ganha, no começo, `struct Vec3` (`x`, `y`, `z`) e `struct Color` (`r`, `g`, `b`, `a`), com campos `var`. O diagnóstico desconta essas linhas, então o sublinhado do editor continua na linha do autor. Quem já declara `struct Vec3` não recebe o preâmbulo.
+
+`transform.position`, `rotation` e `scale` devolvem `Vec3`. `set_position`, `set_rotation`, `set_scale`, `move` e `rotate` recebem um `Vec3` depois da entidade. `forward`, `right`, `up`, `physics.velocity` também. `set_velocity` e `impulse` recebem um `Vec3`. `move_x`/`move_y`/`move_z` e `rotate_x`/`rotate_y`/`rotate_z` continuam: são a forma de um eixo, e grafos e scripts antigos já as chamam. Um dicionário com as mesmas chaves ainda é aceito na entrada, porque o compilador de nós emite dicionário. `world.get` de uma célula vetor ou cor devolve a struct. `world.row` continua um dicionário; as células vetor e cor dentro dele são structs. O acerto do raio continua um dicionário (`entity`, `collider`, `distance`); `point` e `normal` são `Vec3`.
+
+A tabela `Camera` fica no personagem: `mode` (`fixed`, `third`, `first`, `isometric`), `distance`, `height`, `fov_degrees`, `enabled`. `fixed` deixa o `Shot` do `DR-41` vencer e, fora da caixa, persegue com a distância e a altura da linha. `third` persegue sempre. `first` põe o olho nos pés mais `height`, com o yaw da pose composta. `isometric` usa projeção ortográfica. Sem a linha, o jogo segue o caminho de hoje (shot, depois perseguição). O herói criado na hora e o prefab `player` nascem com `mode` `fixed` e uma cápsula `corpo` (raio 0,3, altura 1,8). O WASD continua no anfitrião, não num script.
+
+**Escolha:** structs da linguagem para os dois tipos de valor, uma função por vetor inteiro, eixos à parte, e a câmera como linha do personagem.
+**Motivo:** em Aipo o ponto lê campo de struct; a chave de dicionário não aceita atribuição. Uma forma só para o vetor inteiro, e a forma de um eixo que os grafos já usam.
+**Reabrir se:** um script de projeto já publicado chamar `set_position`/`move`/`rotate` com três números (a assinatura mudou), ou se `Quat` entrar como tipo de valor.
+
+---
+
+## DR-44 — Interagir e vida · ACEITA (2026-11-02)
+
+**Pedido:** o kit que falta depois da câmera: chegar perto e apertar a tecla, e ter vida que avisa quando acaba.
+
+**Decisão.** Um objeto ganha `Interact`: `radius` (2 m), `prompt` ("Interagir") e `enabled`. No Jogar, a tecla **E** (uma vez por aperto, sem repetir enquanto fica segurada) avisa o objeto mais perto cuja distância até o personagem cabe no raio. O script ouve `on_event(entity, "interact")`. A barra de status mostra `E —` e o texto enquanto o personagem está no raio. O próprio personagem não interage consigo.
+
+`Health` tem `current` e `maximum` (100). `health.damage` e `health.heal` mudam a vida por comando, sem passar de zero nem do máximo. Se a vida estava acima de zero e, depois dos eventos do quadro, está em zero ou abaixo, o objeto recebe `on_event(entity, "died")` uma vez. `world.set` na mesma coluna também dispara esse aviso.
+
+**Fora deste corte:** som, slot de partida, animação de três estados, projétil e zona de dano.
+
+**Escolha:** duas tabelas e dois nomes de evento, a tecla E fixa.
+**Motivo:** porta e item passam a ser um objeto com aviso e um script, sem um sistema de quest. A vida é um número que o resto do combate, mais tarde, só diminui.
+**Reabrir se:** um jogo precisar de outra tecla por objeto, ou de um volume que não seja a distância até a posição do objeto.
+
+---
+
+## DR-45 — Modo de edição e inspetor · ACEITA (2026-11-02)
+
+**Pedido:** as ferramentas de malha estavam no modo objeto e não respondiam; o inspetor precisava buscar tabela e script pelo nome; o modo da câmera precisava ser uma lista; uma câmera de sala precisava poder ser escolhida ao interagir.
+
+**Decisão.** Empurrar/puxar e extrudar só aparecem e só funcionam no modo edição. O arame da malha nesse modo fica claro, com um ponto no meio da aresta ou da face conforme a seleção. `Camera.mode` oferece `fixed`, `third`, `first`, `isometric` e `custom` (`custom` não move a câmera sozinho). Interagir com um objeto que tem `Shot` passa a olhar por ele; interagir de novo volta à câmera do personagem. Adicionar tabela abre uma busca. Adicionar script lista os arquivos do projeto, inclusive um novo.
+
+**Fora deste corte:** clima como várias entidades (vento, raio, skybox), e variáveis do script desenhadas no inspetor. A vida e a velocidade do personagem continuam colunas; o script lê com `world.get`.
+
+**Escolha:** consertar o modo que já existe, e nomear a câmera pela tabela `Shot` do objeto.
+**Motivo:** o clique do modo edição não chegava na ferramenta de face, e o arame estava escuro demais para ver.
+**Reabrir se:** cada componente precisar de um id próprio, separado do objeto, ou o clima tiver de ser gravado na cena.
 
 ---
 

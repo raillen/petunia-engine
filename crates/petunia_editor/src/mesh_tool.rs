@@ -35,6 +35,8 @@ use crate::tools::Pointer;
 /// the overlay).
 const MAX_WIREFRAME_EDGES: usize = 20_000;
 const WIRE_COLOR: Color = Color::new(0.10, 0.12, 0.16, 0.55);
+/// Edit mode draws a light wire, the same idea as a modeling view: the shape stays readable on a dark scene.
+const EDIT_WIRE_COLOR: Color = Color::new(1.0, 0.72, 0.28, 1.0);
 const FACE_SELECTION_COLOR: Color = Color::new(1.0, 0.62, 0.15, 1.0);
 const EDGE_SELECTION_COLOR: Color = Color::new(1.0, 0.85, 0.20, 1.0);
 const VERTEX_SELECTION_COLOR: Color = Color::new(1.0, 1.0, 1.0, 1.0);
@@ -567,6 +569,7 @@ impl EditorSession {
             "mesh.pick" => self.mesh_pick(request),
             "mesh.select" => self.mesh_select(request),
             "mesh.info" => self.mesh_info(request),
+            "mesh.paint_face" => self.mesh_paint_face(request),
             _ => self.mesh_edit(op, request),
         }
     }
@@ -685,6 +688,71 @@ impl EditorSession {
             "vertices": result.positions.len(),
             "faces": result.faces.len(),
             "selection": self.components_json(),
+        }))
+    }
+
+    /// `mesh.paint_face`: paints the chosen faces with one colour (phase 2, per-face material).
+    ///
+    /// One undo step for the whole paint, so painting a wall is one gesture. The old override rows
+    /// of those faces are removed in the same batch, so a face never ends up with two colours.
+    fn mesh_paint_face(&mut self, request: &Json) -> Result<Json, Failure> {
+        let entity = self.target_entity(request)?;
+        let (mesh, _) = self.mesh_of(entity).ok_or_else(|| needs_mesh(entity))?;
+        let chosen = self.components(entity, &mesh);
+        let faces: Vec<u32> = if chosen.faces.is_empty() {
+            numbers(request, "faces")?.unwrap_or_default()
+        } else {
+            chosen.faces.iter().copied().collect()
+        };
+        if faces.is_empty() {
+            return Err(Failure::new(
+                "EDITOR_NO_SELECTION",
+                "nenhuma face está escolhida",
+                "Clique numa face no modo de edição (Tab, tecla 3) e pinte.",
+            ));
+        }
+        if let Some(face) = faces
+            .iter()
+            .find(|face| **face as usize >= mesh.faces.len())
+        {
+            return Err(Failure::new(
+                "MESH_UNKNOWN_FACE",
+                &format!("a face {face} não existe"),
+                "Escolha de novo: a malha mudou.",
+            ));
+        }
+        let color = request_color(request)?;
+        let mut records = Vec::new();
+        // Drop every override already on these faces, then add the new one: no duplicate rows.
+        for (row, face) in face_color_rows(self.world()?, entity) {
+            if faces.contains(&face) {
+                records.push(CommandRecord::new("world.remove", json!({ "entity": row })));
+            }
+        }
+        for face in &faces {
+            records.push(CommandRecord::new(
+                "world.create",
+                json!({
+                    "rows": {
+                        petunia_world::FACE_COLOR_TABLE: {
+                            "owner": entity,
+                            "face": face,
+                            "color": {
+                                "r": color.r, "g": color.g, "b": color.b, "a": color.a
+                            }
+                        }
+                    }
+                }),
+            ));
+        }
+        self.execute(&CommandRecord::new(
+            BATCH_COMMAND,
+            json!({ "records": records }),
+        ))?;
+        Ok(json!({
+            "entity": entity,
+            "faces": faces,
+            "color": { "r": color.r, "g": color.g, "b": color.b, "a": color.a },
         }))
     }
 
@@ -1078,12 +1146,20 @@ impl EditorSession {
                     face.get((corner + 1) % face.len()).copied().unwrap_or(0),
                 ]);
                 if drawn.insert(edge) {
+                    let editing = self.mesh_edit_mode;
                     items.push(OverlayItem::Line {
                         from: world_point(edge[0]),
                         to: world_point(edge[1]),
-                        color: WIRE_COLOR,
-                        width_pixels: 1.0,
+                        color: if editing { EDIT_WIRE_COLOR } else { WIRE_COLOR },
+                        width_pixels: if editing { 1.6 } else { 1.0 },
                     });
+                    if editing && self.mesh_component_mode == MeshComponentMode::Edge {
+                        items.push(OverlayItem::Square {
+                            center: (world_point(edge[0]) + world_point(edge[1])) * 0.5,
+                            color: VERTEX_MARKER_COLOR,
+                            size_pixels: 6.0,
+                        });
+                    }
                 }
             }
         }
@@ -1092,7 +1168,24 @@ impl EditorSession {
                 items.push(OverlayItem::Square {
                     center: world_point(vertex as u32),
                     color: VERTEX_MARKER_COLOR,
-                    size_pixels: 5.0,
+                    size_pixels: 7.0,
+                });
+            }
+        }
+        if self.mesh_edit_mode && self.mesh_component_mode == MeshComponentMode::Face {
+            for face in mesh.faces.iter().take(4_000) {
+                if face.is_empty() {
+                    continue;
+                }
+                let mut center = Vec3::ZERO;
+                for corner in face {
+                    center = center + world_point(*corner);
+                }
+                center = center * (1.0 / face.len() as f32);
+                items.push(OverlayItem::Square {
+                    center,
+                    color: VERTEX_MARKER_COLOR,
+                    size_pixels: 6.0,
                 });
             }
         }
@@ -1131,6 +1224,52 @@ impl EditorSession {
             });
         }
     }
+}
+
+/// The colour of a `mesh.paint_face` request, validated like every other external value.
+fn request_color(request: &Json) -> Result<Color, Failure> {
+    let value = request.get("color").cloned().unwrap_or(Json::Null);
+    match Value::from_json(petunia_world::ValueKind::Color, &value, 16) {
+        Ok(Value::Color(color)) => Ok(color),
+        Ok(_) => Err(Failure::new(
+            "MESH_BAD_COLOR",
+            "a cor não é uma cor",
+            "Use {\"r\": 0..1, \"g\": 0..1, \"b\": 0..1, \"a\": 0..1}.",
+        )),
+        Err(reason) => Err(Failure::new(
+            "MESH_BAD_COLOR",
+            &format!("cor inválida: {reason}"),
+            "Use {\"r\": 0..1, \"g\": 0..1, \"b\": 0..1, \"a\": 0..1}.",
+        )),
+    }
+}
+
+/// The `(row entity, face)` of every colour override owned by `owner`.
+fn face_color_rows(world: &petunia_world::World, owner: u64) -> Vec<(u64, u32)> {
+    let mut rows = Vec::new();
+    let Ok(handles) = world.entities_with_table(petunia_world::FACE_COLOR_TABLE) else {
+        return rows;
+    };
+    for handle in handles {
+        let Ok(Value::Int(row_owner)) = world.get(handle, petunia_world::FACE_COLOR_TABLE, "owner")
+        else {
+            continue;
+        };
+        if *row_owner < 0 || *row_owner as u64 != owner {
+            continue;
+        }
+        let Ok(Value::Int(face)) = world.get(handle, petunia_world::FACE_COLOR_TABLE, "face")
+        else {
+            continue;
+        };
+        let Ok(id) = world.persistent_id(handle) else {
+            continue;
+        };
+        if *face >= 0 {
+            rows.push((id.0, *face as u32));
+        }
+    }
+    rows
 }
 
 #[cfg(test)]
@@ -1636,6 +1775,82 @@ mod tests {
         }
         assert_eq!(geometry(&session, brush), mesh);
         assert_eq!(session.dispatcher.undo_depth().0, depth);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn overrides_of(session: &EditorSession, owner: u64) -> Vec<u32> {
+        let world = session.world().expect("world");
+        let Ok(handles) = world.entities_with_table(petunia_world::FACE_COLOR_TABLE) else {
+            return Vec::new();
+        };
+        handles
+            .into_iter()
+            .filter_map(|handle| {
+                let row_owner = world
+                    .get(handle, petunia_world::FACE_COLOR_TABLE, "owner")
+                    .ok()?;
+                let face = world
+                    .get(handle, petunia_world::FACE_COLOR_TABLE, "face")
+                    .ok()?;
+                match (row_owner, face) {
+                    (petunia_world::Value::Int(row_owner), petunia_world::Value::Int(face))
+                        if *row_owner >= 0 && *row_owner as u64 == owner && *face >= 0 =>
+                    {
+                        Some(*face as u32)
+                    }
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn painting_a_face_is_one_undo_step_and_never_stores_two_colours() {
+        let (mut session, root) = opened("face_paint");
+        let made = call(
+            &mut session,
+            json!({ "op": "create.brush", "shape": "box" }),
+        );
+        let entity = made["entity"].as_u64().expect("entity");
+        call(
+            &mut session,
+            json!({ "op": "mesh.convert", "entity": entity }),
+        );
+        let info = call(&mut session, json!({ "op": "mesh.info", "entity": entity }));
+        assert!(info["faces"].as_u64().unwrap_or(0) >= 6, "{info}");
+
+        call(
+            &mut session,
+            json!({
+                "op": "mesh.paint_face",
+                "entity": entity,
+                "faces": [0],
+                "color": { "r": 1.0, "g": 0.0, "b": 0.0, "a": 1.0 },
+            }),
+        );
+        assert_eq!(overrides_of(&session, entity).len(), 1);
+
+        // Painting the same face again replaces the colour instead of adding a row.
+        call(
+            &mut session,
+            json!({
+                "op": "mesh.paint_face",
+                "entity": entity,
+                "faces": [0],
+                "color": { "r": 0.0, "g": 0.0, "b": 1.0, "a": 1.0 },
+            }),
+        );
+        assert_eq!(
+            overrides_of(&session, entity).len(),
+            1,
+            "one colour per face"
+        );
+
+        // One undo per paint; the last one leaves the face unpainted.
+        call(&mut session, json!({ "op": "edit.undo" }));
+        assert_eq!(overrides_of(&session, entity).len(), 1);
+        call(&mut session, json!({ "op": "edit.undo" }));
+        assert_eq!(overrides_of(&session, entity).len(), 0);
         let _ = std::fs::remove_dir_all(&root);
     }
 }

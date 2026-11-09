@@ -2,7 +2,8 @@
 //! physics and the player's character. Stopping throws the copy away, so playing never changes
 //! what you built. While it runs, nothing that edits the scene is accepted.
 
-use petunia_render::{FlyCamera, extract_frame};
+use petunia_math::Vec3;
+use petunia_render::{FlyCamera, ProjectionMode, extract_frame};
 use petunia_script::{PhysicsSettings, PlayerInput, ScriptHost};
 use serde_json::{Value as Json, json};
 
@@ -12,9 +13,6 @@ use crate::session::EditorSession;
 /// Longest frame the game accepts, so a pause in the window never throws things across the map.
 const MAX_FRAME_SECONDS: f32 = 0.1;
 /// Third-person camera: how far behind the player and how high above its position.
-const CAMERA_DISTANCE: f32 = 4.5;
-const CAMERA_HEIGHT: f32 = 1.5;
-
 /// The running game.
 pub(crate) struct PlayState {
     pub(crate) host: ScriptHost,
@@ -66,7 +64,24 @@ impl EditorSession {
         // failed. Cheap and bounded, so it is always on while playing.
         host.set_debug_marks(true);
         let mut loaded = Vec::new();
-        for name in self.script_names() {
+        // One method per project (DR-40): playing loads the files of the chosen method only, so a
+        // leftover of the other one never runs unnoticed. pNodes compiles its graphs to Aipo, and
+        // `load_graph` is the entry that compiles them.
+        let uses_nodes = self
+            .project
+            .as_ref()
+            .is_some_and(|project| project.manifest.uses_node_method());
+        let script_names = if uses_nodes {
+            Vec::new()
+        } else {
+            self.script_names()
+        };
+        let graph_names = if uses_nodes {
+            self.graph_names()
+        } else {
+            Vec::new()
+        };
+        for name in script_names {
             let Ok(text) = self.read_script_file(&name) else {
                 continue;
             };
@@ -85,7 +100,7 @@ impl EditorSession {
                 }
             }
         }
-        for name in self.graph_names() {
+        for name in graph_names {
             let Ok(text) = self.read_graph_file(&name) else {
                 continue;
             };
@@ -115,6 +130,7 @@ impl EditorSession {
             }
         }
         let has_player = host.player_position().is_some();
+        let attachments = host.attached().len();
         let saved_camera = self.camera;
         self.play = Some(Box::new(PlayState {
             host,
@@ -126,6 +142,7 @@ impl EditorSession {
             "playing": true,
             "scripts": loaded,
             "has_player": has_player,
+            "attachments": attachments,
             "stand_in_player": made_hero,
             "physics": physical,
             "problems": problems,
@@ -149,6 +166,7 @@ impl EditorSession {
         forward: f32,
         right: f32,
         jump: bool,
+        interact: bool,
         look: (f32, f32),
     ) -> Result<Json, Failure> {
         if self.play.is_none() {
@@ -174,6 +192,7 @@ impl EditorSession {
                 forward,
                 right,
                 jump,
+                interact,
                 yaw_degrees,
             });
             state.host.update(f64::from(seconds));
@@ -192,7 +211,11 @@ impl EditorSession {
             (log, faults, state.host.debug_snapshot())
         };
         self.follow_player();
-        Ok(json!({ "log": log, "faults": faults, "debug": debug }))
+        let prompt = self
+            .play
+            .as_ref()
+            .and_then(|state| state.host.interact_prompt());
+        Ok(json!({ "log": log, "faults": faults, "debug": debug, "prompt": prompt }))
     }
 
     /// `play.debug`: what ran in the newest frame, for the canvas highlight and "por que esta
@@ -208,21 +231,77 @@ impl EditorSession {
         Ok(snapshot)
     }
 
-    /// Puts the camera behind the player (when there is one), looking where the mouse looks.
+    /// Puts the camera on the player's `Camera` row. `fixed` lets a room shot win (DR-41).
     fn follow_player(&mut self) {
-        let Some(state) = self.play.as_ref() else {
+        let rig = {
+            let Some(state) = self.play.as_ref() else {
+                return;
+            };
+            if !state.has_player {
+                return;
+            }
+            state.host.player_rig()
+        };
+        let Some(rig) = rig else {
             return;
         };
-        if !state.has_player {
+        let watched = self.play.as_ref().and_then(|state| state.host.watched_shot());
+        if let Some(shot) = watched {
+            self.camera.camera.projection_mode = ProjectionMode::Perspective;
+            self.camera.camera.position = shot.position;
+            self.camera.camera.yaw_degrees = shot.yaw_degrees;
+            self.camera.camera.pitch_degrees = shot.pitch_degrees;
+            self.camera.camera.fov_degrees = shot.fov_degrees;
             return;
         }
-        let forward = self.camera.camera.forward();
-        if let Some(position) =
-            state
-                .host
-                .third_person_camera(forward, CAMERA_DISTANCE, CAMERA_HEIGHT)
-        {
-            self.camera.camera.position = position;
+        if rig.mode == "custom" {
+            return;
+        }
+        let shot = if matches!(rig.mode.as_str(), "first" | "third" | "isometric") {
+            None
+        } else {
+            let Some(state) = self.play.as_ref() else {
+                return;
+            };
+            let world = state.host.world();
+            petunia_world::active_shot(&world, rig.feet)
+        };
+        if let Some(shot) = shot {
+            self.camera.camera.projection_mode = ProjectionMode::Perspective;
+            self.camera.camera.position = shot.position;
+            self.camera.camera.yaw_degrees = shot.yaw_degrees;
+            self.camera.camera.pitch_degrees = shot.pitch_degrees;
+            self.camera.camera.fov_degrees = shot.fov_degrees;
+            return;
+        }
+        self.camera.camera.fov_degrees = rig.fov_degrees;
+        match rig.mode.as_str() {
+            "first" => {
+                self.camera.camera.projection_mode = ProjectionMode::Perspective;
+                self.camera.camera.position = rig.feet + Vec3::new(0.0, rig.height, 0.0);
+                self.camera.camera.yaw_degrees = rig.yaw_degrees;
+                self.camera.camera.pitch_degrees = 0.0;
+            }
+            "isometric" => {
+                self.camera.camera.projection_mode = ProjectionMode::Orthographic;
+                self.camera.camera.orthographic_height = rig.distance.max(4.0);
+                self.camera.camera.position =
+                    rig.feet + Vec3::new(-rig.distance, rig.height.max(4.0), -rig.distance);
+                self.camera.camera.yaw_degrees = 45.0;
+                self.camera.camera.pitch_degrees = -35.0;
+            }
+            _ => {
+                self.camera.camera.projection_mode = ProjectionMode::Perspective;
+                let forward = self.camera.camera.forward();
+                let position = self.play.as_ref().and_then(|state| {
+                    state
+                        .host
+                        .third_person_camera(forward, rig.distance, rig.height)
+                });
+                if let Some(position) = position {
+                    self.camera.camera.position = position;
+                }
+            }
         }
     }
 
@@ -370,7 +449,7 @@ mod tests {
         let mut session = EditorSession::new().expect("session");
         call(
             &mut session,
-            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "grafo" }),
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "grafo", "method": "nodes" }),
         );
         // on_update: turn the object by 90 degrees per second (dt * 90).
         let graph = json!({
@@ -723,7 +802,7 @@ mod tests {
         let mut session = EditorSession::new().expect("session");
         call(
             &mut session,
-            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "depurar" }),
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "depurar", "method": "nodes" }),
         );
         call(&mut session, json!({ "op": "graph.new", "name": "cond" }));
         let event = call(

@@ -22,15 +22,15 @@ const CIRCLE_SEGMENTS: usize = 32;
 
 /// The collider row of an entity, read once.
 #[derive(Clone, Debug)]
-struct ColliderRow {
-    name: String,
-    shape: String,
-    center: Vec3,
-    rotation_degrees: Vec3,
-    size: Vec3,
-    radius: f32,
-    height: f32,
-    trigger: bool,
+pub(crate) struct ColliderRow {
+    pub(crate) name: String,
+    pub(crate) shape: String,
+    pub(crate) center: Vec3,
+    pub(crate) rotation_degrees: Vec3,
+    pub(crate) size: Vec3,
+    pub(crate) radius: f32,
+    pub(crate) height: f32,
+    pub(crate) trigger: bool,
 }
 
 fn float_of(value: Option<&Value>) -> f32 {
@@ -41,7 +41,7 @@ fn float_of(value: Option<&Value>) -> f32 {
     }
 }
 
-fn read_row(world: &World, id: u64) -> Option<ColliderRow> {
+pub(crate) fn row_of(world: &World, id: u64) -> Option<ColliderRow> {
     let handle = world.handle_of(PersistentId(id)).ok()?;
     // Only a collider has a collider row: any other object is not one (its name is its `Name`).
     if !world.has_row(handle, "Collider") {
@@ -79,7 +79,7 @@ pub(crate) fn owner_of(world: &World, id: u64) -> Option<u64> {
 
 /// The name a collider shows in the hierarchy.
 pub(crate) fn collider_name(world: &World, id: u64) -> Option<String> {
-    read_row(world, id).map(|row| row.name)
+    row_of(world, id).map(|row| row.name)
 }
 
 /// Persistent ids of the colliders of `owner`, in order.
@@ -215,7 +215,7 @@ impl EditorSession {
             })?;
             (
                 owner,
-                read_row(world, selection)
+                row_of(world, selection)
                     .map(|row| row.shape)
                     .unwrap_or_else(|| "box".to_string()),
             )
@@ -285,7 +285,7 @@ impl EditorSession {
             return;
         };
         for id in ids {
-            let Some(row) = read_row(world, id) else {
+            let Some(row) = row_of(world, id) else {
                 continue;
             };
             let (color, width) = if id == selection {
@@ -417,6 +417,15 @@ fn collider_lines(
     }
 }
 
+/// The failure every collider operation uses when the selection is not a collider.
+pub(crate) fn no_collider() -> crate::failure::Failure {
+    crate::failure::Failure::new(
+        "EDITOR_NOT_A_COLLIDER",
+        "o que está selecionado não é uma colisão",
+        "Clique numa colisão (aparece sob o objeto na Hierarquia).",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::{Value as Json, json};
@@ -546,5 +555,123 @@ mod tests {
         let unknown = session.handle(&json!({ "op": "collider.add", "shape": "torus" }));
         assert_eq!(unknown["ok"], false);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn dragging_a_collider_handle_previews_and_commits_as_one_undo_step() {
+        let root = std::env::temp_dir().join(format!(
+            "petunia_editor_test_collider_drag_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let mut session = EditorSession::new().expect("session");
+        call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "alca" }),
+        );
+        let made = call(
+            &mut session,
+            json!({ "op": "create.brush", "shape": "box" }),
+        );
+        let object = made["entity"].as_u64().expect("entity");
+        call(
+            &mut session,
+            json!({ "op": "selection.set", "entity": object }),
+        );
+        let added = call(
+            &mut session,
+            json!({ "op": "collider.add", "shape": "box" }),
+        );
+        let collider = added["entity"].as_u64().expect("collider");
+        call(
+            &mut session,
+            json!({ "op": "selection.set", "entity": collider }),
+        );
+
+        let before = size_of(&session, collider);
+        let began = call(
+            &mut session,
+            json!({ "op": "collider.resize_begin", "handle": "size" }),
+        );
+        assert_eq!(began["started"], true, "{began}");
+
+        // The drag previews: the world changes now, the history does not.
+        call(
+            &mut session,
+            json!({ "op": "collider.resize_drag", "delta": { "x": 2.0, "y": 0.0, "z": 0.0 } }),
+        );
+        let during = size_of(&session, collider);
+        assert!(
+            (during - (before + 2.0)).abs() < 1e-5,
+            "{before} -> {during}"
+        );
+
+        // Releasing commits it as ONE step: a single undo goes back to the original size.
+        let ended = call(&mut session, json!({ "op": "collider.resize_end" }));
+        assert_eq!(ended["changed"], true, "{ended}");
+        call(&mut session, json!({ "op": "edit.undo" }));
+        let undone = size_of(&session, collider);
+        assert!(
+            (undone - before).abs() < 1e-5,
+            "{before} -> {undone} after one undo"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn cancelling_a_collider_drag_leaves_the_row_exactly_as_it_was() {
+        let root = std::env::temp_dir().join(format!(
+            "petunia_editor_test_collider_cancel_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let mut session = EditorSession::new().expect("session");
+        call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "cancela" }),
+        );
+        let made = call(
+            &mut session,
+            json!({ "op": "create.brush", "shape": "box" }),
+        );
+        let object = made["entity"].as_u64().expect("entity");
+        call(
+            &mut session,
+            json!({ "op": "selection.set", "entity": object }),
+        );
+        let added = call(
+            &mut session,
+            json!({ "op": "collider.add", "shape": "box" }),
+        );
+        let collider = added["entity"].as_u64().expect("collider");
+        call(
+            &mut session,
+            json!({ "op": "selection.set", "entity": collider }),
+        );
+
+        let before = size_of(&session, collider);
+        call(
+            &mut session,
+            json!({ "op": "collider.resize_begin", "handle": "size" }),
+        );
+        call(
+            &mut session,
+            json!({ "op": "collider.resize_drag", "delta": { "x": 5.0, "y": 5.0, "z": 5.0 } }),
+        );
+        call(&mut session, json!({ "op": "collider.resize_cancel" }));
+        let after = size_of(&session, collider);
+        assert!(
+            (after - before).abs() < 1e-6,
+            "cancel restores: {before} -> {after}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn size_of(session: &EditorSession, collider: u64) -> f32 {
+        let world = session.world().expect("world");
+        crate::colliders::row_of(world, collider)
+            .expect("row")
+            .size
+            .x
     }
 }
