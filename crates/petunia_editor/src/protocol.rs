@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use petunia_commands::{CommandRecord, QueryRecord, run_query};
+use petunia_math::Vec3;
 use serde_json::{Value as Json, json};
 
 use crate::failure::Failure;
@@ -51,6 +52,40 @@ fn optional_number(request: &Json, key: &str) -> Option<f32> {
         .get(key)
         .and_then(Json::as_f64)
         .map(|value| value as f32)
+}
+
+/// `axis` as `x`/`y`/`z` or `0`/`1`/`2`.
+fn axis_index(request: &Json) -> Result<usize, Failure> {
+    let index = match request.get("axis") {
+        Some(Json::String(name)) => match name.as_str() {
+            "x" => Some(0),
+            "y" => Some(1),
+            "z" => Some(2),
+            _ => None,
+        },
+        Some(value) => value
+            .as_u64()
+            .filter(|index| *index < 3)
+            .map(|index| index as usize),
+        None => None,
+    };
+    index.ok_or_else(|| Failure::bad_request("`axis` precisa ser x, y, z, 0, 1 ou 2"))
+}
+
+/// A `{x, y, z}` object in the request.
+fn vector_field(request: &Json, key: &str) -> Result<Vec3, Failure> {
+    let field = request
+        .get(key)
+        .ok_or_else(|| Failure::bad_request(&format!("falta o vetor `{key}`")))?;
+    let component = |name: &str| {
+        field
+            .get(name)
+            .and_then(Json::as_f64)
+            .map(|value| value as f32)
+            .filter(|value| value.is_finite())
+            .ok_or_else(|| Failure::bad_request(&format!("falta `{key}.{name}`")))
+    };
+    Ok(Vec3::new(component("x")?, component("y")?, component("z")?))
 }
 
 fn entity(request: &Json) -> Result<u64, Failure> {
@@ -175,6 +210,8 @@ impl EditorSession {
 
             "prefab.list" => Ok(self.prefab_list()),
             "prefab.spawn" => self.prefab_spawn(text(request, "id")?),
+            "prefab.save" => self.prefab_save(text(request, "name")?),
+            "prefab.spawn_project" => self.prefab_spawn_project(text(request, "name")?),
 
             "script.to_graph" => self.graph_from_script(
                 text(request, "name")?,
@@ -393,10 +430,40 @@ impl EditorSession {
             "face.end" => self.face_drag_end(),
             "face.cancel" => self.face_drag_cancel(),
             "brush.carve" => self.carve_selection(),
+            "brush.cut_plane" => {
+                self.cut_selection(axis_index(request)?, number_or(request, "offset", 0.0))
+            }
+            "brush.arrange_line" => self.arrange_line_selection(
+                request.get("count").and_then(Json::as_u64).unwrap_or(2) as usize,
+                vector_field(request, "offset")?,
+            ),
+            "brush.arrange_circle" => self.arrange_circle_selection(
+                request.get("count").and_then(Json::as_u64).unwrap_or(8) as usize,
+                vector_field(request, "center")?,
+                axis_index(request)?,
+            ),
+            "brush.mirror" => self.mirror_selection(
+                axis_index(request)?,
+                number(request, "plane")?,
+                request
+                    .get("duplicate")
+                    .and_then(Json::as_bool)
+                    .unwrap_or(true),
+            ),
             "collider.add" => {
                 self.add_collider(request.get("shape").and_then(Json::as_str).unwrap_or("box"))
             }
             "collider.fit" => self.fit_collider(),
+            "collider.handle_begin" => self.collider_handle_begin(pointer(request)?),
+            "collider.handle_drag" => {
+                let invert = request
+                    .get("invert_snap")
+                    .and_then(Json::as_bool)
+                    .unwrap_or(false);
+                self.collider_handle_drag(pointer(request)?, invert)
+            }
+            "collider.handle_end" => self.collider_handle_end(),
+            "collider.handle_cancel" => self.collider_handle_cancel(),
             "asset.list" => self.asset_list(),
             "asset.import" => self.asset_import(text(request, "path")?),
             "create.light" => self.create_light(

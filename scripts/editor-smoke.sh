@@ -60,12 +60,13 @@ Xvfb "$display" -screen 0 1440x900x24 +extension GLX >/dev/null 2>&1 &
 xvfb_pid=$!
 sleep 1
 
+# The delay is also the LENGTH of the run: the editor takes the pictures and quits when it fires. At
+# 62000 the steps grew past the timer, the editor quit in the middle of the last ones and the run
+# reported failures (and once a segfault) that the product did not have (2026-10-29). Keep it well
+# above the slowest pass. (A comment cannot sit inside the backslash continuation: it swallows the
+# command that follows it.)
 env -u WAYLAND_DISPLAY DISPLAY="$display" XDG_CONFIG_HOME="$workdir/config" XDG_CACHE_HOME="$workdir/cache" \
     QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 QT_LOGGING_RULES='qt.qpa.*=false' \
-    # The delay is also the LENGTH of the run: the editor takes the pictures and quits when it
-    # fires. At 62000 the steps grew past the timer, the editor quit in the middle of the last
-    # ones and the run reported failures (and once a segfault) that the product did not have
-    # (2026-10-29). Keep it well above the slowest pass.
     "$editor" --sample "$workdir/sala" --screenshot "$output" --screenshot-delay 120000 2>"$workdir/editor.log" &
 editor_pid=$!
 sleep 1
@@ -82,7 +83,9 @@ xdotool mouseup 1;                               sleep 0.6
 # Regression: choosing a table in "Adicionar tabela" rebuilds the inspector from inside that
 # button's menu. Deleting a widget inside its own signal used to crash Qt (SIGSEGV).
 xdotool mousemove 1185 600; for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do xdotool click 5; sleep 0.05; done; sleep 0.4
-xdotool mousemove 1185 457 click 1;              sleep 0.6   # open the "Adicionar tabela" menu
+# 497, not 457: a brush now also shows "Tornar editável" above this button, which moved it down
+# by one row. The coordinate is the middle of the button, so a new row above it means a new number.
+xdotool mousemove 1185 497 click 1;              sleep 0.6   # open the "Adicionar tabela" menu
 # The menu lists the tables the object still lacks, in alphabetical order, so this count follows the
 # schema: Bridge, Character, Floor, Light, Mesh, PlayerStart... Adding a table that sorts before
 # PlayerStart (or removing one) means changing the number of Downs here.

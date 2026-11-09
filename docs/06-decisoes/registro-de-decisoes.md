@@ -4,7 +4,7 @@
 
 ## Resumo (TL;DR)
 
-São **37 decisões**. Estados possíveis:
+São **38 decisões**. Estados possíveis:
 
 - **HERDADA:** já decidida na especificação anterior (10/10/2026). Esta documentação **mantém**; só reabre com um ADR.
 - **PROPOSTA:** recomendação minha, aguardando você ou um experimento.
@@ -52,6 +52,7 @@ São **37 decisões**. Estados possíveis:
 | **DR-35** | Schema de grafo v2 e migração | **DECIDIDA** (2026-10-28, "continue") | `SCHEMA_VERSION` 2; grafos v1 são lidos e migrados ao abrir; nós de laço e `with_index` |
 | **DR-36** | Terreno, rios e estradas | **ACEITA e MESCLADA** (2026-10-29) | Spline Bézier por comprimento de arco, perfis varridos, escavação/aplainamento/aterro, descida do rio, cruzamentos, lagos, quedas, confluências e grafo de navegação; comandos e consultas, barra no editor, gravação na cena, convés de ponte, leito sólido na física, erosão, ruído, passo por teclado e carimbos. Terreno em `petunia_world`. **Faltam** decals (`DR-12` é proposta), LOD em quadtree, tubo de bueiro e partículas ([arquitetura](../02-arquitetura/04-terreno-rios-estradas.md)) |
 | **DR-37** | Giro do carimbo de terreno | **ACEITA** (2026-10-29; 15° por passo, `Ctrl` para 1°) | Ângulo por carimbo (`rotation`, em graus) aplicado ao deslocamento dentro do disco, campo **Girar** só no modo Carimbo e o mesmo estado no passo por teclado |
+| **DR-38** | Módulo `grid` e A\* | **ACEITA** (2026-11-09) | Crate `petunia_grid` puro; célula e grade são dados (`{q,r}`, `{kind,size}`); quadrada e hexagonal; A\* determinístico com distância exata; limites antes da conta |
 
 ---
 
@@ -368,11 +369,11 @@ Pool e fade (herdados, `LOCAL`) valem em todas.
 
 ---
 
-## DR-22 — Edição de primitivas e malha para construir mapas · níveis 1 e 3 FEITOS
+## DR-22 — Edição de primitivas e malha para construir mapas · níveis 1 e 3 FEITOS; nível 2 quase todo
 
 **Nível 1 (decidido e feito em 2026-10-24):** **brushes paramétricos** (caixa, rampa, cilindro, cone, esfera, escada) com gizmo de mover, girar e escalar, snap à grade e desfazer por gesto.
 
-**Nível 2 (em parte):** empurrar/puxar, extrudar, cavar e tornar oco existem. Faltam cortar com plano, arranjo e espelhar.
+**Nível 2 (feito em 2026-11-08):** empurrar/puxar, extrudar, cavar, tornar oco, **cortar com plano**, **arranjo em linha e em círculo** e **espelhar** existem. Falta só redimensionar pelas alças da caixa (cantos e arestas). As quatro operações novas são comandos de dados (`brush.cut_plane`, `brush.arrange_line`, `brush.arrange_circle`, `brush.mirror`), cada uma **um** `world.batch`; aceitam **caixas** (cilindros, escadas e malhas ficam para depois) e estão em **Operações** com `Ctrl+Alt+P`, `Ctrl+Alt+L`, `Ctrl+Alt+O` e `Ctrl+Alt+M`. Verificado na janela (display virtual) e na cena salva; detalhes em [edição de brushes](../02-arquitetura/13-primitivas-e-edicao-de-malha.md#nível-2-edição-de-brushes-feito-em-2026-11-08).
 
 **Nível 3 (decidido por você em 2026-10-25).** Pedido: "falta você trazer do petunia3d operações booleanas, inset, loopcut e etc…". Respostas à pergunta de modelo de dados:
 
@@ -390,7 +391,7 @@ Pool e fade (herdados, `LOCAL`) valem em todas.
 
 **Proteções que vieram junto:** a cena pode ter até 64 MB, e salvar uma cena maior é recusado (antes, salvava e depois não abria); o histórico de desfazer tem teto de 256 MB.
 
-**Falta:** a interface Qt (menu Malha, modo de edição com `Tab`, atalhos). Lista em [ganchos da interface](../02-arquitetura/13-primitivas-e-edicao-de-malha.md#ganchos-da-interface-que-faltam).
+**Interface (2026-11-04):** o menu **Malha**, o modo de edição com `Tab`, a faca (`K`), o booleano, o valor ao vivo e as contagens da tabela `Mesh` no inspetor estão ligados e foram vistos em display virtual. A tabela completa está em [ganchos da interface](../02-arquitetura/13-primitivas-e-edicao-de-malha.md#ganchos-da-interface).
 
 **Reabrir se:** as malhas ficarem grandes demais para o arquivo de texto (aí, um arquivo binário por malha); se precisarmos de booleano "vivo" (mover o cortador e o buraco ir junto), que pediria guardar as operações; ou se o `manifold-rust` parar de ser mantido.
 
@@ -538,7 +539,7 @@ Números, opções e o que mudaria a recomendação: [pintura e animação](../0
 
 **Por quê:** sem luz de cena o jogo só tinha o sol padrão; sem importação, todo cenário precisava ser feito dentro do editor.
 
-**Fica de fora (declarado):** material por face (exige cor por face em `PolygonMesh`), texturas e alças de redimensionar colisão no viewport.
+**Fica de fora (declarado):** material por face (exige cor por face em `PolygonMesh`) e texturas. (As alças de redimensionar colisão no viewport foram feitas em 2026-11-08 para colisões em caixa.)
 
 **Reabrir se:** modelos grandes passarem do limite de vértices no uso real, ou se texturas virarem requisito.
 
@@ -782,6 +783,31 @@ Se uma biblioteca for necessária mais tarde, passa no checklist de admissão an
 **Como ficou (LOCAL, verificado):** `StampShape::height_at_rotated` gira o deslocamento antes de avaliar a forma, então a borda continua zerando e a força continua em metros; `HeightChunk::stamp_region` recebe o ângulo e descarta um ângulo não finito. No comando, cada carimbo aceita `rotation` (padrão `0`, recusado se não for finito), então uma pincelada pode misturar ângulos. Na barra, o campo **Girar** aparece ao lado de **Forma**, só no modo Carimbo; `Ctrl`+seta dá 1° e a digitação é enviada ao soltar o campo ou apertar Enter. A frase do passo por teclado passa a dizer o ângulo — "Passo: Carimbo (Crista, 90°), raio 4,00 m…".
 
 **Verificação:** 2 testes novos em `petunia_world::stamp` (a crista vira 90° e troca os eixos; 0°/360° dão a mesma altura e um ângulo hostil não escreve nada), 1 no `heightfield` (a crista girada levanta ao longo de z e o pico não muda) e 1 de fluxo no `petunia_editor` (mesma forma, duas medidas, um desfazer entre elas). No teste de fumaça o mesmo carimbo de crista é aplicado reto e girado 90°: **16/16** (a medida ao longo de x cai e a ao longo de z cresce).
+
+---
+
+## DR-38 — Módulo `grid` e A\* · ACEITA (2026-11-09)
+
+**Pedido:** fechar o item `grid`/A\* da lista do [estado da implementação](../05-roadmap/03-estado-da-implementacao.md). O desenho existia desde 2026-10-24 em [personagens, UI e grade](../02-arquitetura/09-personagens-ui-e-grade.md) §5, com uma API ilustrativa e nenhuma linha de código.
+
+**Decisão:**
+
+1. **Crate próprio `petunia_grid`**, de domínio puro: não depende de render, janela, física nem do world. A matemática é nossa (regra do `AGENTS.md`: grade e A\* são determinismo-crítico, nunca de biblioteca), sem dependência nova além de `thiserror` e `petunia_math`, que já estavam registradas.
+2. **A célula é dado, não objeto de motor.** `Cell { q, r }` são números inteiros; numa script é o dicionário `{"q": Int, "r": Int}`. **A grade também é dado**: `{"kind": "square"|"hex", "size": Float}`. Nada de registro escondido no host, nada que não possa ir para uma tabela, um arquivo ou a rede.
+3. **Duas formas.** Quadrada: eixos `q` e `r`, quatro vizinhas, diagonal custa dois passos. Hexagonal pontuda: coordenadas cúbicas com `s = -q - r`, seis vizinhas e a fórmula do GDD, `(|Δq| + |Δr| + |Δs|) / 2`.
+4. **A\* com a distância exata como heurística**, então o primeiro caminho até cada célula é o mais curto. Empates são decididos pela heurística e depois pela própria célula, o que dá o mesmo caminho em toda máquina. `grid.path` devolve `none` quando o começo ou o destino está bloqueado, ou quando não há caminho — não é erro.
+5. **`range` devolve ordem fixa** (por `r`, depois `q`), para um jogo que sorteia alvos poder guardar a semente e repetir a partida.
+6. **Limites antes da conta**: coordenada até ±1.000.000, tamanho de célula de 0,001 a 10.000 m, raio até 256 (200 mil células), 65.536 bloqueadas e 65.536 células expandidas de A\*, que vira erro `SearchTooLarge` em vez de travar. Ponto não finito é recusado.
+
+**Fora desta etapa (declarado):** visão da grade no viewport, encaixe do gizmo na célula, linha de movimento de unidade, custo por terreno (lama, água), grade esférica/cilíndrica e pathfinding com pesos. Também não há tabela `Grid` na cena: a grade é criada pela script, não salva.
+
+**Como ficou (LOCAL, verificado):** `crates/petunia_grid` com `Grid::{square,hex}`, `distance`, `neighbors`, `range`, `path`, `to_world`, `from_world` e `Cell::{new, ORIGIN}`. As oito funções estão na tabela única do `api.rs` (`grid.square`, `grid.hex`, `grid.distance`, `grid.neighbors`, `grid.range`, `grid.path`, `grid.to_world`, `grid.from_world`), com permissão vazia porque não tocam o mundo, e nos nativos de `grid_api.rs`. A ajuda e o autocomplete do editor saem da mesma tabela.
+
+**Verificação:** 8 testes em `petunia_grid` (distância quadrada e cúbica, 4 e 6 vizinhas, 13/19/91 células de alcance, ida e volta mundo↔célula nas duas formas, caminho mais curto e contínuo com e sem parede, determinismo do mesmo caminho, `none` para começo/destino bloqueado, limites hostis, estouro do orçamento de A\*) e 3 em `petunia_script` (distância, vizinhas, alcance, caminho com desvio, célula↔metros por script real, recusa tratada com `attempt`/`failed` sem virar falha do script).
+
+**Não verificado:** o editor — não há interface de grade ainda, a API só existe para scripts; e um mapa real grande (os testes usam raios de até 5 e uma busca de 400 células).
+
+**Reabrir se:** um jogo precisar de custo por célula (A\* com pesos), de mais de um andar na mesma grade, ou se a grade tiver de ser salva na cena em vez de criada pela script.
 
 ---
 

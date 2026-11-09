@@ -36,6 +36,7 @@ fn on_update(entity, dt) {
 | `collision` | `set` (muda uma coluna de uma colisão; a física se refaz no quadro seguinte) | `world.write` |
 | `physics` | `raycast`, `raycast_from` (ignora o próprio objeto), `velocity` | `world.read` |
 | `physics` | `set_velocity`, `impulse` | `world.write` |
+| `grid` | `square`, `hex`, `distance`, `neighbors`, `range`, `path`, `to_world`, `from_world` | nenhuma |
 | biblioteca padrão da Aipo | `math`, `string`, `json`, listas, dicionários, `random` com semente, `time` (sem relógio), `task`… | nenhuma |
 
 A tabela está em **um lugar só** (`api.rs`) e gera o que o compilador aceita, as funções nativas e a ajuda do editor; um teste confere que as três coincidem. Um erro como `world.fnd` aparece **no editor, antes de jogar**.
@@ -63,6 +64,32 @@ fn on_collision(entity, outro, minha, dele) {
 - **Personagem** (`Character`): `character.move(entity, x, z)` manda andar em m/s; o motor desvia de paredes, sobe degraus e rampas e cola no chão ao descer. `character.jump(entity)` pula (vale também por um instante depois de sair de uma borda: **tempo de coiote**).
 - Apagar um objeto com `world.remove` leva as colisões dele; mudar `Collider` ou `RigidBody` com `world.set` refaz a física no quadro seguinte.
 - Sem colisões ou corpos no mundo, `physics.*` e `collision.overlaps` devolvem uma falha que explica: "a física não está ligada".
+
+### Grade e caminho (`grid`, DR-38)
+
+A grade é **dado**, não um objeto do motor: `{"kind": "square"|"hex", "size": metros}`. A célula também: `{"q": Int, "r": Int}`. Um script cria a grade uma vez e passa adiante; ela cabe numa tabela, num arquivo e na rede.
+
+```aipo
+fn on_start(entity) {
+    var grade = grid.square(1.0)               // hex(1.0) para hexagonal pontuda
+    let eu = grid.from_world(grade, transform.get_position(entity))
+    let alvo = { "q": 4, "r": 2 }
+    let paredes = [{ "q": 2, "r": 0 }, { "q": 2, "r": 1 }]
+    attempt {
+        let caminho = grid.path(grade, eu, alvo, paredes)?
+        log.info("passos", len(caminho))
+    } failed erro {
+        log.warning("sem caminho:", erro)
+    }
+}
+```
+
+- **Quadrada**: eixos `q` e `r`, quatro vizinhas, a diagonal custa **dois** passos (`distance = |Δq| + |Δr|`).
+- **Hexagonal**: coordenadas cúbicas, `s = -q - r`, seis vizinhas e `distance = (|Δq| + |Δr| + |Δs|) / 2`.
+- `grid.range(cell, raio)` devolve a própria célula e tudo até `raio` passos, sempre na mesma ordem (por `r`, depois `q`): a mesma semente dá a mesma lista.
+- `grid.path` é A\* com a distância exata de heurística; o primeiro caminho é o mais curto. Devolve `none` (e não falha) quando o começo ou o destino está bloqueado, ou quando não há passagem.
+- `grid.to_world` dá o centro da célula no chão (`y = 0`); `grid.from_world` ignora o `y`.
+- **Limites**: coordenada até ±1.000.000, célula de 0,001 a 10.000 m, raio até 256, 65.536 células bloqueadas e 65.536 expandidas por busca — acima disso é falha, não travamento.
 
 ## O que um script **não** pode
 

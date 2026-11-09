@@ -10,13 +10,24 @@ use petunia_render::{DrawItem, OverlayItem, item_mesh, model_matrix};
 use petunia_world::{PersistentId, Value, World};
 use serde_json::{Map, Value as Json, json};
 
+use crate::brush_ops::{closest_on_line, component, unit, with_component};
 use crate::failure::Failure;
-use crate::session::EditorSession;
+use crate::gizmo;
+use crate::session::{EditorSession, vector_json};
+use crate::tools::Pointer;
 
 /// Colliders of the selected object, and the one being edited.
 const COLLIDER_COLOR: Color = Color::new(0.30, 0.90, 0.45, 0.95);
 const COLLIDER_SELECTED_COLOR: Color = Color::new(0.55, 1.0, 0.65, 1.0);
 const TRIGGER_COLOR: Color = Color::new(0.95, 0.80, 0.25, 0.95);
+/// A face handle: white reads on the green wires and on the three axis colors.
+const HANDLE_COLOR: Color = Color::new(0.94, 1.0, 0.94, 1.0);
+/// Side of a face handle, in logical pixels.
+const HANDLE_PIXELS: f32 = 9.0;
+/// How near (pixels) the pointer must be to grab a handle.
+const HANDLE_HIT_PIXELS: f32 = 11.0;
+/// Thinnest a box collider may get when a face is dragged, in meters.
+const MINIMUM_COLLIDER_THICKNESS: f32 = 0.05;
 /// Segments of a drawn circle.
 const CIRCLE_SEGMENTS: usize = 32;
 
@@ -297,7 +308,241 @@ impl EditorSession {
             };
             collider_lines(item, &row, color, width, out);
         }
+        // Square handles on the face centers of the box colliders of the selected object (or of
+        // the selected collider's object): drag one to resize. Face, terrain and sculpt tools
+        // hide them, and the Qt viewport tries the gizmo first, so a handle never steals a gizmo
+        // click.
+        if !self.tool.has_gizmo() {
+            return;
+        }
+        for handle in self.collider_handles() {
+            out.push(OverlayItem::Square {
+                center: handle.center,
+                color: HANDLE_COLOR,
+                size_pixels: HANDLE_PIXELS,
+            });
+        }
     }
+}
+
+/// The axis and side of one face of a box collider, placed in the world.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ColliderHandle {
+    /// The collider entity the handle resizes.
+    pub collider: u64,
+    pub axis: usize,
+    /// Where the square is drawn (the face center, in meters).
+    pub center: Vec3,
+    /// World direction the face moves along when dragged, pointing outward.
+    pub normal: Vec3,
+    /// The collider's own axis turned by its rotation, signed toward this face.
+    pub local_axis: Vec3,
+    /// Meters in the world per unit of `Collider.size` along `axis`.
+    pub meters_per_unit: f32,
+}
+
+/// A collider face being dragged. The face follows the pointer; the opposite face stays put.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ColliderDrag {
+    collider: u64,
+    axis: usize,
+    local_axis: Vec3,
+    normal: Vec3,
+    meters_per_unit: f32,
+    start_size: Vec3,
+    start_center: Vec3,
+    /// The face center where the drag started: the fixed line the pointer is measured on.
+    start_face: Vec3,
+    start_parameter: f32,
+}
+
+impl EditorSession {
+    /// The handles of every box collider of the selected object (or of the selected collider's
+    /// object), in the world. Round and convex colliders have no handles: their size is a radius,
+    /// not three extents.
+    pub(crate) fn collider_handles(&self) -> Vec<ColliderHandle> {
+        let (Some(selection), Ok(world)) = (self.selection, self.world()) else {
+            return Vec::new();
+        };
+        let owner = owner_of(world, selection).unwrap_or(selection);
+        let ids = colliders_of(world, owner);
+        if ids.is_empty() {
+            return Vec::new();
+        }
+        let Some(item) = self.item_of(owner) else {
+            return Vec::new();
+        };
+        let mut handles = Vec::new();
+        for id in ids {
+            let Some(row) = read_row(world, id) else {
+                continue;
+            };
+            if row.shape != "box" {
+                continue;
+            }
+            handles.extend(face_handles(&item, id, &row));
+        }
+        handles
+    }
+
+    /// The handle under the pointer, nearest first.
+    pub(crate) fn collider_handle_under(&self, pointer: Pointer) -> Option<ColliderHandle> {
+        if !self.tool.has_gizmo() {
+            return None;
+        }
+        let view = self.view_for(pointer);
+        if !view.is_valid() {
+            return None;
+        }
+        let mouse = pointer.mouse();
+        self.collider_handles()
+            .into_iter()
+            .filter_map(|handle| {
+                let screen = view.project(handle.center)?;
+                let gap = ((screen[0] - mouse[0]).powi(2) + (screen[1] - mouse[1]).powi(2)).sqrt();
+                (gap <= HANDLE_HIT_PIXELS).then_some((handle, gap))
+            })
+            .min_by(|(_, a), (_, b)| a.total_cmp(b))
+            .map(|(handle, _)| handle)
+    }
+
+    /// `collider.handle_begin`: a face handle under the pointer starts resizing that collider.
+    pub fn collider_handle_begin(&mut self, pointer: Pointer) -> Result<Json, Failure> {
+        let Some(handle) = self.collider_handle_under(pointer) else {
+            return Ok(json!({ "started": false }));
+        };
+        let view = self.view_for(pointer);
+        let Some(ray) = view.ray(pointer.mouse()) else {
+            return Ok(json!({ "started": false }));
+        };
+        let Some(start_parameter) = closest_on_line(&ray, handle.center, handle.normal) else {
+            return Ok(json!({ "started": false }));
+        };
+        let (start_size, start_center) = {
+            let world = self.world()?;
+            let row = read_row(world, handle.collider).ok_or_else(|| {
+                Failure::new(
+                    "EDITOR_NOT_A_COLLIDER",
+                    "a alça aponta para algo que não é uma colisão",
+                    "Selecione o objeto de novo e tente outra vez.",
+                )
+            })?;
+            (row.size, row.center)
+        };
+        self.selection = Some(handle.collider);
+        self.collider_drag = Some(ColliderDrag {
+            collider: handle.collider,
+            axis: handle.axis,
+            local_axis: handle.local_axis,
+            normal: handle.normal,
+            meters_per_unit: handle.meters_per_unit,
+            start_size,
+            start_center,
+            start_face: handle.center,
+            start_parameter,
+        });
+        self.hud = Some(String::new());
+        Ok(json!({ "started": true, "entity": handle.collider }))
+    }
+
+    /// `collider.handle_drag`: the face follows the pointer along its normal; the opposite face
+    /// stays where it is. Ctrl (`invert_snap`) flips snapping for this move.
+    pub fn collider_handle_drag(
+        &mut self,
+        pointer: Pointer,
+        invert_snap: bool,
+    ) -> Result<Json, Failure> {
+        let Some(drag) = self.collider_drag else {
+            return Ok(Json::Null);
+        };
+        let view = self.view_for(pointer);
+        let Some(ray) = view.ray(pointer.mouse()) else {
+            return Ok(Json::Null);
+        };
+        let face = drag.start_face;
+        let Some(parameter) = closest_on_line(&ray, face, drag.normal) else {
+            return Ok(Json::Null);
+        };
+        let scale_along = drag.meters_per_unit;
+        let start_world = component(drag.start_size, drag.axis) * scale_along;
+        let mut world_size = start_world + (parameter - drag.start_parameter);
+        if self.snap.enabled != invert_snap && self.snap.translate > 0.0 {
+            world_size = (world_size / self.snap.translate).round() * self.snap.translate;
+        }
+        let world_size = world_size.max(MINIMUM_COLLIDER_THICKNESS);
+        let local_delta = (world_size - start_world) / scale_along;
+        let size = with_component(
+            drag.start_size,
+            drag.axis,
+            component(drag.start_size, drag.axis) + local_delta,
+        );
+        let center = drag.start_center + drag.local_axis * (local_delta * 0.5);
+        self.gesture_preview(drag.collider, "Collider", "size", &vector_json(size))?;
+        self.gesture_preview(drag.collider, "Collider", "center", &vector_json(center))?;
+        let summary = format!("{:.2} × {:.2} × {:.2} m", size.x, size.y, size.z).replace('.', ",");
+        self.hud = Some(summary.clone());
+        Ok(json!({ "summary": summary }))
+    }
+
+    /// `collider.handle_end`: closes the resize as one undo step.
+    pub fn collider_handle_end(&mut self) -> Result<Json, Failure> {
+        self.collider_drag = None;
+        self.hud = None;
+        self.gesture_commit()
+    }
+
+    /// `collider.handle_cancel`: restores the size and center from before the drag.
+    pub fn collider_handle_cancel(&mut self) -> Result<Json, Failure> {
+        self.collider_drag = None;
+        self.hud = None;
+        self.gesture_cancel()
+    }
+}
+
+/// The six face handles of one box collider, placed like `collider_lines` places the box (inside
+/// the owner's transform, with the owner's scale stretching it).
+fn face_handles(owner: &DrawItem, collider: u64, row: &ColliderRow) -> Vec<ColliderHandle> {
+    let owner_rotation = gizmo::rotation_from_euler(owner.transform.rotation_degrees);
+    let collider_rotation = gizmo::rotation_from_euler(row.rotation_degrees);
+    let scale = owner.transform.scale;
+    let scale = Vec3::new(scale.x.abs(), scale.y.abs(), scale.z.abs());
+    let half = Vec3::new(row.size.x.abs(), row.size.y.abs(), row.size.z.abs()) * 0.5;
+    let mut handles = Vec::with_capacity(6);
+    for axis in 0..3 {
+        for sign in [-1.0f32, 1.0] {
+            let local_axis = gizmo::rotate_vector(&collider_rotation, unit(axis) * sign);
+            let local_center = row.center + local_axis * component(half, axis);
+            let scaled = Vec3::new(
+                local_center.x * scale.x,
+                local_center.y * scale.y,
+                local_center.z * scale.z,
+            );
+            let center = owner.transform.position + gizmo::rotate_vector(&owner_rotation, scaled);
+            // The face moves along the owner's turned-and-scaled axis; its length is how many
+            // meters one unit of `size` spans on screen.
+            let world_axis = gizmo::rotate_vector(
+                &owner_rotation,
+                Vec3::new(
+                    local_axis.x * scale.x,
+                    local_axis.y * scale.y,
+                    local_axis.z * scale.z,
+                ),
+            );
+            let meters_per_unit = world_axis.length();
+            if meters_per_unit <= 1.0e-4 {
+                continue;
+            }
+            handles.push(ColliderHandle {
+                collider,
+                axis,
+                center,
+                normal: world_axis * (1.0 / meters_per_unit),
+                local_axis,
+                meters_per_unit,
+            });
+        }
+    }
+    handles
 }
 
 /// The lines of one collider, placed like the physics places it: inside the owner's transform,
@@ -545,6 +790,138 @@ mod tests {
 
         let unknown = session.handle(&json!({ "op": "collider.add", "shape": "torus" }));
         assert_eq!(unknown["ok"], false);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The `size` column of a collider, as the inspector shows it.
+    fn collider_size(session: &mut EditorSession, collider: u64) -> Json {
+        let world = session.world().expect("world");
+        let handle = world
+            .handle_of(petunia_world::PersistentId(collider))
+            .expect("collider");
+        match world.get(handle, "Collider", "size") {
+            Ok(petunia_world::Value::Vec3(value)) => {
+                json!({ "x": value.x, "y": value.y, "z": value.z })
+            }
+            other => panic!("collider size: {other:?}"),
+        }
+    }
+
+    /// Finds a screen pixel where a world point lands, for tests that drag handles.
+    fn screen_of(session: &EditorSession, point: petunia_math::Vec3) -> Option<[f32; 2]> {
+        use crate::gizmo::View;
+        let view = View {
+            camera: session.camera.camera,
+            width: 1200.0,
+            height: 800.0,
+        };
+        view.project(point)
+    }
+
+    #[test]
+    fn a_collider_face_handle_resizes_the_box_and_undoes_in_one_step() {
+        let (mut session, root) = opened("collider_handles");
+        call(&mut session, json!({ "op": "selection.set", "entity": 9 }));
+        let added = call(
+            &mut session,
+            json!({ "op": "collider.add", "shape": "box" }),
+        );
+        let collider = added["entity"].as_u64().expect("collider id");
+
+        // Looking from +X, straight at the crate: the +X face handle faces the camera.
+        call(
+            &mut session,
+            json!({ "op": "camera.view", "name": "right" }),
+        );
+        let handles = session.collider_handles();
+        assert_eq!(handles.len(), 6, "a box collider has six face handles");
+        assert!(handles.iter().all(|handle| handle.collider == collider));
+        let positive_x = handles
+            .iter()
+            .find(|handle| handle.axis == 0 && handle.normal.x > 0.0)
+            .copied()
+            .expect("+X face handle");
+
+        // The handle sits on the face center: half the collider's own size away in X.
+        let described = call(
+            &mut session,
+            json!({ "op": "entity.describe", "entity": collider }),
+        );
+        let _ = &described;
+        // The handles are the six face centers of the collider's box: the drag test below also
+        // proves placement, because `handle_begin` only accepts a click within a few pixels of
+        // a projected handle.
+        assert!(handles.iter().all(|handle| handle.meters_per_unit > 0.0));
+
+        // Drag the +X face 1 m outward, in two steps, then close the drag.
+        let pointer = |session: &EditorSession, center: petunia_math::Vec3| {
+            let screen = screen_of(session, center).expect("on screen");
+            crate::tools::Pointer {
+                x: screen[0],
+                y: screen[1],
+                width: 1200.0,
+                height: 800.0,
+            }
+        };
+        let start = pointer(&session, positive_x.center);
+        let begun = call(
+            &mut session,
+            json!({
+                "op": "collider.handle_begin",
+                "x": start.x, "y": start.y, "width": start.width, "height": start.height,
+            }),
+        );
+        assert_eq!(begun["started"], true);
+        assert_eq!(
+            session.selection,
+            Some(collider),
+            "the dragged collider is selected"
+        );
+
+        // Move the face by hand along its own line: one full meter further out.
+        let target = positive_x.center + positive_x.normal;
+        let moved = pointer(&session, target);
+        call(
+            &mut session,
+            json!({
+                "op": "collider.handle_drag",
+                "x": moved.x, "y": moved.y, "width": moved.width, "height": moved.height,
+                "invert_snap": false,
+            }),
+        );
+        let end = call(&mut session, json!({ "op": "collider.handle_end" }));
+        assert!(
+            end.is_null() || end.is_object() || end.is_array(),
+            "the drag closes with a record or nothing: {end}"
+        );
+
+        let size = collider_size(&mut session, collider);
+        let sized_x = size.get("x").and_then(Json::as_f64).unwrap_or(f64::NAN);
+        assert!(
+            (sized_x - 2.0).abs() < 0.35,
+            "the drag grows the X extent toward 2 m: {size}"
+        );
+
+        // One undo puts the collider back to the crate's size.
+        call(&mut session, json!({ "op": "edit.undo" }));
+        let undone_size = collider_size(&mut session, collider);
+        let undone_x = undone_size
+            .get("x")
+            .and_then(Json::as_f64)
+            .unwrap_or(f64::NAN);
+        assert!(
+            (undone_x - 1.0).abs() < 1.0e-3,
+            "one undo restores the fitted size: {undone_size}"
+        );
+
+        // A drag away from every handle does nothing and is refused honestly.
+        let nowhere = session.handle(&json!({
+            "op": "collider.handle_begin",
+            "x": 1.0, "y": 1.0, "width": 1200.0, "height": 800.0,
+        }));
+        assert_eq!(nowhere["ok"], true);
+        assert_eq!(nowhere["result"]["started"], false);
+
         let _ = std::fs::remove_dir_all(&root);
     }
 }

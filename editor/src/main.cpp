@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #include "main_window.h"
+#include "pointer_diagnostics.h"
 
 namespace {
 
@@ -91,6 +92,7 @@ int main(int argc, char** argv) {
     parser.addOption({"screenshot", QStringLiteral("Salva uma imagem da janela e sai (para testes)."), QStringLiteral("arquivo.png")});
     parser.addOption({"screenshot-delay", QStringLiteral("Espera antes da imagem, em milissegundos (padrão 1500)."), QStringLiteral("ms"), QStringLiteral("1500")});
     parser.addOption({"gl-info", QStringLiteral("Mostra quais formatos de OpenGL o driver aceita e sai (não abre janela).")});
+    parser.addOption({"pointer-info", QStringLiteral("Registra escala e cada clique (global, janela e local) para diagnosticar ponteiro em escala fracionária.")});
     parser.process(app);
 
     QTextStream out(stderr);
@@ -142,6 +144,9 @@ int main(int argc, char** argv) {
 
     MainWindow window;
     window.show();
+    if (parser.isSet("pointer-info")) {
+        install_pointer_diagnostics(window);
+    }
 
     if (parser.isSet("sample")) {
         window.createSampleAt(parser.value("sample"), QStringLiteral("Sala de exemplo"), false);

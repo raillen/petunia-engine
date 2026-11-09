@@ -25,6 +25,23 @@ use crate::tools::Pointer;
 /// Thinnest a brush may get when pushing or pulling a face, in meters.
 const MINIMUM_THICKNESS: f32 = 0.05;
 
+/// Most items one arrangement may create, counting the original.
+const MAXIMUM_ARRANGE_COUNT: usize = 64;
+
+/// Arrangements need at least the original and one copy, and a sane ceiling.
+fn validate_arrangement(count: usize) -> Result<(), Failure> {
+    if (2..=MAXIMUM_ARRANGE_COUNT).contains(&count) {
+        return Ok(());
+    }
+    let message =
+        format!("o arranjo aceita de 2 a {MAXIMUM_ARRANGE_COUNT} itens, contando o original");
+    Err(Failure::new(
+        "EDITOR_ARRANGE_COUNT",
+        &message,
+        "Ajuste o número de cópias.",
+    ))
+}
+
 /// An axis-aligned box in world space.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Aabb {
@@ -168,7 +185,7 @@ pub struct FaceDrag {
     grown: f32,
 }
 
-fn component(vector: Vec3, index: usize) -> f32 {
+pub(crate) fn component(vector: Vec3, index: usize) -> f32 {
     match index {
         0 => vector.x,
         1 => vector.y,
@@ -176,7 +193,7 @@ fn component(vector: Vec3, index: usize) -> f32 {
     }
 }
 
-fn with_component(mut vector: Vec3, index: usize, value: f32) -> Vec3 {
+pub(crate) fn with_component(mut vector: Vec3, index: usize, value: f32) -> Vec3 {
     match index {
         0 => vector.x = value,
         1 => vector.y = value,
@@ -185,7 +202,7 @@ fn with_component(mut vector: Vec3, index: usize, value: f32) -> Vec3 {
     vector
 }
 
-fn unit(index: usize) -> Vec3 {
+pub(crate) fn unit(index: usize) -> Vec3 {
     with_component(Vec3::ZERO, index, 1.0)
 }
 
@@ -601,6 +618,308 @@ impl EditorSession {
         Ok(json!({ "walls": 6 }))
     }
 
+    /// Splits the selected box in two with a plane perpendicular to one of its own axes, `offset`
+    /// meters from its center. Both halves stay boxes: the cut only changes that axis of the size
+    /// and the center along it, so a rotated box is cut correctly too.
+    pub fn cut_selection(&mut self, axis: usize, offset: f32) -> Result<Json, Failure> {
+        let id = self.selection.ok_or_else(no_selection)?;
+        self.item_of(id)
+            .filter(|item| item.shape == Shape::Box)
+            .ok_or_else(|| {
+                Failure::new(
+                    "EDITOR_CUT_NEEDS_BOX",
+                    "para cortar com plano, a seleção precisa ser uma caixa",
+                    "Use uma caixa (Criar > Caixa); cilindros, escadas e malhas ficam para depois.",
+                )
+            })?;
+        let (position, rotation, scale, size, color) = self
+            .box_parts(id)
+            .ok_or_else(|| Failure::bad_request("a caixa não tem brush"))?;
+        let along_scale = component(scale, axis);
+        if along_scale <= 1.0e-4 {
+            return Err(Failure::bad_request(
+                "a caixa precisa ter escala positiva no eixo do corte",
+            ));
+        }
+        let half_local = component(size, axis) * 0.5;
+        let half_world = half_local * along_scale;
+        if !offset.is_finite() || offset.abs() > half_world - MINIMUM_THICKNESS {
+            return Err(Failure::new(
+                "EDITOR_CUT_PLANE_OUTSIDE",
+                "o plano de corte precisa ficar dentro da caixa, sobrando uma parte de cada lado",
+                "Aproxime a distância do centro da caixa.",
+            ));
+        }
+        // The plane in the box's own units, then the size and center of each half.
+        let local_cut = offset / along_scale;
+        let first_size = half_local + local_cut;
+        let second_size = half_local - local_cut;
+        let first_center = (local_cut - half_local) * 0.5;
+        let second_center = (local_cut + half_local) * 0.5;
+        let name = self
+            .world()
+            .map(|world| display_name(world, id))
+            .unwrap_or_default();
+        let matrix = gizmo::rotation_from_euler(rotation);
+        let piece = |center_local: f32, size_axis: f32, suffix: &str| {
+            let center =
+                position + gizmo::rotate_vector(&matrix, unit(axis) * (center_local * along_scale));
+            let mut piece_size = size;
+            piece_size = with_component(piece_size, axis, size_axis);
+            brush_row(
+                &format!("{name} ({suffix})"),
+                center,
+                rotation,
+                scale,
+                piece_size,
+                color.clone(),
+            )
+        };
+        let records = vec![
+            CommandRecord::new("world.remove", json!({ "entity": id })),
+            CommandRecord::new("world.create", piece(first_center, first_size, "A")),
+            CommandRecord::new("world.create", piece(second_center, second_size, "B")),
+        ];
+        let result = self.execute(&CommandRecord::new(
+            petunia_commands::BATCH_COMMAND,
+            json!({ "records": records }),
+        ))?;
+        let entity = result.as_array().and_then(|results| {
+            results
+                .iter()
+                .find_map(|result| result.get("entity").and_then(Json::as_u64))
+        });
+        self.selection = entity;
+        Ok(json!({ "pieces": 2, "entity": entity }))
+    }
+
+    /// Copies the selected box along a straight line: `count` items counting the original, each
+    /// copy `offset` meters past the previous one. One undo step.
+    pub fn arrange_line_selection(&mut self, count: usize, offset: Vec3) -> Result<Json, Failure> {
+        let id = self.selection.ok_or_else(no_selection)?;
+        validate_arrangement(count)?;
+        if !(offset.x.is_finite() && offset.y.is_finite() && offset.z.is_finite())
+            || offset.length() < MINIMUM_THICKNESS
+        {
+            return Err(Failure::new(
+                "EDITOR_ARRANGE_OFFSET",
+                "o deslocamento entre as cópias precisa ser diferente de zero",
+                "Preencha o passo em metros (X, Y ou Z).",
+            ));
+        }
+        let (position, rotation, scale, size, color) = self.arrange_parts(id)?;
+        let name = self
+            .world()
+            .map(|world| display_name(world, id))
+            .unwrap_or_default();
+        let mut records = Vec::new();
+        for index in 1..count {
+            records.push(CommandRecord::new(
+                "world.create",
+                brush_row(
+                    &format!("{name} ({})", index + 1),
+                    position + offset * index as f32,
+                    rotation,
+                    scale,
+                    size,
+                    color.clone(),
+                ),
+            ));
+        }
+        let entity = self.execute_creates(records)?;
+        self.selection = entity;
+        Ok(json!({ "created": count - 1, "entity": entity }))
+    }
+
+    /// Copies the selected box around a circle: `count` items counting the original, evenly
+    /// spaced around `center` in the plane perpendicular to `axis`. Each copy turns with the
+    /// circle. One undo step.
+    pub fn arrange_circle_selection(
+        &mut self,
+        count: usize,
+        center: Vec3,
+        axis: usize,
+    ) -> Result<Json, Failure> {
+        let id = self.selection.ok_or_else(no_selection)?;
+        validate_arrangement(count)?;
+        if !(center.x.is_finite() && center.y.is_finite() && center.z.is_finite()) {
+            return Err(Failure::bad_request(
+                "o centro do círculo precisa ser finito",
+            ));
+        }
+        let (position, rotation, scale, size, color) = self.arrange_parts(id)?;
+        let axis_vector = unit(axis);
+        let from_center = position - center;
+        let along = axis_vector * from_center.dot(axis_vector);
+        let radial = from_center - along;
+        if radial.length() < MINIMUM_THICKNESS {
+            return Err(Failure::new(
+                "EDITOR_ARRANGE_RADIUS",
+                "a caixa selecionada está sobre o eixo do círculo",
+                "Afaste o centro do eixo ou escolha outro eixo.",
+            ));
+        }
+        let name = self
+            .world()
+            .map(|world| display_name(world, id))
+            .unwrap_or_default();
+        let base = gizmo::rotation_from_euler(rotation);
+        let mut records = Vec::new();
+        for index in 1..count {
+            let angle = std::f32::consts::TAU * index as f32 / count as f32;
+            let step = gizmo::axis_rotation(axis_vector, angle);
+            let moved = center + along + gizmo::rotate_vector(&step, radial);
+            let turned = gizmo::euler_from_rotation(&gizmo::multiply(&step, &base));
+            records.push(CommandRecord::new(
+                "world.create",
+                brush_row(
+                    &format!("{name} ({})", index + 1),
+                    moved,
+                    turned,
+                    scale,
+                    size,
+                    color.clone(),
+                ),
+            ));
+        }
+        let entity = self.execute_creates(records)?;
+        self.selection = entity;
+        Ok(json!({ "created": count - 1, "entity": entity }))
+    }
+
+    /// Mirrors the selected box across a world-axis plane (`axis` = constant `plane`). A copy is
+    /// created by default; with `duplicate` off the original itself moves. One undo step.
+    pub fn mirror_selection(
+        &mut self,
+        axis: usize,
+        plane: f32,
+        duplicate: bool,
+    ) -> Result<Json, Failure> {
+        let id = self.selection.ok_or_else(no_selection)?;
+        self.item_of(id)
+            .filter(|item| item.shape == Shape::Box)
+            .ok_or_else(|| {
+                Failure::new(
+                    "EDITOR_MIRROR_NEEDS_BOX",
+                    "para espelhar, a seleção precisa ser uma caixa",
+                    "Use uma caixa (Criar > Caixa).",
+                )
+            })?;
+        let (position, rotation, scale, size, color) = self
+            .box_parts(id)
+            .ok_or_else(|| Failure::bad_request("a caixa não tem brush"))?;
+        if !plane.is_finite() {
+            return Err(Failure::bad_request(
+                "o plano do espelho precisa ser finito",
+            ));
+        }
+        let mut mirrored = position;
+        match axis {
+            0 => mirrored.x = 2.0 * plane - position.x,
+            1 => mirrored.y = 2.0 * plane - position.y,
+            _ => mirrored.z = 2.0 * plane - position.z,
+        }
+        // R' = M · R · M, where M is the reflection; the result is again a proper rotation.
+        let mut reflection = [[0.0; 3]; 3];
+        for (index, row) in reflection.iter_mut().enumerate() {
+            if let Some(cell) = row.get_mut(index) {
+                *cell = if index == axis { -1.0 } else { 1.0 };
+            }
+        }
+        let matrix = gizmo::rotation_from_euler(rotation);
+        let turned = gizmo::euler_from_rotation(&gizmo::multiply(
+            &gizmo::multiply(&reflection, &matrix),
+            &reflection,
+        ));
+        if !duplicate {
+            let records = vec![
+                CommandRecord::new(
+                    "world.set",
+                    json!({
+                        "entity": id,
+                        "table": "Transform",
+                        "column": "position",
+                        "value": vector_json(mirrored),
+                    }),
+                ),
+                CommandRecord::new(
+                    "world.set",
+                    json!({
+                        "entity": id,
+                        "table": "Transform",
+                        "column": "rotation_degrees",
+                        "value": vector_json(turned),
+                    }),
+                ),
+            ];
+            self.execute(&CommandRecord::new(
+                petunia_commands::BATCH_COMMAND,
+                json!({ "records": records }),
+            ))?;
+            return Ok(json!({ "entity": id, "mirrored": 1 }));
+        }
+        let name = self
+            .world()
+            .map(|world| display_name(world, id))
+            .unwrap_or_default();
+        let mut records = vec![CommandRecord::new(
+            "world.create",
+            brush_row(
+                &format!("{name} (espelho)"),
+                mirrored,
+                turned,
+                scale,
+                size,
+                color,
+            ),
+        )];
+        records.extend(self.copy_strokes_records(id, 0));
+        records.extend(self.copy_collider_records(id, 0));
+        records.extend(self.copy_script_records(id, 0));
+        let result = self.execute(&CommandRecord::new(
+            petunia_commands::BATCH_COMMAND,
+            json!({ "records": records }),
+        ))?;
+        let entity = result
+            .get(0)
+            .and_then(|first| first.get("entity"))
+            .and_then(Json::as_u64);
+        self.selection = entity;
+        Ok(json!({ "entity": entity, "mirrored": 1 }))
+    }
+
+    /// Runs `world.create` records as one undo step and returns the last created entity.
+    fn execute_creates(&mut self, records: Vec<CommandRecord>) -> Result<Option<u64>, Failure> {
+        if records.is_empty() {
+            return Ok(None);
+        }
+        let result = self.execute(&CommandRecord::new(
+            petunia_commands::BATCH_COMMAND,
+            json!({ "records": records }),
+        ))?;
+        let entity = result
+            .as_array()
+            .and_then(|results| results.last())
+            .and_then(|last| last.get("entity"))
+            .and_then(Json::as_u64);
+        Ok(entity)
+    }
+
+    /// The transform parts of the selected box, for the arrangement copies.
+    fn arrange_parts(&self, id: u64) -> Result<(Vec3, Vec3, Vec3, Vec3, Json), Failure> {
+        self.item_of(id)
+            .filter(|item| item.shape == Shape::Box)
+            .ok_or_else(|| {
+                Failure::new(
+                    "EDITOR_ARRANGE_NEEDS_BOX",
+                    "o arranjo copia caixas; a seleção precisa ser uma caixa",
+                    "Use uma caixa (Criar > Caixa).",
+                )
+            })?;
+        self.box_parts(id)
+            .ok_or_else(|| Failure::bad_request("a caixa não tem brush"))
+    }
+
     /// World box of a brush that is a box with no rotation (where carving is exact).
     fn axis_aligned_box(&self, entity: u64) -> Option<Aabb> {
         let item = self.item_of(entity)?;
@@ -625,7 +944,11 @@ fn no_selection() -> Failure {
 }
 
 /// Parameter of the point on `origin + direction * t` closest to the mouse ray.
-fn closest_on_line(ray: &petunia_render::Ray, origin: Vec3, direction: Vec3) -> Option<f32> {
+pub(crate) fn closest_on_line(
+    ray: &petunia_render::Ray,
+    origin: Vec3,
+    direction: Vec3,
+) -> Option<f32> {
     let offset = origin - ray.origin;
     let b = direction.dot(ray.direction);
     let denominator = 1.0 - b * b;
@@ -861,6 +1184,200 @@ mod tests {
         assert_eq!(redone["command"], "world.create");
         assert_eq!(session.draw_items().len(), count_before + 1);
 
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn set_rotation(session: &mut EditorSession, entity: u64, rotation: Vec3) {
+        let rotated = session.handle(&json!({
+            "op": "command.execute",
+            "command": "row.set",
+            "payload": {
+                "entity": entity,
+                "table": "Transform",
+                "values": {
+                    "rotation_degrees": { "x": rotation.x, "y": rotation.y, "z": rotation.z }
+                }
+            }
+        }));
+        assert_eq!(rotated["ok"], true, "{rotated}");
+    }
+
+    fn box_volume(items: &[petunia_render::DrawItem]) -> f32 {
+        items
+            .iter()
+            .filter(|item| item.shape == Shape::Box)
+            .map(|item| {
+                item.size.x
+                    * item.size.y
+                    * item.size.z
+                    * item.transform.scale.x
+                    * item.transform.scale.y
+                    * item.transform.scale.z
+            })
+            .sum()
+    }
+
+    #[test]
+    fn cut_plane_splits_a_rotated_box_in_two_without_losing_volume() {
+        let (mut session, root) = opened("cut_plane");
+        let position = Vec3::new(40.0, 1.0, 40.0);
+        let entity = brush_at(&mut session, "box", position);
+        set_rotation(&mut session, entity, Vec3::new(0.0, 35.0, 0.0));
+        session.select(Some(entity)).expect("select");
+        let item = session.item_of(entity).expect("item");
+        let before = box_volume(&session.draw_items());
+
+        let cut = session.handle(&json!({
+            "op": "brush.cut_plane",
+            "axis": "x",
+            "offset": 0.0,
+        }));
+        assert_eq!(cut["ok"], true, "{cut}");
+        assert_eq!(cut["result"]["pieces"], 2);
+        let after = box_volume(&session.draw_items());
+        assert!(
+            (after - before).abs() < 0.01,
+            "volume {after} should match {before}"
+        );
+        let first = cut["result"]["entity"].as_u64().expect("first piece");
+        assert_eq!(session.selection, Some(first));
+        let piece = session.item_of(first).expect("piece");
+        // Half the size on the cut axis, and the same rotation as the original.
+        assert!(
+            (piece.size.x - item.size.x * 0.5).abs() < 1.0e-3,
+            "{}",
+            piece.size.x
+        );
+        assert!((piece.transform.rotation_degrees.y - 35.0).abs() < 1.0e-3);
+        // One undo restores the single box.
+        session.undo().expect("undo");
+        assert!(session.item_of(entity).is_some(), "original box is back");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn cut_plane_outside_the_box_is_refused() {
+        let (mut session, root) = opened("cut_plane_outside");
+        let entity = brush_at(&mut session, "box", Vec3::new(40.0, 1.0, 40.0));
+        session.select(Some(entity)).expect("select");
+        let cut = session.handle(&json!({
+            "op": "brush.cut_plane",
+            "axis": "x",
+            "offset": 100.0,
+        }));
+        assert_eq!(cut["ok"], false);
+        assert_eq!(cut["error"]["code"], "EDITOR_CUT_PLANE_OUTSIDE");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn arrange_line_copies_the_box_and_undoes_in_one_step() {
+        let (mut session, root) = opened("arrange_line");
+        let entity = brush_at(&mut session, "box", Vec3::new(40.0, 1.0, 40.0));
+        session.select(Some(entity)).expect("select");
+        let before = session.draw_items().len();
+        let arranged = session.handle(&json!({
+            "op": "brush.arrange_line",
+            "count": 4,
+            "offset": { "x": 2.0, "y": 0.0, "z": 0.0 },
+        }));
+        assert_eq!(arranged["ok"], true, "{arranged}");
+        assert_eq!(arranged["result"]["created"], 3);
+        assert_eq!(session.draw_items().len(), before + 3);
+        let copy = arranged["result"]["entity"].as_u64().expect("copy");
+        let position = session.item_of(copy).expect("copy item").transform.position;
+        assert!((position.x - 46.0).abs() < 1.0e-3, "{position:?}");
+        session.undo().expect("undo");
+        assert_eq!(session.draw_items().len(), before);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn arrange_circle_places_and_turns_the_copies_around_the_axis() {
+        let (mut session, root) = opened("arrange_circle");
+        let center = Vec3::new(200.0, 0.0, 200.0);
+        let entity = brush_at(&mut session, "box", Vec3::new(205.0, 0.0, 200.0));
+        set_rotation(&mut session, entity, Vec3::new(0.0, 45.0, 0.0));
+        session.select(Some(entity)).expect("select");
+        let arranged = session.handle(&json!({
+            "op": "brush.arrange_circle",
+            "count": 4,
+            "center": { "x": center.x, "y": center.y, "z": center.z },
+            "axis": "y",
+        }));
+        assert_eq!(arranged["ok"], true, "{arranged}");
+        assert_eq!(arranged["result"]["created"], 3);
+        let ring: Vec<petunia_render::DrawItem> = session
+            .draw_items()
+            .into_iter()
+            .filter(|item| {
+                let offset = item.transform.position - center;
+                (offset.length() - 5.0).abs() < 1.0e-2
+            })
+            .collect();
+        assert_eq!(ring.len(), 4, "{ring:?}");
+        let turned = ring
+            .iter()
+            .map(|item| item.transform.rotation_degrees.y.round() as i32)
+            .collect::<Vec<_>>();
+        let mut sorted = turned;
+        sorted.sort_unstable();
+        // 45° is the source; the copies turn with the circle (their Euler yaw is normalized
+        // to (-180°, 180°], so 225° reads as -135° and 315° as -45°).
+        assert_eq!(sorted, vec![-135, -45, 45, 135]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn mirror_duplicates_a_rotated_box_and_mirrors_its_turn() {
+        let (mut session, root) = opened("mirror_duplicate");
+        let entity = brush_at(&mut session, "box", Vec3::new(205.0, 1.0, 200.0));
+        set_rotation(&mut session, entity, Vec3::new(0.0, 30.0, 0.0));
+        session.select(Some(entity)).expect("select");
+        let before = session.draw_items().len();
+        let mirrored = session.handle(&json!({
+            "op": "brush.mirror",
+            "axis": "x",
+            "plane": 200.0,
+            "duplicate": true,
+        }));
+        assert_eq!(mirrored["ok"], true, "{mirrored}");
+        assert_eq!(session.draw_items().len(), before + 1);
+        let copy = mirrored["result"]["entity"].as_u64().expect("copy");
+        let copy_item = session.item_of(copy).expect("copy item");
+        assert!((copy_item.transform.position.x - 195.0).abs() < 1.0e-3);
+        assert!((copy_item.transform.rotation_degrees.y + 30.0).abs() < 1.0e-3);
+        // The original stays where it was.
+        let original = session.item_of(entity).expect("original");
+        assert!((original.transform.position.x - 205.0).abs() < 1.0e-3);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn mirror_in_place_moves_the_box_and_refuses_other_shapes() {
+        let (mut session, root) = opened("mirror_in_place");
+        let entity = brush_at(&mut session, "box", Vec3::new(205.0, 1.0, 200.0));
+        session.select(Some(entity)).expect("select");
+        let before = session.draw_items().len();
+        let mirrored = session.handle(&json!({
+            "op": "brush.mirror",
+            "axis": "z",
+            "plane": 210.0,
+            "duplicate": false,
+        }));
+        assert_eq!(mirrored["ok"], true, "{mirrored}");
+        assert_eq!(session.draw_items().len(), before);
+        let moved = session.item_of(entity).expect("moved");
+        assert!((moved.transform.position.z - 220.0).abs() < 1.0e-3);
+        let cylinder = brush_at(&mut session, "cylinder", Vec3::new(40.0, 1.0, 40.0));
+        session.select(Some(cylinder)).expect("select");
+        let refused = session.handle(&json!({
+            "op": "brush.mirror",
+            "axis": "x",
+            "plane": 0.0,
+        }));
+        assert_eq!(refused["ok"], false);
+        assert_eq!(refused["error"]["code"], "EDITOR_MIRROR_NEEDS_BOX");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

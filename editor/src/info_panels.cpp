@@ -5,6 +5,8 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QListWidget>
+#include <QLocale>
+#include <QPushButton>
 #include <QVBoxLayout>
 
 #include "engine_bridge.h"
@@ -111,6 +113,73 @@ void HistoryPanel::reload() {
         list_->addItem(item);
     }
     list_->scrollToBottom();
+}
+
+// ---- AssetPanel ---------------------------------------------------------------------------
+
+AssetPanel::AssetPanel(EngineBridge* bridge, QWidget* parent) : QWidget(parent), bridge_(bridge) {
+    list_ = new QListWidget(this);
+    list_->setAccessibleName(QStringLiteral("Modelos da pasta assets"));
+    list_->setUniformItemSizes(true);
+    list_->setToolTip(QStringLiteral("Duplo clique põe o modelo na frente da câmera"));
+    auto* import = new QPushButton(QStringLiteral("Importar modelo…"), this);
+    import->setToolTip(QStringLiteral("Traz um .glb ou .gltf para a cena; uma cópia fica em assets/"));
+    connect(import, &QPushButton::clicked, this, &AssetPanel::importModelRequested);
+    connect(list_, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem* item) {
+        const QString path = item->data(Qt::UserRole).toString();
+        if (!path.isEmpty()) {
+            emit importRequested(path);
+        }
+    });
+    auto* layout = new QVBoxLayout(this);
+    layout->setContentsMargins(6, 6, 6, 6);
+    layout->addWidget(import);
+    layout->addWidget(list_, 1);
+}
+
+void AssetPanel::showEvent(QShowEvent* event) {
+    // The folder can change outside the editor (a file dropped in by hand): rescan when opened.
+    reload();
+    QWidget::showEvent(event);
+}
+
+void AssetPanel::reload() {
+    const Reply reply = bridge_->call(QStringLiteral("asset.list"));
+    const QJsonArray assets = reply.result.toObject().value(QStringLiteral("assets")).toArray();
+    QString signature = reply.ok ? QStringLiteral("ok") : QStringLiteral("sem projeto");
+    for (const QJsonValue& value : assets) {
+        const QJsonObject asset = value.toObject();
+        signature += asset.value(QStringLiteral("path")).toString() + QLatin1Char('|');
+        signature += QString::number(asset.value(QStringLiteral("bytes")).toDouble()) + QLatin1Char(';');
+    }
+    if (signature == shown_) {
+        return;
+    }
+    shown_ = signature;
+    list_->clear();
+    if (!reply.ok) {
+        auto* empty = new QListWidgetItem(QStringLiteral("Abra um projeto para ver os assets."), list_);
+        empty->setFlags(Qt::NoItemFlags);
+        return;
+    }
+    const QLocale locale;
+    for (const QJsonValue& value : assets) {
+        const QJsonObject asset = value.toObject();
+        const QString path = asset.value(QStringLiteral("path")).toString();
+        const QString name = asset.value(QStringLiteral("name")).toString();
+        const qint64 bytes = static_cast<qint64>(asset.value(QStringLiteral("bytes")).toDouble());
+        auto* item = new QListWidgetItem(
+            QStringLiteral("%1  ·  %2").arg(name, locale.formattedDataSize(bytes)), list_);
+        item->setData(Qt::UserRole, path);
+        item->setToolTip(QStringLiteral("%1\nDuplo clique para colocar na cena").arg(path));
+    }
+    if (assets.isEmpty()) {
+        auto* empty = new QListWidgetItem(QStringLiteral("Nenhum modelo em assets/."), list_);
+        empty->setFlags(Qt::NoItemFlags);
+        empty->setToolTip(
+            QStringLiteral("Importe um .glb ou .gltf: o arquivo é copiado para assets/ e vira "
+                           "objetos editáveis."));
+    }
 }
 
 // ---- ApiPanel -----------------------------------------------------------------------------

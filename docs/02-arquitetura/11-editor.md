@@ -120,6 +120,10 @@ No canvas (**Caixas e fios**): arraste uma caixa para mover; arraste de uma **sa
 | `sculpt.consolidate` | — | Funde traços em cadeia (um desfazer) |
 | `sculpt.faceted` | `value` | Triângulos chapados (low poly) na caverna selecionada |
 | `brush.carve` · `brush.hollow` | — / `thickness` | **Cavar** (a seleção corta as caixas que toca) e **Tornar oco** |
+| `brush.cut_plane` | `axis` (`x`/`y`/`z` ou 0–2), `offset` (metros do centro) | **Cortar com plano**: a caixa vira duas caixas, com a mesma rotação, escala e cor. Um desfazer |
+| `brush.arrange_line` | `count` (2–64, com o original), `offset` `{x,y,z}` | **Arranjo em linha**: cópias espaçadas pelo passo. Um desfazer |
+| `brush.arrange_circle` | `count` (2–64), `center` `{x,y,z}`, `axis` | **Arranjo em círculo**: o original fica no ângulo zero e as cópias giram junto com o anel. Um desfazer |
+| `brush.mirror` | `axis`, `plane` (coordenada no eixo), `duplicate` (padrão `true`) | **Espelhar**: reflete posição e rotação; com `duplicate` cria cópia (leva colisores, scripts e traços), sem ele move o objeto. Um desfazer |
 | `mesh.convert` | `entity`? | **Tornar editável**: o brush vira malha (`Mesh`), mesma entidade, mesma aparência (um desfazer) |
 | `mesh.boolean` | `operation` (`union`, `subtract`, `intersect`), `tool`, `entity`?, `keep_tool`? | **Fundir, cortar, interseção** com outro brush ou malha, em qualquer rotação e escala; o alvo vira malha; a ferramenta some (a menos que `keep_tool`). Um desfazer |
 | `mesh.pick` | `x`, `y`, `width`, `height`, `entity`? | Face, aresta (com a fração ao longo dela), vértice e ponto sob o mouse |
@@ -142,6 +146,7 @@ No canvas (**Caixas e fios**): arraste uma caixa para mover; arraste de uma **sa
 | `viewport.outline_style` | `color` `{r,g,b}` (0 a 1), `width` (1 a 8 px) | Cor e espessura do contorno da seleção (preferência do editor, não é comando) |
 | `collider.add` | `shape` (`box`, `sphere`, `capsule`, `convex`) | Colisão com nome no objeto selecionado, ajustada a ele; nome livre ("colisão", "colisão 2"…); um passo de desfazer |
 | `collider.fit` | — | A colisão selecionada volta a envolver o objeto |
+| `collider.handle_begin` · `collider.handle_drag` · `collider.handle_end` · `collider.handle_cancel` | — / ponteiro / `invert_snap` | Redimensionar uma colisão em caixa no viewport: arrastar uma alça quadrada muda `size` e `center` juntos; um desfazer por arrasto |
 | `play.start` | — | **Jogar**: roda a cena numa **cópia** com scripts, física e o personagem do jogador (cria um herói de reserva no `PlayerStart` se não houver). Devolve `problems`, `has_player` |
 | `play.tick` | `seconds`, `forward`, `right`, `jump`, `look_x`, `look_y` | Um quadro do jogo; devolve o `log` dos scripts, as `faults` e o `debug` do quadro |
 | `play.debug` | — | O que o último quadro reportou (`tick`, `marks` com `ran` / `check` / `value`) e `playing`; responde também com o jogo parado (DR-32) |
@@ -183,6 +188,7 @@ As regras de tamanho, cor e texto estão em [design da interface](15-design-da-i
 | **Coluna de ferramentas** | No canto do viewport: transformar · faces · esculpir · primitivas (a lista abre ao lado) |
 | **Opções da ferramenta** | Só com Esculpir, Túnel, Terreno, Rio ou Estrada, sob a faixa; mostra apenas os controles da ferramenta ativa (não depende do canto `⋯`, que não alcança widgets) |
 | **Hierarquia** | Árvore com o projeto na raiz, ícone por tipo, número em cinza; busca e `+` (criar) |
+| **Assets** | Aba ao lado de **Hierarquia**: modelos `.glb`/`.gltf` de `assets/` com nome e tamanho; **duplo clique** põe o modelo na frente da câmera como malhas editáveis (um desfazer), sem copiar de novo se ele já está em `assets/`; **Importar modelo…** abre o seletor de *Arquivo > Importar modelo 3D…* |
 | **Inspetor** | Ícone, nome e número; uma seção por tabela, com nome em português, que **recolhe**; `⋯` remove; **Adicionar tabela** no fim |
 | **Workspace Código** | Lista de scripts (`+` cria), editor, Problemas e Console, e a **Referência da API** (funções do script primeiro) |
 
@@ -190,11 +196,13 @@ As regras de tamanho, cor e texto estão em [design da interface](15-design-da-i
 
 **Exibir > Menus por extenso na barra** troca o `≡` pelos nomes dos menus. Cada workspace lembra quais painéis estavam abertos e o tamanho deles.
 
+**Assets** lê a pasta `assets/` do projeto (até 4 níveis, sem seguir links simbólicos). A lista se refaz ao abrir a aba e depois de importar, então um arquivo copiado para lá com o editor aberto aparece na próxima abertura da aba. Importar de fora copia o modelo para `assets/` antes de criar os objetos (nome repetido vira `-2`).
+
 **Jogar** (`F6`; botão roxo na barra, vira **Parar** em vermelho): `W A S D` ou setas andam, `Espaço` pula, botão direito do mouse gira a câmera, `Esc` para. A cena **não muda**: o jogo roda numa cópia. Enquanto joga, hierarquia, inspetor, ferramentas e a maioria dos comandos ficam desligados, e o motor recusa edições. A saída dos scripts vai para o Console do workspace Código.
 
 **Preferências** (`Ctrl+,`, menu Editar): tema, densidade e o **contorno da seleção** (cor e espessura). O contorno gira com o objeto.
 
-**Colisões** (DR-27): *Adicionar colisão* no inspetor ou em **Operações › Colisão** (e na paleta). Elas aparecem **sob o objeto** na Hierarquia e em **verde** no viewport (gatilhos em amarelo; a selecionada mais clara). Clique numa para editar centro, tamanho, raio, altura, gatilho, atrito e quique; `⋯` › *Ajustar ao objeto*. Duplicar e excluir o objeto levam as colisões junto. O corpo físico é a tabela **Corpo físico** (`RigidBody`): *Adicionar tabela*.
+**Colisões** (DR-27): *Adicionar colisão* no inspetor ou em **Operações › Colisão** (e na paleta). Elas aparecem **sob o objeto** na Hierarquia e em **verde** no viewport (gatilhos em amarelo; a selecionada mais clara). Clique numa para editar centro, tamanho, raio, altura, gatilho, atrito e quique; `⋯` › *Ajustar ao objeto*. Duplicar e excluir o objeto levam as colisões junto. O corpo físico é a tabela **Corpo físico** (`RigidBody`): *Adicionar tabela*. **Redimensionar pelo viewport**: quando uma colisão em **caixa** está selecionada, quadrados brancos aparecem no centro de cada face; arraste um deles e o `size` e o `center` mudam juntos (um desfazer por arrasto; `Ctrl` inverte o snap). Esféricas, em cápsula e convexas continuam só pelo inspetor.
 
 **Não há botão Jogar**: o modo Jogar ainda não existe, e um botão sem efeito engana.
 
@@ -215,6 +223,7 @@ As regras de tamanho, cor e texto estão em [design da interface](15-design-da-i
 | Modo Livre (o mouse muda o valor; `X` `Y` `Z` restringem; digite um número) | **duplo toque** em `G`, `R` ou `S`; `Enter`/clique confirma, `Esc`/botão direito cancela |
 | Empurrar/puxar e Extrudar uma face | `P` e `E`, depois arraste a face |
 | Cavar e Tornar oco | `Ctrl+Alt+C` e `Ctrl+Alt+H` |
+| Cortar com plano, Arranjo em linha, Arranjo em círculo e Espelhar | `Ctrl+Alt+P`, `Ctrl+Alt+L`, `Ctrl+Alt+O` e `Ctrl+Alt+M` |
 | Esculpir caverna (modo nas opções da ferramenta, sob a faixa do viewport; `Ctrl` faz o oposto) | `B`; `[` e `]` mudam o raio; `Esc` cancela o arrasto |
 | Workspace Código | `F4` (e `F3` volta à cena); `F5` executa numa cópia; `Ctrl+S` dentro do editor salva o **script**; `Ctrl+Shift+F` formata; `Ctrl+Espaço` sugestões; **`Esc` e depois `Tab` sai do editor** |
 | Túnel por caminho: clique pontos na rocha | `Shift+B`; `Enter` cava, `Backspace` tira o último ponto, `Esc` cancela |
@@ -249,7 +258,7 @@ Os atalhos de edição ficam em **Ajuda > Atalhos**: `Ctrl+Z`, `Ctrl+Shift+Z`, `
 | Traços de caverna não aparecem na Hierarquia nem se editam um a um | A caverna inteira se move, copia e apaga; editar um traço fica para depois |
 | Abrir uma caverna enorme e desfazer nela recalculam o campo todo | Pausa de centenas de milissegundos com mais de mil traços; ver [cavernas](14-workspaces-e-prioridades.md) |
 | **Cavar** só funciona em caixas sem rotação | Recusa com mensagem; para outras formas e rotações, use `mesh.boolean` |
-| Edição de malha ainda **não tem botões nem atalhos** no Qt | As operações `mesh.*` existem e têm teste; os ganchos da interface estão listados em [edição de malha](13-primitivas-e-edicao-de-malha.md#ganchos-da-interface-que-faltam) |
+| Edição de malha usa **menu e atalhos**, não um painel próprio | Menu **Malha**, `Tab`, `1`/`2`/`3`, `I`, `Ctrl+E`, `Ctrl+R`, `Ctrl+B`, `K`, `M`, `X`; a tabela está em [edição de malha](13-primitivas-e-edicao-de-malha.md#ganchos-da-interface) |
 | Bevel recusa arestas que se encontram num canto | Limite herdado do Petunia3D: escolha arestas separadas, uma de cada vez |
 | Malhas editáveis **não têm UV** nem material por face | Cor única por objeto; UV ficou fora da cópia (DR-22) |
 | Tempo das operações no build do editor (dev, com `opt-level = 3` em `petunia_mesh` e `manifold-rust`) | Malha de 6,5 mil vértices: booleano 74 ms, inset em todas as faces 29 ms, subdividir 5 a 30 ms, checar sólido 3 ms (medido em 2026-10-25). Malhas maiores ainda não foram medidas |
@@ -270,6 +279,17 @@ O editor pede OpenGL 3.3. Como os drivers aceitam formatos diferentes, ele **tes
 | Nenhum formato funciona | Mostra uma mensagem e sai, sem travar |
 
 `petunia-editor --gl-info` mostra o resultado sem abrir janela.
+
+### Ponteiro em escala fracionária (`--pointer-info`)
+
+Quando o ponteiro parece cair fora do botão sob escala fracionária (por exemplo niri com `scale 0.95`), rode o editor com `--pointer-info` e clique nos pontos que erram. Ele escreve no terminal:
+
+| Linha | O que traz |
+|---|---|
+| `[escala]` | plataforma do Qt, `devicePixelRatio`, geometria e área útil da tela, tamanho e origem da janela |
+| `[ponteiro]` | botão, posição global, posição na janela, posição local no widget e o widget que recebeu o clique |
+
+Uma mira vermelha marca onde o clique caiu na janela. Se a mira aparece sob o ponteiro mas o widget errado recebe o clique, o problema está no encaminhamento do Qt; se a mira aparece deslocada do ponteiro, o problema está na escala entre o compositor e a janela. A flag não muda nenhum comportamento do produto.
 
 ## Segurança
 

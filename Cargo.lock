@@ -1582,6 +1582,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "petunia_grid"
+version = "0.1.0"
+dependencies = [
+ "petunia_math",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "petunia_import"
 version = "0.1.0"
 dependencies = [
@@ -1702,6 +1710,7 @@ dependencies = [
  "aipo-vm",
  "petunia_commands",
  "petunia_graph",
+ "petunia_grid",
  "petunia_math",
  "petunia_physics",
  "petunia_project",

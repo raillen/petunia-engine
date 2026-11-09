@@ -213,6 +213,25 @@ void InspectorPanel::reload() {
     }
     const QJsonObject description = reply.result.toObject();
 
+    meshSummary_.clear();
+    for (const QJsonValue& tableValue : description.value("tables").toArray()) {
+        if (tableValue.toObject().value("name").toString() != QLatin1String("Mesh")) {
+            continue;
+        }
+        const Reply info = bridge_->call(QStringLiteral("mesh.info"),
+                                         QJsonObject{{QStringLiteral("entity"), static_cast<double>(id)}});
+        if (info.ok) {
+            const QJsonObject mesh = info.result.toObject();
+            meshSummary_ = QStringLiteral("%1 vértices · %2 arestas · %3 faces · %4")
+                               .arg(mesh.value(QStringLiteral("vertices")).toInt())
+                               .arg(mesh.value(QStringLiteral("edges")).toInt())
+                               .arg(mesh.value(QStringLiteral("faces")).toInt())
+                               .arg(mesh.value(QStringLiteral("solid")).toBool() ? QStringLiteral("sólida")
+                                                                                 : QStringLiteral("aberta"));
+        }
+        break;
+    }
+
     QString signature = QString::number(id);
     for (const QJsonValue& tableValue : description.value("tables").toArray()) {
         const QJsonObject table = tableValue.toObject();
@@ -301,6 +320,19 @@ void InspectorPanel::rebuild(const QJsonObject& description) {
     for (const QJsonValue& tableValue : description.value("tables").toArray()) {
         const QJsonObject table = tableValue.toObject();
         content_->addWidget(makeSection(table.value("name").toString(), table.value("columns").toArray()));
+    }
+
+    // A brush can become an editable mesh without going through Tab: the operation is the same.
+    if (tableNames.contains(QStringLiteral("Brush"))) {
+        auto* convert = new QPushButton(QStringLiteral("Tornar editável"));
+        convert->setProperty("role", QStringLiteral("addRow"));
+        convert->setIcon(PetuniaIcons::get(QStringLiteral("mode_edit")));
+        convert->setAccessibleName(QStringLiteral("Transformar este brush em malha editável"));
+        convert->setToolTip(QStringLiteral("Transforma o brush em malha editável; Tab entra no modo de edição"));
+        connect(convert, &QPushButton::clicked, this, [this] {
+            runOperation(QStringLiteral("mesh.convert"), QJsonObject{{"entity", static_cast<double>(entity_)}});
+        });
+        content_->addWidget(convert);
     }
 
     const QJsonArray addable = description.value("addable_tables").toArray();
@@ -502,7 +534,7 @@ QWidget* InspectorPanel::makeEditor(const QString& table, const QJsonObject& col
         auto* summary = new QLabel;
         summary->setAccessibleName(accessible);
         summary->setTextInteractionFlags(Qt::TextSelectableByMouse);
-        field->show = [summary, kind](const QJsonValue& value) {
+        field->show = [this, summary, kind](const QJsonValue& value) {
             if (kind == "floats") {
                 summary->setText(QStringLiteral("%1 números").arg(value.toArray().size()));
             } else if (kind == "spline") {
@@ -512,7 +544,7 @@ QWidget* InspectorPanel::makeEditor(const QString& table, const QJsonObject& col
                                               ? QStringLiteral(", fechada")
                                               : QStringLiteral(", aberta")));
             } else {
-                summary->setText(QStringLiteral("malha editável"));
+                summary->setText(meshSummary_.isEmpty() ? QStringLiteral("malha editável") : meshSummary_);
             }
         };
         return summary;

@@ -100,6 +100,8 @@ pub struct EditorSession {
     pub(crate) free: Option<FreeMode>,
     pub(crate) hovered_face: Option<FaceHit>,
     pub(crate) face_drag: Option<FaceDrag>,
+    /// A collider face being resized in the viewport (square handles).
+    pub(crate) collider_drag: Option<crate::colliders::ColliderDrag>,
     /// Short text for the heads-up display while dragging.
     pub(crate) hud: Option<String>,
     /// Gizmo rod length in logical pixels.
@@ -196,6 +198,7 @@ impl EditorSession {
             free: None,
             hovered_face: None,
             face_drag: None,
+            collider_drag: None,
             hud: None,
             gizmo_size: Self::default_gizmo_size(),
             outline: crate::tools::OutlineStyle::default(),
@@ -310,6 +313,7 @@ impl EditorSession {
         self.gesture.is_some()
             || self.drag.is_some()
             || self.face_drag.is_some()
+            || self.collider_drag.is_some()
             || self.free.is_some()
             || self.sculpt.drag.is_some()
             || self.natural.dragging
@@ -325,6 +329,7 @@ impl EditorSession {
         self.gesture = None;
         self.drag = None;
         self.face_drag = None;
+        self.collider_drag = None;
         self.free = None;
         self.hud = None;
         self.hover = None;

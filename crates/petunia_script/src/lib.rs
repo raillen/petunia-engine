@@ -17,6 +17,7 @@ mod compile;
 mod convert;
 mod doctor;
 mod graph;
+mod grid_api;
 mod host;
 pub mod ir_graph;
 mod natives;

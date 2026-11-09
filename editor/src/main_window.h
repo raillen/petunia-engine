@@ -18,6 +18,7 @@ class HistoryPanel;
 class CodePanel;
 class GraphPanel;
 class ApiPanel;
+class AssetPanel;
 class QAction;
 class QLabel;
 class QToolButton;
@@ -72,6 +73,14 @@ private:
     void buildMeshActions();
     void buildMeshBar();
     void applyMesh(const QString& operation);
+    void toggleKnife();
+    void showBooleanDialog();
+    void showCutPlaneDialog();
+    void showArrangeLineDialog();
+    void showArrangeCircleDialog();
+    void showMirrorDialog();
+    void convertSelectionToMesh();
+    void syncMeshPreviewValues();
     void buildNaturalBar();
     void syncNaturalBar(const QJsonObject& snapshot);
     void buildDocks();
@@ -93,6 +102,8 @@ private:
     // Sends the saved outline color and thickness to the engine.
     void applyOutlineStyle();
     void showPrimitivesPie();
+    // Rebuilds Criar > Prefab do projeto from the prefabs saved in the project folder.
+    void refreshProjectPrefabs();
     void toggleEditMode();
     void setComponentMode(ComponentMode mode);
     void syncEditMode();
@@ -106,6 +117,7 @@ private:
     DiagnosticsPanel* diagnostics_ = nullptr;
     HistoryPanel* history_ = nullptr;
     ApiPanel* api_ = nullptr;
+    AssetPanel* assets_ = nullptr;
     QLabel* cameraLabel_ = nullptr;
     QLabel* countLabel_ = nullptr;
     QList<QDockWidget*> docks_;
@@ -154,6 +166,9 @@ private:
     QAction* pointLightAction_ = nullptr;
     QAction* sunLightAction_ = nullptr;
     QList<QAction*> prefabActions_;
+    // Criar > Prefab do projeto: saved molds (prefab.save / prefab.spawn), rebuilt when opened.
+    QAction* savePrefabAction_ = nullptr;
+    QMenu* projectPrefabsMenu_ = nullptr;
     QAction* randomCaveAction_ = nullptr;
     QAction* sculptLargerAction_ = nullptr;
     QAction* sculptSmallerAction_ = nullptr;
@@ -164,10 +179,18 @@ private:
     bool closing_ = false;
     // Options bar of the mesh edit tools; only visible in edit mode.
     QToolBar* meshBar_ = nullptr;
+    // Second row: the live-preview combo and the numbers. One row would be wider than the viewport
+    // column at the default window size, and a toolbar in a layout clips instead of scrolling.
+    QToolBar* meshValuesBar_ = nullptr;
     QList<QAction*> meshActions_;
+    QAction* knifeAction_ = nullptr;
+    QAction* booleanAction_ = nullptr;
+    QAction* convertMeshAction_ = nullptr;
+    QComboBox* meshPreviewBox_ = nullptr;
     QDoubleSpinBox* meshDistance_ = nullptr;
     QSpinBox* meshCuts_ = nullptr;
     QSpinBox* meshSegments_ = nullptr;
+    QDoubleSpinBox* meshSlide_ = nullptr;
     // Options bar of the sculpting tools; only visible while one of them is active.
     QToolBar* sculptBar_ = nullptr;
     QToolBar* naturalBar_ = nullptr;
@@ -197,6 +220,10 @@ private:
     QPushButton* generateButton_ = nullptr;
     QPushButton* consolidateButton_ = nullptr;
     QAction* hollowAction_ = nullptr;
+    QAction* cutPlaneAction_ = nullptr;
+    QAction* arrangeLineAction_ = nullptr;
+    QAction* arrangeCircleAction_ = nullptr;
+    QAction* mirrorAction_ = nullptr;
     QAction* floorUpAction_ = nullptr;
     QAction* floorDownAction_ = nullptr;
     QAction* editPivotAction_ = nullptr;

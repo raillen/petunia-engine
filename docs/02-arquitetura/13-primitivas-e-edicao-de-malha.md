@@ -4,7 +4,7 @@
 
 ## Resumo (TL;DR)
 
-Há **três níveis** de edição para construir mapas. **Os três já existem no motor.** O nível 3 (booleanos, inset, loop cut, bevel e o resto) chegou em 2026-10-25 e tem teste; a **interface** chegou em 2026-10-27 (barra **Malha**, vértices visíveis e atalhos). Ainda faltam booleanos, faca e valor ao vivo pela janela: veja os [ganchos](#ganchos-da-interface-que-faltam).
+Há **três níveis** de edição para construir mapas. **Os três já existem no motor.** O nível 3 (booleanos, inset, loop cut, bevel e o resto) chegou em 2026-10-25 e tem teste; a **interface** chegou em 2026-10-27 (barra **Malha**, vértices visíveis e atalhos) e foi completada em 2026-11-04 com booleanos, faca, valor ao vivo e inspetor de malha: veja os [ganchos](#ganchos-da-interface).
 
 | Nível | O que é | Estado | Custo |
 |---|---|---|---|
@@ -52,9 +52,9 @@ Medido em `crates/mesh`:
 
 **Subconjunto proposto:** `lib`, `half_edge`, `primitives`, `ops`, `inset`, `bevel`, `loop_cut`, `triangulate`, `topology`, `validation`, `cleanup`, `connect`, `loops`, `obj` somam **11.612 linhas** e usam só `glam`, `serde` e `thiserror`. Dois pontos soltos precisam de ajuste: um teste em `loop_cut.rs` (usa `boolean`) e uma chamada a `sweep` em `ops.rs`.
 
-## Nível 2: edição de brushes (em andamento)
+## Nível 2: edição de brushes (feito em 2026-11-08)
 
-**Feito em 2026-10-24:** empurrar/puxar (`P`), extrudar (`E`), **cavar** (caixa menos caixa gera até 6 caixas) e **tornar oco** (6 paredes). Cada operação é **um** `world.batch`: um `Ctrl+Z` desfaz tudo. Falta: cortar com plano, arranjo, espelhar.
+**Feito em 2026-10-24:** empurrar/puxar (`P`), extrudar (`E`), **cavar** (caixa menos caixa gera até 6 caixas) e **tornar oco** (6 paredes). **Feito em 2026-11-08:** **cortar com plano**, **arranjo em linha**, **arranjo em círculo** e **espelhar**. Cada operação é **um** `world.batch`: um `Ctrl+Z` desfaz tudo. Falta só **redimensionar pelas alças da caixa** (cantos e arestas).
 
 É o que ferramentas de mapa (Hammer, TrenchBroom) fazem, sem precisar de malha editável.
 
@@ -62,10 +62,34 @@ Medido em `crates/mesh`:
 |---|---|---|
 | **Alças de face** (**feito**: `P` e `E`) | Arrastar a face de uma caixa muda `size` e `position` juntos, com snap | nenhuma |
 | **Redimensionar pela caixa** | Alças nos cantos e nas arestas | nenhuma |
-| **Cortar com plano** | Divide um brush em dois | nenhuma |
+| **Cortar com plano** (**feito**) | Divide a caixa em duas com um plano perpendicular a um eixo dela | nenhuma |
 | **Brush subtrativo** (**feito para caixas**: cavar e tornar oco) | Cavar portas e janelas | caixas: nenhuma; formas livres: CSG (`manifold-rust`), no nível 3 |
-| **Arranjo** | Cópias em linha ou círculo (colunas, degraus, cercas) | nenhuma |
-| **Espelhar** | Simetria de uma construção | nenhuma |
+| **Arranjo** (**feito**) | Cópias em linha ou círculo (colunas, degraus, cercas) | nenhuma |
+| **Espelhar** (**feito**) | Simetria de uma construção | nenhuma |
+
+### Nível 2: o que foi feito em 2026-11-08
+
+Todas são operações de dados: a janela só coleta os campos, o motor valida e grava, e cada uma vira **um** desfazer.
+
+| Operação | Comando | Campos | Regra |
+|---|---|---|---|
+| **Cortar com plano** | `brush.cut_plane` | `axis` (`x`/`y`/`z` ou 0–2), `offset` em metros a partir do centro | Só **caixas**. O plano é perpendicular a um eixo **da própria caixa**, então uma caixa girada é cortada certo. As duas metades continuam caixas, com a mesma rotação, escala e cor. O plano precisa sobrar uma parte de cada lado (`EDITOR_CUT_PLANE_OUTSIDE`); a soma dos volumes é igual à da caixa original |
+| **Arranjo em linha** | `brush.arrange_line` | `count` (2–64, contando o original), `offset` `{x,y,z}` em metros | Só **caixas**. O original fica; as cópias são criadas no mesmo `world.batch` e o passo se multiplica por 1, 2, 3… |
+| **Arranjo em círculo** | `brush.arrange_circle` | `count` (2–64), `center` `{x,y,z}`, `axis` | Só **caixas**. O original fica na posição e é o item do ângulo zero; cada cópia gira em torno do eixo junto com o círculo. A janela calcula o centro a um raio de distância do objeto, no primeiro eixo perpendicular |
+| **Espelhar** | `brush.mirror` | `axis`, `plane` (coordenada do plano no eixo), `duplicate` | Só **caixas**. Reflete a **posição** e a **rotação** (`M·R·M`), então a caixa continua encaixada. Com `duplicate` (padrão) cria uma cópia; sem ele, move o próprio objeto. A cópia duplicada leva traços, colisores e scripts |
+
+**Interface.** As quatro entradas ficam em **Operações**, ligadas só quando há seleção:
+
+| Entrada | Atalho |
+|---|---|
+| **Cortar com plano…** | `Ctrl+Alt+P` |
+| **Arranjo em linha…** | `Ctrl+Alt+L` |
+| **Arranjo em círculo…** | `Ctrl+Alt+O` |
+| **Espelhar…** | `Ctrl+Alt+M` |
+
+**Limites conhecidos:** cilindros, escadas e malhas ficam para depois nessas quatro operações (a mensagem de recusa diz qual comando usar); o arranjo **não** copia colisores, scripts nem traços — só o espelho duplicado copia; e não há prévia ao vivo, o resultado aparece ao confirmar a caixa de diálogo.
+
+**Verificação (2026-11-08, display virtual):** na sala de exemplo, cortar uma caixa de 1 m no eixo local X gerou duas caixas de 0,5 m com o mesmo giro de 25° e a mesma soma de volume; a linha criou cópias a 1 m; o círculo de 8 itens fechou o anel com passos de 45° em torno do eixo Y; o espelho em X=0 criou a cópia em `x = -2,773` com giro `-25°`; **um** `Ctrl+Z` removeu cada operação inteira (as 7 cópias do círculo caíram juntas).
 
 **Por que nível 2 primeiro:** entrega o que mais pesa em construção de mapa (redimensionar rápido, alinhar na grade) **sem** trazer 11 mil linhas. Todas essas ferramentas viram **comandos** (desfazem e viajam por rede).
 
@@ -162,23 +186,27 @@ Módulo `petunia_editor/src/mesh_tool.rs`, operações `mesh.*` (lista no [edito
 | Booleano com faces exatamente no mesmo plano | O `manifold-rust` resolve na maioria dos casos; quando falha, a mensagem pede para mover um pouco a ferramenta |
 | Código copiado ainda usa nomes curtos (`n`, `f`, `idx`) e índices diretos | É legado (regra do `AGENTS.md`): migra quando for tocado. A API nova segue as regras |
 
-### Ganchos da interface que faltam
+### Ganchos da interface
 
-> **Atualização (2026-10-27):** a barra **Malha** liga as operações de faces, arestas e vértices; o modo vértice mostra um ponto em cada vértice. A tabela abaixo continua sendo a lista do que falta (booleanos, faca, valor ao vivo, painel de números e inspetor de malha).
+> **Atualização (2026-11-04):** todos os ganchos abaixo estão ligados na janela. A tabela diz onde cada um vive e qual operação ele envia.
 
-A interface Qt (`editor/src/`) agora liga a barra **Malha**; o que ainda falta ligar:
-
-| Gancho | Sugestão | Operação |
+| Gancho | Onde está | Operação |
 |---|---|---|
-| Menu **Malha** atrás do botão `≡` | uma entrada por operação; a paleta `Ctrl+K` lê os menus, então as entradas aparecem nela sem trabalho a mais | todas as `mesh.*` |
-| Ferramenta **Editar malha** na coluna de ferramentas do viewport | ativa o modo de edição; aparece com uma malha selecionada | `mesh.pick`, `mesh.select` |
-| **Tornar editável** | menu do objeto e inspetor de Brush | `mesh.convert` |
-| **Booleano** | com dois objetos: o ativo é o alvo, o outro é a ferramenta; opção "manter ferramenta" | `mesh.boolean` |
+| Menu **Malha** | barra de menus da janela; a paleta `Ctrl+K` lê os menus, então as entradas aparecem nela sem trabalho a mais | todas as `mesh.*` |
+| Ferramenta **Editar malha** | coluna de ferramentas do viewport, abaixo das ferramentas de escultura | `mesh.pick`, `mesh.select` |
+| **Tornar editável** | menu **Malha** e inspetor de Brush | `mesh.convert` |
+| **Booleano…** | menu **Malha**: caixa de diálogo com operação (fundir, cortar, interseção), objeto-ferramenta e "manter a ferramenta" | `mesh.boolean` |
 | **Modo de edição de malha** (`Tab`) e modos face, aresta, vértice (`1`, `2`, `3`) | clique escolhe, `Shift` soma, `Ctrl` alterna | `mesh.pick` → `mesh.select` |
-| Atalhos de modelagem (os do Petunia3D) | `I` inset, `E` extrudar, `Ctrl+R` loop cut, `Ctrl+B` bevel, `K` faca, `M` fundir, `X` apagar faces | `mesh.*` |
-| Valor ao vivo (arrastar o mouse muda a distância) | ao arrastar, mandar `mesh.preview` com o valor; ao soltar, `mesh.preview_end`; `Esc` manda `commit: false`; mostrar `reason` quando `valid` for `false` | `mesh.preview`, `mesh.preview_end` (**existem**, com teste) |
-| Painel com números | distância, cortes, deslize, segmentos | os campos de cada operação |
-| Inspetor da tabela `Mesh` | mostrar contagens (`mesh.info`), não o texto da malha | `mesh.info` |
+| Atalhos de modelagem | `I` inset, `Ctrl+E` extrudar, `Ctrl+R` loop cut, `Ctrl+B` bevel, `K` faca, `M` fundir, `X` apagar faces | `mesh.*` |
+| Valor ao vivo | combo **Ao arrastar** na barra **Malha**: arrastar muda a distância (ou o deslize do loop cut); soltar aplica, `Esc` cancela, `Shift` deixa fino; o motivo de um valor inválido aparece na barra de status | `mesh.preview`, `mesh.preview_end` |
+| Painel com números | barra **Malha**, segunda linha (os ícones ficam na primeira, que não caberia junto na largura do viewport): distância, cortes, segmentos e deslize do corte em laço | os campos de cada operação |
+| Inspetor da tabela `Mesh` | mostra vértices, arestas, faces e se a malha é sólida ou aberta | `mesh.info` |
+
+**Faca.** `K` arma a faca; o primeiro clique marca um ponto sobre uma aresta e o segundo corta a face entre os dois pontos. Uma linha tracejada acompanha o ponteiro entre os dois cliques. Os dois pontos precisam estar na mesma face, como no Petunia3D. `Esc` desarma.
+
+**Partes escolhidas.** O valor ao vivo usa as faces (inserir, extrudar) ou arestas (chanfro, corte em laço) que já estão escolhidas. Arrastar sem nenhuma escolhida mostra *selecione uma face antes de arrastar* em vez de aplicar uma operação vazia; para escolher, ponha **Ao arrastar** em *Nada (clique escolhe)*.
+
+**Nada pendente no nível 3.** Do nível 2 falta só o redimensionamento pelas alças da caixa (cantos e arestas); cortar, arranjar e espelhar estão feitos (acima).
 
 ## Riscos
 
@@ -190,4 +218,4 @@ A interface Qt (`editor/src/`) agora liga a barra **Malha**; o que ainda falta l
 
 ## Próximo passo sugerido
 
-Ligar os [ganchos da interface](#ganchos-da-interface-que-faltam), começando pelo **modo de edição de malha** (`Tab`, clique para escolher face ou aresta). Sem ele, as operações existem mas não são alcançáveis pela janela.
+O nível 3 e as operações do nível 2 (cortar com plano, arranjo, espelhar) estão completos e verificados na interface. O que resta do nível 2 é **redimensionar pelas alças da caixa** (cantos e arestas), que fecha a blocagem no estilo Hammer/TrenchBroom. Depois dele, a lista por prioridade está em [estado da implementação](../05-roadmap/03-estado-da-implementacao.md).

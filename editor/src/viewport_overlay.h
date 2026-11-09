@@ -21,12 +21,19 @@ public:
     void refresh();
     const QJsonObject& model() const { return model_; }
 
+    // Knife preview: a dashed line from the first point to the pointer while the tool waits for
+    // the second click. It is screen space, like the gizmo; the cut itself is computed by the engine.
+    void setKnifeLine(bool active, const QPointF& start, const QPointF& current);
+
 protected:
     void paintEvent(QPaintEvent* event) override;
 
 private:
     EngineBridge* bridge_;
     QJsonObject model_;
+    bool knifeActive_ = false;
+    QPointF knifeStart_;
+    QPointF knifeCurrent_;
 };
 
 // Navigation cube in the top-right corner: click a preset, drag to orbit, or use the

@@ -52,7 +52,24 @@ void ViewportOverlay::refresh() {
     update();
 }
 
+void ViewportOverlay::setKnifeLine(bool active, const QPointF& start, const QPointF& current) {
+    knifeActive_ = active;
+    knifeStart_ = start;
+    knifeCurrent_ = current;
+    update();
+}
+
 void ViewportOverlay::paintEvent(QPaintEvent*) {
+    // The knife line is independent of the overlay model: it exists only while the tool is armed
+    // and one point has been marked.
+    if (knifeActive_) {
+        QPainter knifePainter(this);
+        knifePainter.setRenderHint(QPainter::Antialiasing);
+        QPen pen(QColor(255, 90, 90), 1.6, Qt::DashLine);
+        pen.setDashPattern({6.0, 4.0});
+        knifePainter.setPen(pen);
+        knifePainter.drawLine(knifeStart_, knifeCurrent_);
+    }
     if (model_.isEmpty()) {
         return;
     }

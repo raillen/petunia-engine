@@ -63,6 +63,8 @@ private:
     EngineBridge* bridge_;
     QVBoxLayout* content_;
     QString signature_;
+    // Counts of the selected editable mesh (`mesh.info`), shown instead of its text.
+    QString meshSummary_;
     quint64 entity_ = 0;
     std::vector<std::unique_ptr<Field>> fields_;
     // Tables the user folded; kept while the panel is rebuilt for other objects.

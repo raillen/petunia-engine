@@ -733,6 +733,31 @@ impl EditorSession {
                 })
             }
         };
+        // A drag with nothing chosen would compute the mesh unchanged and report success, which
+        // reads as "the operation did nothing" with no reason. Say what to select instead.
+        let needs_faces = matches!(operation, "inset" | "extrude");
+        let missing = if needs_faces {
+            preview.chosen.faces.is_empty()
+        } else {
+            preview.chosen.edges.is_empty()
+        };
+        if missing {
+            let (message, hint) = if needs_faces {
+                (
+                    "selecione uma face antes de arrastar",
+                    "Clique na face com a ferramenta de edição de malha; Shift soma, Ctrl alterna.",
+                )
+            } else {
+                (
+                    "selecione uma aresta antes de arrastar",
+                    "Clique na aresta com a ferramenta de edição de malha; Shift soma, Ctrl alterna.",
+                )
+            };
+            return Ok(json!({
+                "valid": false,
+                "reason": Failure::new("MESH_NOTHING_SELECTED", message, hint).to_json(),
+            }));
+        }
         // The parts come from the drag, never from this request (they are numbers into `base`).
         let mut values = request.clone();
         if let Some(object) = values.as_object_mut() {
@@ -1488,6 +1513,36 @@ mod tests {
         assert_eq!(geometry(&session, entity), shown[3]);
         assert_eq!(session.dispatcher.undo_depth().0, depth + 1);
         call(&mut session, json!({ "op": "edit.undo" }));
+        assert_eq!(geometry(&session, entity), original);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_drag_with_nothing_chosen_says_what_to_select() {
+        let (mut session, root) = opened("mesh_preview_empty");
+        let entity = brush_at(&mut session, "box", Vec3::new(40.0, 1.0, 40.0));
+        call(&mut session, json!({ "op": "mesh.convert" }));
+        let original = geometry(&session, entity);
+
+        // No face chosen: the inset cannot change anything, so it says why instead of "applied".
+        let step = call(
+            &mut session,
+            json!({ "op": "mesh.preview", "operation": "inset", "distance": 0.2 }),
+        );
+        assert_eq!(step["valid"], false, "{step}");
+        assert_eq!(step["reason"]["code"], "MESH_NOTHING_SELECTED");
+        // A bevel needs an edge, and says so with its own message.
+        let bevel = call(
+            &mut session,
+            json!({ "op": "mesh.preview", "operation": "bevel", "width": 0.2 }),
+        );
+        assert_eq!(bevel["valid"], false, "{bevel}");
+        assert_eq!(bevel["reason"]["code"], "MESH_NOTHING_SELECTED");
+        // Ending a drag that never started does nothing at all.
+        assert_eq!(
+            call(&mut session, json!({ "op": "mesh.preview_end" })),
+            Json::Null
+        );
         assert_eq!(geometry(&session, entity), original);
         let _ = std::fs::remove_dir_all(&root);
     }

@@ -117,6 +117,14 @@ fn callback_for(module: &str, name: &str) -> Option<HostNativeCallback> {
         ("graph_debug", "node") => natives::graph_debug_node,
         ("graph_debug", "check") => natives::graph_debug_check,
         ("graph_debug", "value") => natives::graph_debug_value,
+        ("grid", "square") => crate::grid_api::grid_square,
+        ("grid", "hex") => crate::grid_api::grid_hex,
+        ("grid", "distance") => crate::grid_api::grid_distance,
+        ("grid", "neighbors") => crate::grid_api::grid_neighbors,
+        ("grid", "range") => crate::grid_api::grid_range,
+        ("grid", "path") => crate::grid_api::grid_path,
+        ("grid", "to_world") => crate::grid_api::grid_to_world,
+        ("grid", "from_world") => crate::grid_api::grid_from_world,
         _ => return None,
     })
 }

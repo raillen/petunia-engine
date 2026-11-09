@@ -1,6 +1,6 @@
 # Estado da implementação
 
-**Revisão:** 2026-10-29 (rios, estradas e terreno na `main`) · **Fase atual:** 1 (esqueleto) concluída no código; **fase 2 (editor e construção de mapas) começou**
+**Revisão:** 2026-11-09 (módulo `grid` e A\*) · **Fase atual:** 1 (esqueleto) concluída no código; **fase 2 (editor e construção de mapas) começou**
 
 ## Resumo (TL;DR)
 
@@ -12,7 +12,54 @@ Três análises novas pedem a sua decisão: [paridade da interface](../02-arquit
 
 **Consolidação de 2026-10-27:** os PRs #2 a #7 foram mesclados na `main` (personagem e Jogar, luzes e GLB, grafo de nós N1–N5, prefabs). A `main` tinha **397 testes** antes destas correções; com elas, tem **441 testes, 0 falhas** (2026-10-28), e o editor compila no Qt 6.4.2.
 
-## Etapa atual: rios, estradas, água e terreno no editor (2026-10-29)
+## Etapa atual: módulo `grid` e A\* (2026-11-09)
+
+Decisão: [DR-38](../06-decisoes/registro-de-decisoes.md). O desenho existia desde 2026-10-24 ([personagens, UI e grade](../02-arquitetura/09-personagens-ui-e-grade.md) §5) com uma API ilustrativa e nenhuma linha de código; agora as oito funções existem e rodam em script.
+
+| Entrega | Evidência |
+|---|---|
+| Crate `petunia_grid` de domínio puro: grade **quadrada** (`\|Δq\| + \|Δr\|`, quatro vizinhas) e **hexagonal** (`s = -q - r`, fórmula cúbica, seis vizinhas); `range` em ordem fixa; `path` por A\* com a distância exata de heurística; conversões célula↔metros | 8 testes: distância, 13/19/91 células de alcance, vizinhas nas bordas, ida e volta mundo↔célula (quadrada em 121 células, hexagonal em 169), caminho mais curto e contínuo com e sem parede, o **mesmo** caminho em duas chamadas, `none` para começo/destino bloqueado |
+| `grid.square`, `grid.hex`, `grid.distance`, `grid.neighbors`, `grid.range`, `grid.path`, `grid.to_world`, `grid.from_world` na tabela única do `api.rs` e nos nativos | 3 testes com script real: `distancia 3`, `vizinhas 6`, `alcance 19`, desvio de uma célula bloqueada em 4 passos, `sem caminho true`, célula↔metros (`celula 2 -1`), e recusa tratada com `attempt`/`failed` sem virar falha do script |
+| **Limites antes da conta**: coordenada ±1.000.000, célula de 0,001 a 10.000 m, raio 256, 65.536 bloqueadas, 65.536 expandidas (erro, não travamento), ponto não finito recusado | 1 teste hostil com todas essas fronteiras, inclusive o estouro do orçamento de A\* numa busca sem saída |
+
+**Limites declarados:** a grade e a célula são **dado** transformável (`{"kind","size"}` e `{"q","r"}`); não há tabela `Grid` na cena nem visão da grade no viewport. `grid.path` não tem custo por célula (lama, água) e a grade não tem andares.
+
+**Não verificado:** a janela (não há interface de grade ainda — a API só existe para scripts) e um mapa real grande: os testes usam raios de até 5 e uma busca de 400 células.
+
+## Antes: painel de assets (2026-11-09)
+
+A aba **Assets** fica ao lado de **Hierarquia** e mostra os modelos da pasta `assets/` do projeto. Antes só existia o comando `asset.list`; agora a pasta aparece na janela e o modelo entra na cena com um duplo clique.
+
+| Entrega | Evidência |
+|---|---|
+| Aba **Assets**: nome e tamanho de cada `.glb`/`.gltf` (até 4 níveis de pasta); com a pasta vazia, explica o que fazer; o botão **Importar modelo…** abre o mesmo seletor de *Arquivo > Importar modelo 3D…* | visto no display virtual |
+| **Duplo clique** importa um modelo que já está em `assets/` como malhas editáveis, sem copiá-lo de novo; importar de fora continua copiando (nome repetido vira `-2`) e é **um** desfazer | triângulo de teste (744 bytes): 12 objetos, `Mesh` com 3 vértices e 1 face, cor `#D97333`; **um** `Ctrl+Z` voltou a 11; cena salva com a tabela `Mesh` (entidade 13) |
+| A lista se atualiza ao abrir a aba e depois de importar (um arquivo copiado para `assets/` com o editor aberto aparece) | visto: o arquivo criado depois de abrir o editor apareceu na aba; o segundo import listou `triangulo-2.glb` |
+
+**Não verificado:** a janela na sua sessão real; leitor de tela; importar um modelo real de um programa de modelagem (só o triângulo montado à mão).
+
+## Antes: cortar, arranjar e espelhar brushes (2026-11-08)
+
+Fecha o que faltava do **nível 2** da [edição de brushes](../02-arquitetura/13-primitivas-e-edicao-de-malha.md#nível-2-edição-de-brushes-feito-em-2026-11-08), sem trazer edição de malha para o caminho. Todas são **operações de dados** (comando + registro no histórico), não código novo de interface além das caixas de diálogo.
+
+| Entrega | Evidência |
+|---|---|
+| **Cortar com plano** (`brush.cut_plane`): divide a caixa em duas com um plano perpendicular a um eixo **dela**; as metades continuam caixas, com a mesma rotação, escala e cor; volume preservado | teste com caixa girada 35°, volume igual antes e depois; corte fora da caixa recusado com `EDITOR_CUT_PLANE_OUTSIDE` |
+| **Arranjo em linha** (`brush.arrange_line`): `count` de 2 a 64 contando o original e passo `{x,y,z}` | teste: 4 itens criam 3 cópias a 2 m, tudo em **um** desfazer |
+| **Arranjo em círculo** (`brush.arrange_circle`): centro explícito, eixo, cópias giram junto com o círculo | teste: 4 itens num anel de raio 5 m com giros de 45°, 135°, 225° e 315° |
+| **Espelhar** (`brush.mirror`): plano de eixo do mundo, cópia por padrão ou mover no lugar; rotação refletida (`M·R·M`) | teste: cópia em `x = 195` com giro `-30°` a partir de `x = 205`/`+30°`; mover no lugar e recusa para cilindro |
+| Editor Qt: **Operações > Cortar com plano… / Arranjo em linha… / Arranjo em círculo… / Espelhar…**, ligadas só com seleção | `scripts/editor.sh build` ok |
+| Atalhos | `Ctrl+Alt+P`, `Ctrl+Alt+L`, `Ctrl+Alt+O`, `Ctrl+Alt+M` |
+| **Visto no display virtual (2026-11-08):** cortar a caixa de 1 m em duas de 0,5 m com giro 25°; linha com cópias a 1 m; círculo de 8 itens em passos de 45°; espelho em X=0 com giro `-25°`; **um** `Ctrl+Z` desfez cada operação inteira (as 7 cópias do círculo caíram juntas) | imagens da janela e cena salva conferida (`room.scene.json`: posições, giros e tamanhos) |
+| Testes do motor | `cargo test -p petunia_editor brush_ops -- --test-threads=2`: **11 passaram, 0 falharam** |
+
+**Limites declarados:** as quatro operações aceitam **caixas**; cilindros, escadas e malhas recebem recusa com motivo. O arranjo não copia colisores, scripts nem traços; o espelho com cópia copia. Não há prévia ao vivo: o resultado aparece ao confirmar.
+
+**Não verificado:** a janela na sua sessão real; leitor de tela; cilindros/escadas/malhas nessas operações (recusados por projeto).
+
+**Próximo da lista:** material por face e prefabs do próprio projeto. (O `grid`/A\\* foi feito em 2026-11-09, acima; o Event Sheet foi descartado pelo DR-30, que o trocou pelo sistema de nós; as alças no viewport para redimensionar colisões foram feitas em 2026-11-08, abaixo.)
+
+## Antes: rios, estradas, água e terreno no editor (2026-10-29)
 
 Decisão: [DR-36](../06-decisoes/registro-de-decisoes.md) e o complemento dela ([DR-37](../06-decisoes/registro-de-decisoes.md)). A interface existe (barra do terreno/rio/estrada no viewport) e o teste de fumaça a exercita no display virtual; nada foi visto na sua sessão real.
 
@@ -239,7 +286,7 @@ Fase 2 do pedido "pendências e fases 1 a 6". Decisão: [DR-29](../06-decisoes/r
 
 **Não verificado:** importar um modelo real de um programa de modelagem (só GLBs montados nos testes); a sua sessão real; leitor de tela.
 
-**Ainda falta da fase 2:** painel de assets (hoje só a lista por `asset.list`); alças de colisão no viewport; material por face.
+**Ainda falta da fase 2:** material por face; interface da grade no viewport (o `grid`/A\* existe para scripts desde 2026-11-09).
 
 ## Última etapa: personagem, modo Jogar e solidez automática (2026-10-26)
 
@@ -256,9 +303,9 @@ Bloco 1 do pedido "pendências e fases 1 a 6": fecha o essencial da fase 3. Deci
 | Teste de fumaça ganhou Jogar/Parar e a prova de que a cena salva **não** guarda o herói | **9/9** |
 | Workspace inteiro | **341 testes, 0 falhas** (build isolado); fmt e clippy `-D warnings` ok |
 
-**Não verificado:** a sua sessão real; o jogo no `petunia run` numa janela; teclado e mouse reais no modo Jogar (só `xdotool` no display virtual); leitor de tela.
+**Não verificado:** a sua sessão real; o jogo no `petunia run` numa janela; teclado e mouse reais no modo Jogar (só `xdotool` no display virtual); leitor de tela. (As alças para redimensionar colisões foram vistas e exercidas no display virtual: caixa de 1 m redimensionada para 2 m num arrasto, com centro movendo 0,5 m; `Ctrl+Z` reverteu.)
 
-**Ainda falta do bloco:** alças no viewport para redimensionar colisões; prefabs (Porta, Pickup, Spawn); Event Sheet; módulo `grid`/A\*; material por face; painel de assets.
+**Ainda falta do bloco:** material por face; prefabs do próprio projeto. (O Event Sheet foi descartado pelo DR-30, que o trocou pelo sistema de nós; o módulo `grid`/A\\* foi feito em 2026-11-09; Porta, Item coletável e Ponto de nascimento foram feitos no passo N4, em 2026-10-26; as alças no viewport para redimensionar colisões foram feitas em 2026-11-08: as quatro faces de uma colisão caixa viram quadrados brancos, arrastar uma delas muda `size` e `center` juntos com o desfazer de um passo; colisões esféricas, em cápsula e convexas ficam para depois.)
 
 ## Antes: contorno girado e colisão com física (2026-10-25)
 
@@ -274,7 +321,7 @@ Bloco 1 do pedido "pendências e fases 1 a 6": fecha o essencial da fase 3. Deci
 
 **Atenção, verificação:** existe uma cópia do projeto (`~/Documentos/Projetos/petunia-engine-system-modules`) com a **mesma pasta de build**. Por isso os números acima saíram de pastas isoladas (`/tmp/petunia-ui-target`, `/tmp/petunia-ui-editor`).
 
-**Não verificado:** a sua sessão real; o jogo com física numa janela; alças no viewport para redimensionar colisões (hoje pelo inspetor).
+**Não verificado:** a sua sessão real; o jogo com física numa janela. (As alças no viewport para redimensionar colisões foram feitas em 2026-11-08, para colisões em caixa com rotação zero.)
 
 ## Antes: edição de malha do Petunia3D (2026-10-25)
 
@@ -290,11 +337,12 @@ Booleanos (fundir, cortar, interseção), inset, extrudar, loop cut, bevel, subd
 | Histórico de desfazer com teto de memória (256 MB) | teste: os passos antigos saem, o desfazer continua certo |
 | Subdivisão sem rachaduras nos vizinhos (defeito do Petunia3D corrigido na API) | teste: o sólido continua fechado, também subdividindo metade de uma malha densa |
 | **Valor ao vivo** ao arrastar (`mesh.preview`): inset, extrudar, bevel, loop cut | 2 testes: um arrasto = um desfazer; cancelar não deixa rastro; ir e voltar dá o mesmo resultado |
+| **Ganchos da interface**: menu **Malha**, `Tab`, atalhos, faca (`K`), **Booleano…**, valor ao vivo e contagens no inspetor | **visto (display virtual)**: união 8/12/6 → 16/24/12; faca 8/12/6 → 10/15/7; inset ao vivo 8/12/6 → 12/20/10; `Esc` cancela a prévia |
 | Desempenho no build do editor (6,5 mil vértices) | **medido**: booleano 74 ms, inset em todas as faces 29 ms, checar sólido 3 ms |
 | `cargo fmt`, `clippy -D warnings`, **310 testes** (2 threads), `cargo deny` | **passou**, recompilado do zero numa pasta de build **isolada** (`/tmp/petunia-x.verify`); o `cargo deny` rodou com a base de avisos local (`--offline`) |
 | **Falso verde encontrado:** a cópia `petunia-engine-system-modules` usa a **mesma** pasta de build (`/tmp/petunia-engine-target`) | Uma cópia sobrescreve os binários da outra, e o `cargo test` chegou a rodar o `petunia_math` da cópia (5 testes em vez de 9) dizendo "ok". Até a cópia ter outra pasta de build, **verifique com `CARGO_TARGET_DIR` próprio** |
 
-**Não verificado:** nada disso foi **visto** em janela (nem no display virtual), porque a interface Qt ainda não tem os botões. Os ganchos que faltam estão [listados aqui](../02-arquitetura/13-primitivas-e-edicao-de-malha.md#ganchos-da-interface-que-faltam). Malhas acima de 6,5 mil vértices ainda não foram medidas.
+**Não verificado:** a **sua sessão real**; malhas acima de 6,5 mil vértices. O teste de fumaça passou **11/11** em display virtual (inclui converter uma caixa em malha editável).
 
 ## Antes: design da interface, workspaces e paleta de comandos (2026-10-25)
 

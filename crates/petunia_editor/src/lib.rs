@@ -25,6 +25,7 @@ mod scripts;
 mod sculpt_tool;
 mod session;
 mod tools;
+mod user_prefabs;
 
 pub use failure::Failure;
 pub use session::EditorSession;

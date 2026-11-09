@@ -15,7 +15,7 @@
 | **Modo Jogar** (`F6`) no editor, sobre uma cópia | 2 testes pelo JSON + **visto (display virtual)** |
 | Editor: adicionar, ajustar, listar sob o objeto, desenhar, duplicar e excluir colisões | 1 teste de fluxo + **visto (display virtual)** |
 
-**Ainda não:** alças no viewport para redimensionar a colisão (hoje pelo inspetor), plataformas móveis que carregam o personagem, empurrar caixas, juntas, cordas (XPBD) e simular a física dentro do editor sem o modo Jogar.
+**Ainda não:** plataformas móveis que carregam o personagem, empurrar caixas, juntas, cordas (XPBD) e simular a física dentro do editor sem o modo Jogar. (As alças no viewport para redimensionar a colisão foram feitas em 2026-11-08, para colisões em caixa.)
 
 ## Resumo (TL;DR)
 

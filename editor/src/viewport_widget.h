@@ -38,6 +38,14 @@ public:
     void setEditMode(bool on);
     ComponentMode componentMode() const { return componentMode_; }
 
+    // Knife (K): the next two clicks on the view choose one edge point each; the second cuts.
+    void setKnifeArmed(bool armed);
+    bool isKnifeArmed() const { return knifeArmed_; }
+    // Live value (inset, extrude, bevel, loop cut): dragging on the view changes the value.
+    // `operation` empty turns it off; `values` are the bar's fields (distance, cuts, segments).
+    void setLiveMeshOperation(const QString& operation);
+    void setLiveMeshValues(const QJsonObject& values);
+
     // Play mode: the keyboard walks the player's character (W A S D or arrows, Space jumps),
     // the right mouse button turns the camera, Esc stops. A 60 Hz timer sends `play.tick`.
     bool isPlaying() const { return playing_; }
@@ -56,6 +64,9 @@ signals:
     void editModeChanged(bool on);
     void editModeToggleRequested();
     void componentModeChanged(ComponentMode mode);
+    // A mesh operation started, finished or failed: the window says it in the status bar.
+    void meshStatus(const QString& message);
+    void knifeArmedChanged(bool armed);
     // Esc while playing.
     void playStopRequested();
     // What the scripts wrote and which handlers failed in the last frame.
@@ -80,6 +91,12 @@ private:
     void playTick();
     void pickAt(const QPoint& position);
     void pickComponentAt(const QPoint& position, Qt::KeyboardModifiers modifiers);
+    // Starts, updates and ends a live preview drag (`mesh.preview`, `mesh.preview_end`).
+    void startMeshPreview(const QPoint& position);
+    void updateMeshPreview(const QPoint& position, Qt::KeyboardModifiers modifiers);
+    void finishMeshPreview(bool commit);
+    void updateKnifeOverlay();
+    QString livePreviewReason(const QJsonObject& result) const;
     QJsonObject pointerFields(const QPoint& position) const;
     bool hasProject() const;
     QString currentTool() const;
@@ -105,6 +122,7 @@ private:
     bool looking_ = false;
     bool gizmoDragging_ = false;
     bool faceDragging_ = false;
+    bool colliderDragging_ = false;
     bool sculptDragging_ = false;
     bool naturalDragging_ = false;
     bool freeMode_ = false;
@@ -116,6 +134,7 @@ private:
     QString hoveredHandle_;
     QJsonValue hoveredEntity_;
     QJsonValue hoveredFace_;
+    bool hoveredCollider_ = false;
     ViewportOverlay* overlay_ = nullptr;
     NavCubeWidget* navCube_ = nullptr;
     bool clickCandidate_ = false;
@@ -123,6 +142,15 @@ private:
     bool engineAlive_ = true;
     bool editMode_ = false;
     bool playing_ = false;
+    bool knifeArmed_ = false;
+    QJsonObject knifeStart_;
+    QPoint knifeStartScreen_;
+    QPoint knifeHoverScreen_;
+    QString liveMeshOperation_;
+    QJsonObject liveMeshValues_;
+    bool livePreviewActive_ = false;
+    QPoint livePreviewStart_;
+    double livePreviewStartValue_ = 0.0;
     QTimer playTimer_;
     QElapsedTimer playClock_;
     QSet<int> playKeys_;

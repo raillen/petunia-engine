@@ -22,6 +22,7 @@ find_package(Threads REQUIRED)
 
 add_executable(petunia-editor
     src/main.cpp
+    src/pointer_diagnostics.cpp
     src/engine_bridge.cpp
     src/viewport_widget.cpp
     src/viewport_header.cpp

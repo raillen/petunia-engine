@@ -17,6 +17,7 @@
 #include <QDockWidget>
 #include <QColorDialog>
 #include <QDialog>
+#include <QDialogButtonBox>
 #include <QEvent>
 #include <QKeyEvent>
 #include <QFormLayout>
@@ -27,6 +28,7 @@
 #include <QHBoxLayout>
 #include <QFileDialog>
 #include <QInputDialog>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QLabel>
 #include <QMenu>
@@ -100,6 +102,33 @@ private:
     QDoubleSpinBox* box_;
     double fine_step_;
 };
+
+// The world position of the selected object, for dialog defaults (empty when unknown).
+QJsonObject selectedPosition(EngineBridge* bridge) {
+    if (!bridge->hasSelection()) {
+        return {};
+    }
+    const Reply described = bridge->call(
+        QStringLiteral("entity.describe"),
+        QJsonObject{{QStringLiteral("entity"), static_cast<double>(bridge->selection())}});
+    if (!described.ok) {
+        return {};
+    }
+    const QJsonArray tables = described.result.toObject().value(QStringLiteral("tables")).toArray();
+    for (const QJsonValue& value : tables) {
+        const QJsonObject table = value.toObject();
+        if (table.value(QStringLiteral("name")).toString() != QLatin1String("Transform")) {
+            continue;
+        }
+        for (const QJsonValue& columnValue : table.value(QStringLiteral("columns")).toArray()) {
+            const QJsonObject column = columnValue.toObject();
+            if (column.value(QStringLiteral("name")).toString() == QLatin1String("position")) {
+                return column.value(QStringLiteral("value")).toObject();
+            }
+        }
+    }
+    return {};
+}
 
 } // namespace
 
@@ -201,6 +230,14 @@ MainWindow::MainWindow() : bridge_(std::make_unique<EngineBridge>()) {
     connect(viewport_, &ViewportWidget::renderFailed, this, [this](const QString& message) {
         statusBar()->showMessage(message);
     });
+    connect(viewport_, &ViewportWidget::meshStatus, this, [this](const QString& message) {
+        statusBar()->showMessage(message, 8000);
+    });
+    connect(viewport_, &ViewportWidget::knifeArmedChanged, this, [this](bool armed) {
+        if (knifeAction_ != nullptr && knifeAction_->isChecked() != armed) {
+            knifeAction_->setChecked(armed);
+        }
+    });
     connect(hierarchy_, &HierarchyPanel::selectionRequested, this, [this](quint64 entity) {
         selectEntity(entity);
     });
@@ -209,6 +246,15 @@ MainWindow::MainWindow() : bridge_(std::make_unique<EngineBridge>()) {
     connect(inspector_, &InspectorPanel::editFailed, this, [this](const QString& text) {
         statusBar()->showMessage(text.section('\n', 0, 0), 8000);
     });
+    // The assets panel: a double-click places a model that is already in assets/; the button
+    // opens the same picker as Arquivo > Importar modelo 3D.
+    connect(assets_, &AssetPanel::importRequested, this, [this](const QString& path) {
+        const Reply reply = perform(QStringLiteral("asset.import"), QJsonObject{{"path", path}}, true);
+        if (reply.ok) {
+            assets_->reload();
+        }
+    });
+    connect(assets_, &AssetPanel::importModelRequested, this, &MainWindow::chooseImportModel);
 
     QSettings settings;
     themeId_ = settings.value("appearance/theme", QStringLiteral("petunia-light")).toString();
@@ -438,6 +484,30 @@ void MainWindow::buildActions() {
             prefabActions_.append(action);
         }
     }
+    savePrefabAction_ = make(QStringLiteral("Salvar seleção como prefab…"),
+                             QStringLiteral("Guarda o objeto selecionado, com colisões, scripts e traços, em prefabs/. Ele volta a ser criado pelo menu Criar"));
+    savePrefabAction_->setProperty("iconName", QStringLiteral("asset_library"));
+    connect(savePrefabAction_, &QAction::triggered, this, [this] {
+        bool accepted = false;
+        const QString name = QInputDialog::getText(this, QStringLiteral("Salvar seleção como prefab"),
+                                                   QStringLiteral("Nome do prefab:"), QLineEdit::Normal,
+                                                   QString(), &accepted);
+        if (!accepted || name.trimmed().isEmpty()) {
+            return;
+        }
+        const Reply reply = perform(QStringLiteral("prefab.save"), QJsonObject{{"name", name}});
+        if (reply.ok) {
+            refreshProjectPrefabs();
+            statusBar()->showMessage(QStringLiteral("Prefab \"%1\" salvo (revisão %2) em prefabs/.")
+                                         .arg(reply.result.toObject().value(QStringLiteral("name")).toString())
+                                         .arg(reply.result.toObject().value(QStringLiteral("revision")).toInt()),
+                                     8000);
+        }
+    });
+    projectPrefabsMenu_ = new QMenu(QStringLiteral("Prefab do projeto"), this);
+    projectPrefabsMenu_->setProperty("iconName", QStringLiteral("asset_library"));
+    // Rebuilt when opened: a prefab saved from another window (or by hand) shows up too.
+    connect(projectPrefabsMenu_, &QMenu::aboutToShow, this, &MainWindow::refreshProjectPrefabs);
     connect(pointLightAction_, &QAction::triggered, this, [this] {
         perform(QStringLiteral("create.light"), QJsonObject{{"kind", QStringLiteral("point")}});
         statusBar()->showMessage(QStringLiteral("Luz criada. Com uma luz na cena, só as luzes da cena valem (o sol e o ambiente padrão saem)."), 8000);
@@ -455,6 +525,14 @@ void MainWindow::buildActions() {
     carveAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_C));
     hollowAction_ = make(QStringLiteral("Tornar oco"), QStringLiteral("A caixa vira piso, teto e quatro paredes com a espessura do snap: salas, cavernas (Ctrl+Alt+H)"));
     hollowAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_H));
+    cutPlaneAction_ = make(QStringLiteral("Cortar com plano…"), QStringLiteral("Divide a caixa selecionada em duas com um plano perpendicular a um dos eixos dela (Ctrl+Alt+P)"));
+    cutPlaneAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_P));
+    arrangeLineAction_ = make(QStringLiteral("Arranjo em linha…"), QStringLiteral("Copia a caixa selecionada em linha reta, com um passo em metros (Ctrl+Alt+L)"));
+    arrangeLineAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_L));
+    arrangeCircleAction_ = make(QStringLiteral("Arranjo em círculo…"), QStringLiteral("Copia a caixa selecionada em círculo, girando cada cópia ao redor do eixo (Ctrl+Alt+O)"));
+    arrangeCircleAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_O));
+    mirrorAction_ = make(QStringLiteral("Espelhar…"), QStringLiteral("Reflete a caixa selecionada em um plano de eixo do mundo, como cópia ou no lugar (Ctrl+Alt+M)"));
+    mirrorAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_M));
     floorUpAction_ = make(QStringLiteral("Subir um andar"), QStringLiteral("A grade, os objetos novos e o snap de superfície sobem um andar; acima do último, cria um andar novo"));
     floorUpAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_PageUp));
     floorDownAction_ = make(QStringLiteral("Descer um andar"), QStringLiteral("A grade e os objetos novos descem um andar"));
@@ -623,6 +701,10 @@ void MainWindow::buildActions() {
             statusBar()->showMessage(QStringLiteral("A caixa virou piso, teto e paredes. Ctrl+Z desfaz."), 5000);
         }
     });
+    connect(cutPlaneAction_, &QAction::triggered, this, &MainWindow::showCutPlaneDialog);
+    connect(arrangeLineAction_, &QAction::triggered, this, &MainWindow::showArrangeLineDialog);
+    connect(arrangeCircleAction_, &QAction::triggered, this, &MainWindow::showArrangeCircleDialog);
+    connect(mirrorAction_, &QAction::triggered, this, &MainWindow::showMirrorDialog);
     connect(floorUpAction_, &QAction::triggered, this, [this] { perform(QStringLiteral("floor.step"), QJsonObject{{"delta", 1}}, false); });
     connect(floorDownAction_, &QAction::triggered, this, [this] { perform(QStringLiteral("floor.step"), QJsonObject{{"delta", -1}}, false); });
     connect(editPivotAction_, &QAction::toggled, this, [this](bool on) {
@@ -663,6 +745,9 @@ void MainWindow::buildMenus() {
     for (QAction* action : std::as_const(meshActions_)) {
         mesh->addAction(action);
     }
+    mesh->addSeparator();
+    mesh->addAction(convertMeshAction_);
+    mesh->addAction(booleanAction_);
 
     QMenu* create = menus_->addMenu(QStringLiteral("&Criar"));
     create->addAction(primitivesMenuAction_);
@@ -674,6 +759,8 @@ void MainWindow::buildMenus() {
     for (QAction* action : std::as_const(prefabActions_)) {
         create->addAction(action);
     }
+    create->addMenu(projectPrefabsMenu_);
+    create->addAction(savePrefabAction_);
     create->addSeparator();
     create->addAction(terrainAction_);
     create->addAction(caveAction_);
@@ -717,6 +804,11 @@ void MainWindow::buildMenus() {
     operations->addSeparator();
     operations->addAction(carveAction_);
     operations->addAction(hollowAction_);
+    operations->addSeparator();
+    operations->addAction(cutPlaneAction_);
+    operations->addAction(arrangeLineAction_);
+    operations->addAction(arrangeCircleAction_);
+    operations->addAction(mirrorAction_);
     operations->addSeparator();
     operations->addAction(editPivotAction_);
     operations->addSeparator();
@@ -957,6 +1049,10 @@ void MainWindow::buildAppBar() {
     // Icons used by the menus and the palette.
     setActionIcon(duplicateAction_, QStringLiteral("duplicate"));
     setActionIcon(deleteAction_, QStringLiteral("trash"));
+    setActionIcon(cutPlaneAction_, QStringLiteral("plane"));
+    setActionIcon(arrangeLineAction_, QStringLiteral("duplicate"));
+    setActionIcon(arrangeCircleAction_, QStringLiteral("circle"));
+    setActionIcon(mirrorAction_, QStringLiteral("mirror"));
     setActionIcon(focusAction_, QStringLiteral("frame_selection"));
     setActionIcon(codeAction_, QStringLiteral("script"));
     setActionIcon(logicAction_, QStringLiteral("connect"));
@@ -976,6 +1072,7 @@ void MainWindow::buildAppBar() {
     for (QAction* action : std::as_const(prefabActions_)) {
         setActionIcon(action, action->property("iconName").toString());
     }
+    setActionIcon(savePrefabAction_, QStringLiteral("asset_library"));
     setActionIcon(pointLightAction_, QStringLiteral("view_lit"));
     setActionIcon(sunLightAction_, QStringLiteral("view_lit"));
     for (QAction* action : viewActions_) {
@@ -1031,6 +1128,14 @@ void MainWindow::buildToolPalette() {
         setActionIcon(toolActions_[index], toolActions_[index]->property("iconName").toString());
         layout->addWidget(tool);
     }
+    rule();
+    auto* editMesh = new QToolButton(palette);
+    editMesh->setDefaultAction(editModeAction_);
+    editMesh->setProperty("role", QStringLiteral("appTool"));
+    editMesh->setIconSize(QSize(16, 16));
+    editMesh->setFixedSize(28, 28);
+    setActionIcon(editModeAction_, QStringLiteral("mode_edit"));
+    layout->addWidget(editMesh);
     rule();
     auto* primitives = new QToolButton(palette);
     primitives->setProperty("role", QStringLiteral("appTool"));
@@ -1094,6 +1199,7 @@ void MainWindow::buildMeshActions() {
         {"mesh.extrude", "Extrudar", "extrude", "Puxa as faces escolhidas (Ctrl+E)", "Ctrl+E"},
         {"mesh.bevel", "Chanfro", "bevel", "Arredonda as arestas escolhidas (Ctrl+B)", "Ctrl+B"},
         {"mesh.loop_cut", "Corte em laço", "loop_cut", "Corta o anel da aresta escolhida (Ctrl+R)", "Ctrl+R"},
+        {"mesh.knife", "Faca", "tool_knife", "Corta uma face entre dois pontos das arestas (K)", "K"},
         {"mesh.subdivide", "Subdividir", "subdivide", "Divide as faces escolhidas", ""},
         {"mesh.dissolve", "Dissolver arestas", "dissolve", "Junta as duas faces de cada aresta escolhida (Ctrl+X)", "Ctrl+X"},
         {"mesh.merge", "Fundir vértices", "merge", "Junta os vértices escolhidos num só (M)", "M"},
@@ -1111,10 +1217,30 @@ void MainWindow::buildMeshActions() {
         }
         setActionIcon(action, QString::fromLatin1(entry.icon));
         const QString operation = QString::fromLatin1(entry.operation);
-        connect(action, &QAction::triggered, this, [this, operation] { applyMesh(operation); });
+        if (operation == QLatin1String("mesh.knife")) {
+            action->setCheckable(true);
+            knifeAction_ = action;
+            connect(action, &QAction::triggered, this, &MainWindow::toggleKnife);
+        } else {
+            connect(action, &QAction::triggered, this, [this, operation] { applyMesh(operation); });
+        }
         viewport_->addAction(action);
         meshActions_.append(action);
     }
+
+    // Object-mode actions of the Malha menu: they work on the selected object, not on a component
+    // of an editable mesh.
+    booleanAction_ = new QAction(QStringLiteral("Booleano…"), this);
+    booleanAction_->setToolTip(QStringLiteral("Funde, corta ou cruza a malha selecionada com outro objeto"));
+    booleanAction_->setStatusTip(booleanAction_->toolTip());
+    setActionIcon(booleanAction_, QStringLiteral("boolean_fuse"));
+    connect(booleanAction_, &QAction::triggered, this, &MainWindow::showBooleanDialog);
+
+    convertMeshAction_ = new QAction(QStringLiteral("Tornar editável"), this);
+    convertMeshAction_->setToolTip(QStringLiteral("Transforma o brush selecionado em malha editável; Tab entra no modo de edição"));
+    convertMeshAction_->setStatusTip(convertMeshAction_->toolTip());
+    setActionIcon(convertMeshAction_, QStringLiteral("mode_edit"));
+    connect(convertMeshAction_, &QAction::triggered, this, &MainWindow::convertSelectionToMesh);
 }
 
 void MainWindow::buildMeshBar() {
@@ -1131,8 +1257,30 @@ void MainWindow::buildMeshBar() {
     for (QAction* action : std::as_const(meshActions_)) {
         meshBar_->addAction(action);
     }
-    meshBar_->addSeparator();
-    meshBar_->addWidget(new QLabel(QStringLiteral(" Distância ")));
+    // The numbers go on their own row: a toolbar inside a layout clips what does not fit instead of
+    // offering an overflow button, and this row plus the icons is wider than the viewport column.
+    meshValuesBar_ = new QToolBar(QStringLiteral("Valores da malha"), this);
+    meshValuesBar_->setObjectName(QStringLiteral("PetuniaToolOptions"));
+    meshValuesBar_->setMovable(false);
+    meshValuesBar_->setFloatable(false);
+    meshValuesBar_->setAccessibleName(QStringLiteral("Valores das operações de malha"));
+    sceneLayout_->insertWidget(2, meshValuesBar_);
+    meshValuesBar_->hide();
+    meshValuesBar_->addWidget(new QLabel(QStringLiteral(" Ao arrastar ")));
+    meshPreviewBox_ = new QComboBox;
+    meshPreviewBox_->setAccessibleName(QStringLiteral("Operação com valor ao vivo"));
+    meshPreviewBox_->setToolTip(QStringLiteral(
+        "Escolha uma operação e arraste no viewport: a distância (ou o deslize) muda ao vivo; "
+        "solte para aplicar, Esc cancela. Shift deixa o ajuste fino"));
+    meshPreviewBox_->addItem(QStringLiteral("Nada (clique escolhe)"), QString());
+    meshPreviewBox_->addItem(QStringLiteral("Inserir"), QStringLiteral("inset"));
+    meshPreviewBox_->addItem(QStringLiteral("Extrudar"), QStringLiteral("extrude"));
+    meshPreviewBox_->addItem(QStringLiteral("Chanfro"), QStringLiteral("bevel"));
+    meshPreviewBox_->addItem(QStringLiteral("Corte em laço"), QStringLiteral("loop_cut"));
+    WheelGuard::protect(meshPreviewBox_);
+    meshValuesBar_->addWidget(meshPreviewBox_);
+    meshValuesBar_->addSeparator();
+    meshValuesBar_->addWidget(new QLabel(QStringLiteral(" Distância ")));
     meshDistance_ = new QDoubleSpinBox;
     meshDistance_->setRange(0.01, 10.0);
     meshDistance_->setSingleStep(0.05);
@@ -1141,20 +1289,52 @@ void MainWindow::buildMeshBar() {
     meshDistance_->setSuffix(QStringLiteral(" m"));
     meshDistance_->setAccessibleName(QStringLiteral("Distância da operação de malha"));
     meshDistance_->setToolTip(QStringLiteral("Inserir, extrudar e chanfro usam esta distância"));
-    meshBar_->addWidget(meshDistance_);
-    meshBar_->addWidget(new QLabel(QStringLiteral("  Cortes ")));
+    meshValuesBar_->addWidget(meshDistance_);
+    meshValuesBar_->addWidget(new QLabel(QStringLiteral("  Cortes ")));
     meshCuts_ = new QSpinBox;
     meshCuts_->setRange(1, 32);
     meshCuts_->setValue(1);
     meshCuts_->setAccessibleName(QStringLiteral("Número de cortes"));
     meshCuts_->setToolTip(QStringLiteral("Cortes do laço e da subdivisão"));
-    meshBar_->addWidget(meshCuts_);
-    meshBar_->addWidget(new QLabel(QStringLiteral("  Segmentos ")));
+    meshValuesBar_->addWidget(meshCuts_);
+    meshValuesBar_->addWidget(new QLabel(QStringLiteral("  Segmentos ")));
     meshSegments_ = new QSpinBox;
     meshSegments_->setRange(1, 8);
     meshSegments_->setValue(1);
     meshSegments_->setAccessibleName(QStringLiteral("Segmentos do chanfro"));
-    meshBar_->addWidget(meshSegments_);
+    meshValuesBar_->addWidget(meshSegments_);
+    meshValuesBar_->addWidget(new QLabel(QStringLiteral("  Deslize ")));
+    meshSlide_ = new QDoubleSpinBox;
+    meshSlide_->setRange(-1.0, 1.0);
+    meshSlide_->setSingleStep(0.05);
+    meshSlide_->setDecimals(2);
+    meshSlide_->setValue(0.0);
+    meshSlide_->setAccessibleName(QStringLiteral("Deslize do corte em laço"));
+    meshSlide_->setToolTip(QStringLiteral("Corte em laço: -1 a 1; 0 fica no meio da aresta"));
+    meshValuesBar_->addWidget(meshSlide_);
+
+    connect(meshPreviewBox_, &QComboBox::currentIndexChanged, this, [this](int index) {
+        viewport_->setLiveMeshOperation(meshPreviewBox_->itemData(index).toString());
+    });
+    connect(meshDistance_, &QDoubleSpinBox::valueChanged, this, [this] { syncMeshPreviewValues(); });
+    connect(meshCuts_, &QSpinBox::valueChanged, this, [this] { syncMeshPreviewValues(); });
+    connect(meshSegments_, &QSpinBox::valueChanged, this, [this] { syncMeshPreviewValues(); });
+    connect(meshSlide_, &QDoubleSpinBox::valueChanged, this, [this] { syncMeshPreviewValues(); });
+    syncMeshPreviewValues();
+    viewport_->setLiveMeshOperation(meshPreviewBox_->currentData().toString());
+}
+
+void MainWindow::syncMeshPreviewValues() {
+    if (viewport_ == nullptr) {
+        return;
+    }
+    viewport_->setLiveMeshValues(QJsonObject{
+        {QStringLiteral("distance"), meshDistance_ != nullptr ? meshDistance_->value() : 0.2},
+        {QStringLiteral("width"), meshDistance_ != nullptr ? meshDistance_->value() : 0.2},
+        {QStringLiteral("cuts"), meshCuts_ != nullptr ? meshCuts_->value() : 1},
+        {QStringLiteral("segments"), meshSegments_ != nullptr ? meshSegments_->value() : 1},
+        {QStringLiteral("slide"), meshSlide_ != nullptr ? meshSlide_->value() : 0.0},
+    });
 }
 
 void MainWindow::buildSculptBar() {
@@ -1568,8 +1748,18 @@ void MainWindow::buildDocks() {
     diagnostics_ = new DiagnosticsPanel(bridge_.get(), this);
     history_ = new HistoryPanel(bridge_.get(), this);
     api_ = new ApiPanel(bridge_.get(), this);
+    assets_ = new AssetPanel(bridge_.get(), this);
 
     QDockWidget* hierarchyDock = addDock(QStringLiteral("Hierarquia"), hierarchy_, Qt::LeftDockWidgetArea);
+    QDockWidget* assetsDock = addDock(QStringLiteral("Assets"), assets_, Qt::LeftDockWidgetArea);
+    tabifyDockWidget(hierarchyDock, assetsDock);
+    hierarchyDock->raise();
+    // A tabified dock sends no show event when its tab is raised, so rescan on visibility.
+    connect(assetsDock, &QDockWidget::visibilityChanged, assets_, [this](bool visible) {
+        if (visible) {
+            assets_->reload();
+        }
+    });
     QDockWidget* inspectorDock = addDock(QStringLiteral("Inspetor"), inspector_, Qt::RightDockWidgetArea);
     apiDock_ = addDock(QStringLiteral("Referência da API"), api_, Qt::RightDockWidgetArea);
     QDockWidget* diagnosticsDock = addDock(QStringLiteral("Diagnósticos"), diagnostics_, Qt::BottomDockWidgetArea);
@@ -1585,6 +1775,8 @@ void MainWindow::buildDocks() {
     for (QAction* action : std::as_const(prefabActions_)) {
         createMenu->addAction(action);
     }
+    createMenu->addMenu(projectPrefabsMenu_);
+    createMenu->addAction(savePrefabAction_);
     createMenu->addSeparator();
     createMenu->addAction(terrainAction_);
     createMenu->addAction(caveAction_);
@@ -1718,6 +1910,8 @@ void MainWindow::chooseImportModel() {
         message += QStringLiteral(" Avisos: %1").arg(warnings.first().toString());
     }
     statusBar()->showMessage(message, 10000);
+    // The file now has a copy in assets/: the panel lists it without waiting for a reopen.
+    assets_->reload();
 }
 
 void MainWindow::chooseOpen() {
@@ -1754,6 +1948,8 @@ void MainWindow::onSnapshot() {
     for (QAction* action : std::as_const(prefabActions_)) {
         action->setEnabled(project);
     }
+    savePrefabAction_->setEnabled(project && snapshot.value("selection").isDouble());
+    projectPrefabsMenu_->setEnabled(project);
     sculptRadius_ = snapshot.value("sculpt").toObject().value(QStringLiteral("radius")).toDouble(sculptRadius_);
     syncSculptBar(snapshot);
     syncNaturalBar(snapshot);
@@ -1780,7 +1976,8 @@ void MainWindow::onSnapshot() {
     for (QAction* action : std::as_const(colliderActions_)) {
         action->setEnabled(selected);
     }
-    for (QAction* action : {carveAction_, hollowAction_, editPivotAction_}) {
+    for (QAction* action : {carveAction_, hollowAction_, editPivotAction_, cutPlaneAction_,
+                            arrangeLineAction_, arrangeCircleAction_, mirrorAction_}) {
         action->setEnabled(selected);
     }
     for (QAction* action : {floorUpAction_, floorDownAction_}) {
@@ -1807,6 +2004,7 @@ void MainWindow::onSnapshot() {
     if (root != apiProjectRoot_) {
         apiProjectRoot_ = root;
         api_->reload();
+        assets_->reload();
     }
 
     const QJsonObject diagnostics = snapshot.value("diagnostics").toObject();
@@ -2099,6 +2297,37 @@ void MainWindow::showShortcuts() {
 
 // Shift+A: the radial menu of primitives (Petunia3D's PetuniaPieMenu, copied unchanged). Number
 // keys, arrows and Enter work too; "Mostrar como lista" turns it into a plain menu.
+void MainWindow::refreshProjectPrefabs() {
+    projectPrefabsMenu_->clear();
+    const Reply reply = perform(QStringLiteral("prefab.list"), QJsonObject{}, false);
+    if (!reply.ok) {
+        return;
+    }
+    int shown = 0;
+    for (const QJsonValue& value : reply.result.toObject().value(QStringLiteral("prefabs")).toArray()) {
+        const QJsonObject prefab = value.toObject();
+        if (prefab.value(QStringLiteral("kind")).toString() != QLatin1String("project")) {
+            continue;
+        }
+        const QString id = prefab.value(QStringLiteral("id")).toString();
+        const QString title = prefab.value(QStringLiteral("title")).toString();
+        QAction* action = projectPrefabsMenu_->addAction(title);
+        action->setIcon(PetuniaIcons::get(QStringLiteral("asset_library")));
+        action->setToolTip(prefab.value(QStringLiteral("summary")).toString());
+        connect(action, &QAction::triggered, this, [this, id, title] {
+            const Reply placed = perform(QStringLiteral("prefab.spawn"), QJsonObject{{"id", id}});
+            if (placed.ok) {
+                statusBar()->showMessage(QStringLiteral("Prefab \"%1\" criado na frente da câmera. Ctrl+Z desfaz.").arg(title), 8000);
+            }
+        });
+        ++shown;
+    }
+    if (shown == 0) {
+        QAction* empty = projectPrefabsMenu_->addAction(QStringLiteral("(nenhum prefab salvo)"));
+        empty->setEnabled(false);
+    }
+}
+
 void MainWindow::showPrimitivesPie() {
     if (!bridge_->hasProject()) {
         return;
@@ -2117,6 +2346,366 @@ void MainWindow::showPrimitivesPie() {
     pie->popup(viewportArea.contains(cursor) ? cursor : viewportArea.center());
 }
 
+void MainWindow::toggleKnife() {
+    if (!viewport_->isEditMode()) {
+        statusBar()->showMessage(
+            QStringLiteral("Entre no modo de edição (Tab) com uma malha selecionada para usar a faca."),
+            5000);
+        if (knifeAction_ != nullptr) {
+            knifeAction_->setChecked(false);
+        }
+        return;
+    }
+    const bool arm = !viewport_->isKnifeArmed();
+    viewport_->setKnifeArmed(arm);
+    if (arm) {
+        statusBar()->showMessage(
+            QStringLiteral("Faca: clique na primeira aresta e depois na segunda, na mesma face; Esc cancela."),
+            8000);
+        viewport_->setFocus(Qt::OtherFocusReason);
+    } else {
+        statusBar()->showMessage(QStringLiteral("Faca cancelada."), 3000);
+    }
+}
+
+void MainWindow::convertSelectionToMesh() {
+    if (!bridge_->hasSelection()) {
+        statusBar()->showMessage(QStringLiteral("Selecione um objeto para tornar editável."), 5000);
+        return;
+    }
+    const Reply reply = perform(QStringLiteral("mesh.convert"),
+                                QJsonObject{{QStringLiteral("entity"), static_cast<double>(bridge_->selection())}},
+                                false);
+    if (reply.ok) {
+        const QJsonObject result = reply.result.toObject();
+        statusBar()->showMessage(
+            QStringLiteral("Malha editável: %1 vértices, %2 faces. Tab entra no modo de edição.")
+                .arg(result.value(QStringLiteral("vertices")).toInt())
+                .arg(result.value(QStringLiteral("faces")).toInt()),
+            8000);
+    } else if (reply.code == QLatin1String("EDITOR_ALREADY_A_MESH")) {
+        statusBar()->showMessage(QStringLiteral("O objeto já é uma malha editável; Tab entra no modo de edição."),
+                                 5000);
+    } else {
+        showFailure(reply, true);
+    }
+}
+
+void MainWindow::showBooleanDialog() {
+    if (!bridge_->hasSelection()) {
+        statusBar()->showMessage(QStringLiteral("Selecione o objeto que vai receber o booleano."), 5000);
+        return;
+    }
+    const quint64 target = bridge_->selection();
+    // The tool is another object of the scene, never a collider or a script attachment.
+    QList<QPair<quint64, QString>> candidates;
+    for (const QJsonValue& value : bridge_->snapshot().value(QStringLiteral("entities")).toArray()) {
+        const QJsonObject entity = value.toObject();
+        if (entity.contains(QStringLiteral("owner"))) {
+            continue;
+        }
+        const quint64 id = static_cast<quint64>(entity.value(QStringLiteral("id")).toDouble());
+        if (id == target) {
+            continue;
+        }
+        const QJsonArray tables = entity.value(QStringLiteral("tables")).toArray();
+        bool solid = false;
+        for (const QJsonValue& table : tables) {
+            const QString name = table.toString();
+            if (name == QLatin1String("Brush") || name == QLatin1String("Mesh")) {
+                solid = true;
+                break;
+            }
+        }
+        if (solid) {
+            candidates.append({id, QStringLiteral("%1  (#%2)").arg(entity.value(QStringLiteral("name")).toString()).arg(id)});
+        }
+    }
+    if (candidates.isEmpty()) {
+        QMessageBox::information(
+            this, QStringLiteral("Booleano"),
+            QStringLiteral("Crie outro brush ou malha para usar como ferramenta: o booleano combina dois sólidos."));
+        return;
+    }
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(QStringLiteral("Booleano"));
+    auto* layout = new QFormLayout(&dialog);
+    auto* operation = new QComboBox(&dialog);
+    operation->setAccessibleName(QStringLiteral("Operação do booleano"));
+    operation->addItem(QStringLiteral("Fundir (união)"), QStringLiteral("union"));
+    operation->addItem(QStringLiteral("Cortar (subtrair)"), QStringLiteral("subtract"));
+    operation->addItem(QStringLiteral("Interseção"), QStringLiteral("intersect"));
+    WheelGuard::protect(operation);
+    layout->addRow(QStringLiteral("Operação"), operation);
+    auto* tool = new QComboBox(&dialog);
+    tool->setAccessibleName(QStringLiteral("Objeto usado como ferramenta"));
+    for (const auto& [id, label] : candidates) {
+        tool->addItem(label, static_cast<double>(id));
+    }
+    WheelGuard::protect(tool);
+    layout->addRow(QStringLiteral("Ferramenta"), tool);
+    auto* keepTool = new QCheckBox(QStringLiteral("Manter a ferramenta depois do corte"), &dialog);
+    layout->addRow(QString(), keepTool);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    layout->addRow(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    const Reply reply = perform(
+        QStringLiteral("mesh.boolean"),
+        QJsonObject{
+            {QStringLiteral("entity"), static_cast<double>(target)},
+            {QStringLiteral("tool"), QJsonValue(tool->currentData().toDouble())},
+            {QStringLiteral("operation"), QJsonValue(operation->currentData().toString())},
+            {QStringLiteral("keep_tool"), keepTool->isChecked()},
+        },
+        true);
+    if (reply.ok) {
+        const QJsonObject result = reply.result.toObject();
+        statusBar()->showMessage(
+            QStringLiteral("Booleano: %1 vértices, %2 faces.%3")
+                .arg(result.value(QStringLiteral("vertices")).toInt())
+                .arg(result.value(QStringLiteral("faces")).toInt())
+                .arg(result.value(QStringLiteral("tool_removed")).toBool()
+                         ? QStringLiteral(" A ferramenta foi removida; Ctrl+Z desfaz.")
+                         : QString()),
+            8000);
+    }
+}
+
+void MainWindow::showCutPlaneDialog() {
+    if (!bridge_->hasSelection()) {
+        statusBar()->showMessage(QStringLiteral("Selecione a caixa que vai ser cortada."), 5000);
+        return;
+    }
+    QDialog dialog(this);
+    dialog.setWindowTitle(QStringLiteral("Cortar com plano"));
+    auto* layout = new QFormLayout(&dialog);
+    auto* axis = new QComboBox(&dialog);
+    axis->setAccessibleName(QStringLiteral("Eixo perpendicular ao plano"));
+    axis->addItem(QStringLiteral("X (esquerda/direita)"), QStringLiteral("x"));
+    axis->addItem(QStringLiteral("Y (cima/baixo)"), QStringLiteral("y"));
+    axis->addItem(QStringLiteral("Z (frente/trás)"), QStringLiteral("z"));
+    WheelGuard::protect(axis);
+    layout->addRow(QStringLiteral("Eixo do plano"), axis);
+    auto* offset = new QDoubleSpinBox(&dialog);
+    offset->setRange(-1000.0, 1000.0);
+    offset->setSingleStep(0.1);
+    offset->setDecimals(2);
+    offset->setSuffix(QStringLiteral(" m"));
+    offset->setValue(0.0);
+    offset->setAccessibleName(QStringLiteral("Distância do plano ao centro da caixa"));
+    offset->setToolTip(QStringLiteral("0 corta no meio; positivo desloca o plano no sentido positivo do eixo"));
+    layout->addRow(QStringLiteral("Distância do centro"), offset);
+    auto* hint = new QLabel(
+        QStringLiteral("As duas metades continuam caixas e mantêm a cor e a rotação. O plano é perpendicular a um eixo da própria caixa."),
+        &dialog);
+    hint->setWordWrap(true);
+    layout->addRow(hint);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    layout->addRow(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+    const Reply reply = perform(
+        QStringLiteral("brush.cut_plane"),
+        QJsonObject{
+            {QStringLiteral("axis"), axis->currentData().toString()},
+            {QStringLiteral("offset"), offset->value()},
+        },
+        true);
+    if (reply.ok) {
+        statusBar()->showMessage(QStringLiteral("Caixa cortada em duas. Ctrl+Z desfaz."), 5000);
+    }
+}
+
+void MainWindow::showArrangeLineDialog() {
+    if (!bridge_->hasSelection()) {
+        statusBar()->showMessage(QStringLiteral("Selecione a caixa que vai ser repetida."), 5000);
+        return;
+    }
+    QDialog dialog(this);
+    dialog.setWindowTitle(QStringLiteral("Arranjo em linha"));
+    auto* layout = new QFormLayout(&dialog);
+    auto* count = new QSpinBox(&dialog);
+    count->setRange(2, 64);
+    count->setValue(3);
+    count->setAccessibleName(QStringLiteral("Total de itens, contando o original"));
+    layout->addRow(QStringLiteral("Itens (com o original)"), count);
+    auto addStep = [&dialog, layout](const QString& label, double value) {
+        auto* box = new QDoubleSpinBox(&dialog);
+        box->setRange(-1000.0, 1000.0);
+        box->setSingleStep(0.25);
+        box->setDecimals(2);
+        box->setSuffix(QStringLiteral(" m"));
+        box->setValue(value);
+        box->setAccessibleName(label);
+        layout->addRow(label, box);
+        return box;
+    };
+    QDoubleSpinBox* stepX = addStep(QStringLiteral("Passo X"), 1.0);
+    QDoubleSpinBox* stepY = addStep(QStringLiteral("Passo Y"), 0.0);
+    QDoubleSpinBox* stepZ = addStep(QStringLiteral("Passo Z"), 0.0);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    layout->addRow(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+    const Reply reply = perform(
+        QStringLiteral("brush.arrange_line"),
+        QJsonObject{
+            {QStringLiteral("count"), count->value()},
+            {QStringLiteral("offset"),
+             QJsonObject{
+                 {QStringLiteral("x"), stepX->value()},
+                 {QStringLiteral("y"), stepY->value()},
+                 {QStringLiteral("z"), stepZ->value()},
+             }},
+        },
+        true);
+    if (reply.ok) {
+        statusBar()->showMessage(
+            QStringLiteral("%1 cópias criadas em linha. Ctrl+Z desfaz tudo.")
+                .arg(reply.result.toObject().value(QStringLiteral("created")).toInt()),
+            5000);
+    }
+}
+
+void MainWindow::showArrangeCircleDialog() {
+    if (!bridge_->hasSelection()) {
+        statusBar()->showMessage(QStringLiteral("Selecione a caixa que vai ser repetida."), 5000);
+        return;
+    }
+    QDialog dialog(this);
+    dialog.setWindowTitle(QStringLiteral("Arranjo em círculo"));
+    auto* layout = new QFormLayout(&dialog);
+    auto* axis = new QComboBox(&dialog);
+    axis->setAccessibleName(QStringLiteral("Eixo do círculo"));
+    axis->addItem(QStringLiteral("X (círculo no plano YZ)"), 0);
+    axis->addItem(QStringLiteral("Y (círculo no plano XZ)"), 1);
+    axis->addItem(QStringLiteral("Z (círculo no plano XY)"), 2);
+    axis->setCurrentIndex(1);
+    WheelGuard::protect(axis);
+    layout->addRow(QStringLiteral("Eixo"), axis);
+    auto* radius = new QDoubleSpinBox(&dialog);
+    radius->setRange(0.1, 1000.0);
+    radius->setSingleStep(0.25);
+    radius->setDecimals(2);
+    radius->setSuffix(QStringLiteral(" m"));
+    radius->setValue(2.0);
+    radius->setAccessibleName(QStringLiteral("Raio do círculo"));
+    layout->addRow(QStringLiteral("Raio"), radius);
+    auto* count = new QSpinBox(&dialog);
+    count->setRange(2, 64);
+    count->setValue(8);
+    count->setAccessibleName(QStringLiteral("Total de itens, contando o original"));
+    layout->addRow(QStringLiteral("Itens (com o original)"), count);
+    auto* hint = new QLabel(
+        QStringLiteral("O objeto selecionado é o primeiro item do círculo e as cópias giram junto com ele."),
+        &dialog);
+    hint->setWordWrap(true);
+    layout->addRow(hint);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    layout->addRow(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+    // The center sits one radius away from the selection, on the first perpendicular axis, so
+    // the selected object is on the circle at angle zero.
+    const QJsonObject position = selectedPosition(bridge_.get());
+    double center[3] = {
+        position.value(QStringLiteral("x")).toDouble(),
+        position.value(QStringLiteral("y")).toDouble(),
+        position.value(QStringLiteral("z")).toDouble(),
+    };
+    const int around = axis->currentData().toInt();
+    center[(around + 1) % 3] -= radius->value();
+    const Reply reply = perform(
+        QStringLiteral("brush.arrange_circle"),
+        QJsonObject{
+            {QStringLiteral("count"), count->value()},
+            {QStringLiteral("axis"), around},
+            {QStringLiteral("center"),
+             QJsonObject{
+                 {QStringLiteral("x"), center[0]},
+                 {QStringLiteral("y"), center[1]},
+                 {QStringLiteral("z"), center[2]},
+             }},
+        },
+        true);
+    if (reply.ok) {
+        statusBar()->showMessage(
+            QStringLiteral("%1 cópias criadas em círculo. Ctrl+Z desfaz tudo.")
+                .arg(reply.result.toObject().value(QStringLiteral("created")).toInt()),
+            5000);
+    }
+}
+
+void MainWindow::showMirrorDialog() {
+    if (!bridge_->hasSelection()) {
+        statusBar()->showMessage(QStringLiteral("Selecione a caixa que vai ser espelhada."), 5000);
+        return;
+    }
+    QDialog dialog(this);
+    dialog.setWindowTitle(QStringLiteral("Espelhar"));
+    auto* layout = new QFormLayout(&dialog);
+    auto* axis = new QComboBox(&dialog);
+    axis->setAccessibleName(QStringLiteral("Eixo perpendicular ao plano do espelho"));
+    axis->addItem(QStringLiteral("X (plano YZ)"), QStringLiteral("x"));
+    axis->addItem(QStringLiteral("Y (plano XZ)"), QStringLiteral("y"));
+    axis->addItem(QStringLiteral("Z (plano XY)"), QStringLiteral("z"));
+    WheelGuard::protect(axis);
+    layout->addRow(QStringLiteral("Eixo do plano"), axis);
+    auto* plane = new QDoubleSpinBox(&dialog);
+    plane->setRange(-1000.0, 1000.0);
+    plane->setSingleStep(0.25);
+    plane->setDecimals(2);
+    plane->setSuffix(QStringLiteral(" m"));
+    plane->setValue(0.0);
+    plane->setAccessibleName(QStringLiteral("Posição do plano no eixo"));
+    plane->setToolTip(QStringLiteral("O plano é o valor da coordenada no eixo escolhido; 0 passa pela origem do mundo"));
+    layout->addRow(QStringLiteral("Plano em"), plane);
+    auto* duplicate = new QCheckBox(QStringLiteral("Criar uma cópia espelhada"), &dialog);
+    duplicate->setChecked(true);
+    layout->addRow(QString(), duplicate);
+    auto* hint = new QLabel(
+        QStringLiteral("Desmarque a cópia para mover o próprio objeto. A rotação também é refletida, então a caixa continua encaixada."),
+        &dialog);
+    hint->setWordWrap(true);
+    layout->addRow(hint);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    layout->addRow(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+    const Reply reply = perform(
+        QStringLiteral("brush.mirror"),
+        QJsonObject{
+            {QStringLiteral("axis"), axis->currentData().toString()},
+            {QStringLiteral("plane"), plane->value()},
+            {QStringLiteral("duplicate"), duplicate->isChecked()},
+        },
+        true);
+    if (reply.ok) {
+        statusBar()->showMessage(
+            duplicate->isChecked() ? QStringLiteral("Cópia espelhada criada. Ctrl+Z desfaz.")
+                                   : QStringLiteral("Objeto espelhado no lugar. Ctrl+Z desfaz."),
+            5000);
+    }
+}
+
 void MainWindow::applyMesh(const QString& operation) {
     if (!viewport_->isEditMode()) {
         statusBar()->showMessage(QStringLiteral("Entre no modo de edição (Tab) com uma malha selecionada."), 5000);
@@ -2129,7 +2718,10 @@ void MainWindow::applyMesh(const QString& operation) {
     } else if (operation == QLatin1String("mesh.bevel")) {
         fields.insert(QStringLiteral("width"), distance);
         fields.insert(QStringLiteral("segments"), meshSegments_ != nullptr ? meshSegments_->value() : 1);
-    } else if (operation == QLatin1String("mesh.loop_cut") || operation == QLatin1String("mesh.subdivide")) {
+    } else if (operation == QLatin1String("mesh.loop_cut")) {
+        fields.insert(QStringLiteral("cuts"), meshCuts_ != nullptr ? meshCuts_->value() : 1);
+        fields.insert(QStringLiteral("slide"), meshSlide_ != nullptr ? meshSlide_->value() : 0.0);
+    } else if (operation == QLatin1String("mesh.subdivide")) {
         fields.insert(QStringLiteral("cuts"), meshCuts_ != nullptr ? meshCuts_->value() : 1);
     }
     const Reply reply = perform(operation, fields);
@@ -2219,8 +2811,20 @@ void MainWindow::syncEditMode() {
     if (meshBar_ != nullptr) {
         meshBar_->setVisible(inEdit);
     }
+    if (meshValuesBar_ != nullptr) {
+        meshValuesBar_->setVisible(inEdit);
+    }
     for (QAction* action : std::as_const(meshActions_)) {
         action->setEnabled(inEdit);
+    }
+    if (knifeAction_ != nullptr) {
+        knifeAction_->setChecked(viewport_->isKnifeArmed());
+    }
+    if (convertMeshAction_ != nullptr) {
+        convertMeshAction_->setEnabled(bridge_->hasSelection());
+    }
+    if (booleanAction_ != nullptr) {
+        booleanAction_->setEnabled(bridge_->hasSelection());
     }
 }
 

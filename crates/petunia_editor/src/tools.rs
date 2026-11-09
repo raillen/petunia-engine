@@ -513,12 +513,19 @@ impl EditorSession {
         self.hover = self
             .screen_gizmo(pointer)
             .and_then(|(_, _, model)| gizmo::hit_test(&model, pointer.mouse()));
-        self.hovered = if self.hover.is_some() {
+        // A collider face handle wins over the object under it: it is small and drawn on top.
+        let collider = self.hover.is_none() && self.collider_handle_under(pointer).is_some();
+        self.hovered = if self.hover.is_some() || collider {
             None
         } else {
             self.entity_under(pointer).map(|(entity, _)| entity)
         };
-        json!({ "handle": self.hover.map(Handle::name), "entity": self.hovered, "face": null })
+        json!({
+            "handle": self.hover.map(Handle::name),
+            "entity": self.hovered,
+            "face": null,
+            "collider": collider,
+        })
     }
 
     pub(crate) fn entity_under(&self, pointer: Pointer) -> Option<(u64, f32)> {
@@ -1005,6 +1012,13 @@ impl EditorSession {
                 "snap": "Ctrl inverte o snap · Esc cancela",
             })
         });
+        let collider_hud = self.collider_drag.map(|_| {
+            json!({
+                "title": "Redimensionar colisão",
+                "detail": self.hud.clone().unwrap_or_default(),
+                "snap": "Ctrl inverte o snap · Esc cancela",
+            })
+        });
         let hud = self
             .drag
             .map(|drag| {
@@ -1030,7 +1044,8 @@ impl EditorSession {
                     "snap": note,
                 })
             })
-            .or(face_hud);
+            .or(face_hud)
+            .or(collider_hud);
         json!({
             "camera": camera,
             "tool": self.tool.name(),

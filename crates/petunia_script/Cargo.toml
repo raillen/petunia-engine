@@ -13,6 +13,7 @@ petunia_commands.workspace = true
 petunia_project.workspace = true
 petunia_physics.workspace = true
 petunia_graph.workspace = true
+petunia_grid.workspace = true
 serde_json.workspace = true
 # Aipo is our own language (DR-06, DR-25). Path dependencies on the sibling checkout; heavy optional
 # features (wasmtime, regex, unicode tables) stay off.

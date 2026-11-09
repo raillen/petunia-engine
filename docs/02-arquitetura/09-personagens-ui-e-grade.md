@@ -86,19 +86,21 @@ O HUD do Digi-Tactics (loja, banco, ouro, nível, dicas, arrastar unidades) é *
 
 ## 5. Módulo `grid`
 
-Os jogos táticos reaproveitam a mesma matemática. Em vez de cada jogo reescrever, a engine oferece um **bloco de alto nível** (lição do Godot: nós e APIs valem quando embrulham operações maiores).
+**Estado: implementado em 2026-11-09 (`DR-38`).** Os jogos táticos reaproveitam a mesma matemática. Em vez de cada jogo reescrever, a engine oferece um **bloco de alto nível** (lição do Godot: nós e APIs valem quando embrulham operações maiores).
 
-| Função (ilustrativa) | Faz |
+| Função | Faz |
 |---|---|
-| `grid.hex(size = ...)` | Cria grade hexagonal (coordenadas cúbicas `q + r + s = 0`) |
-| `grid.square(size = ...)` | Grade quadrada |
-| `grid.distance(a, b)` | Distância exata |
-| `grid.neighbors(cell)` | Vizinhas |
-| `grid.path(from, to, blocked = ...)` | Caminho A\* |
-| `grid.range(cell, radius)` | Células ao alcance |
-| `grid.to_world(cell)` / `grid.from_world(point)` | Conversões |
+| `grid.hex(size = …)` | Cria grade hexagonal pontuda de células com `size` metros (coordenadas cúbicas `q + r + s = 0`) |
+| `grid.square(size = …)` | Grade quadrada: eixos `q` e `r`, quatro vizinhas, diagonal custa dois passos |
+| `grid.distance(grid, a, b)` | Distância exata: `\|Δq\| + \|Δr\|` na quadrada, `(\|Δq\| + \|Δr\| + \|Δs\|) / 2` na hexagonal |
+| `grid.neighbors(grid, cell)` | Vizinhas: quatro na quadrada, seis na hexagonal |
+| `grid.path(grid, from, to, blocked = [])` | Caminho mais curto (A\*), começo e destino incluídos; `none` quando não há caminho |
+| `grid.range(grid, cell, radius)` | Células ao alcance, em ordem fixa (por `r`, depois `q`) |
+| `grid.to_world(grid, cell)` / `grid.from_world(grid, point)` | Conversões entre célula e metros no chão |
 
-Fórmula já usada no projeto: `distância = (|Δq| + |Δr| + |Δs|) / 2` (`LOCAL`, GDD §3). A grade também serve a **waypoints e A\*** herdados da especificação anterior.
+A **grade e a célula são dados** (`{"kind": "square"|"hex", "size": Float}` e `{"q": Int, "r": Int}`), então podem ir para uma tabela, um arquivo ou a rede. A matemática vive em `crates/petunia_grid`, sem render, janela ou world; a A\* usa a distância exata como heurística e empata pela própria célula, o que dá o **mesmo caminho em toda máquina**. Os limites (coordenada ±1.000.000, célula de 0,001 a 10.000 m, raio 256, 65.536 bloqueadas, 65.536 expandidas) são checados **antes** da conta.
+
+A grade também serve a **waypoints e A\*** herdados da especificação anterior. **Fora desta etapa:** visão da grade no viewport, encaixe do gizmo na célula, custo por terreno e caminho com pesos.
 
 ## Tabelas de dados (esboço)
 

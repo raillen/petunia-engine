@@ -348,18 +348,28 @@ pub fn build(id: &str, at: Vec3) -> Result<Built, Failure> {
 impl EditorSession {
     /// `prefab.list`.
     pub fn prefab_list(&self) -> Json {
-        json!({
-            "prefabs": PREFABS.iter().map(|prefab| json!({
-                "id": prefab.id,
-                "title": prefab.title,
-                "summary": prefab.summary,
-            })).collect::<Vec<_>>(),
-        })
+        let mut prefabs: Vec<Json> = PREFABS
+            .iter()
+            .map(|prefab| {
+                json!({
+                    "id": prefab.id,
+                    "kind": "builtin",
+                    "title": prefab.title,
+                    "summary": prefab.summary,
+                })
+            })
+            .collect();
+        prefabs.extend(self.project_prefabs());
+        json!({ "prefabs": prefabs })
     }
 
     /// `prefab.spawn`: creates the prefab in front of the camera, on the current floor (one undo
     /// step), and puts the graphs it needs in `scripts/` when they are not there yet.
     pub fn prefab_spawn(&mut self, id: &str) -> Result<Json, Failure> {
+        // `project:<name>` is a prefab saved from the project itself.
+        if let Some(name) = id.strip_prefix(crate::user_prefabs::PREFAB_PREFIX) {
+            return self.prefab_spawn_project(name);
+        }
         let project_root = self
             .project
             .as_ref()

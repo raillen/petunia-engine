@@ -352,7 +352,7 @@ pub fn euler_from_rotation(matrix: &Matrix3) -> Vec3 {
     Vec3::new(pitch.to_degrees(), yaw.to_degrees(), roll.to_degrees())
 }
 
-fn multiply(a: &Matrix3, b: &Matrix3) -> Matrix3 {
+pub(crate) fn multiply(a: &Matrix3, b: &Matrix3) -> Matrix3 {
     let mut out = [[0.0; 3]; 3];
     for (row, out_row) in out.iter_mut().enumerate() {
         for (column, cell) in out_row.iter_mut().enumerate() {
@@ -388,7 +388,7 @@ fn transpose(matrix: &Matrix3) -> Matrix3 {
 }
 
 /// Right-handed rotation around a unit axis (Rodrigues).
-fn axis_rotation(axis: Vec3, radians: f32) -> Matrix3 {
+pub(crate) fn axis_rotation(axis: Vec3, radians: f32) -> Matrix3 {
     let axis = axis.normalized_or_zero();
     let (sin, cos) = radians.sin_cos();
     let t = 1.0 - cos;
