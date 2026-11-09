@@ -123,8 +123,9 @@ lógica entre métodos, então o arquivo do outro método simplesmente deixa de 
 | `script.to_graph` | `name`, `graph`, `text`? | Cria um grafo novo (schema v2) a partir do subconjunto Aipo suportado (DR-34/DR-35), incluindo funções auxiliares, globais, variáveis locais, `while`, `loop`, `repeat`, `each`, `break`/`continue` e `return`. `text` permite usar o editor com alterações não salvas; o script original **não** muda e um grafo existente **nunca** é sobrescrito |
 | `create.cave` | `seed` (opcional) | Bloco de rocha com um túnel; com `seed`, com salas e túneis **gerados** (um desfazer) |
 | `create.light` | `kind` (`point` ou `sun`) | Luz na frente da câmera (um desfazer); com uma luz, só as luzes da cena valem (DR-29) |
-| `asset.list` | — | Modelos `.glb`/`.gltf` em `assets/` (caminhos do projeto; não segue links simbólicos) |
+| `asset.list` | — | Modelos `.glb`/`.gltf` e imagens `.png` em `assets/` (`kind`: `model` ou `image`; caminhos do projeto; não segue links simbólicos) |
 | `asset.import` | `path` | Importa um modelo como **malhas editáveis**, um objeto por nó; copia o arquivo para `assets/` (um desfazer). Devolve `imported`, `names`, `asset`, `warnings` |
+| `asset.import_sprite` | `path` | Importa um `.png` como **sprite** (DR-49): um objeto com a tabela `Sprite`, na frente da câmera, com a proporção da imagem, virado para ela e apoiado no andar atual; copia o arquivo para `assets/` (um desfazer). Devolve `entity`, `asset`, `width`, `height`, `size` |
 | `prefab.list` | — | Os prefabs embutidos: `door` (Porta), `pickup` (Item coletável), `spawn` (Ponto de nascimento) (DR-31) |
 | `prefab.spawn` | `id` | Cria o prefab na frente da câmera, no andar atual, em **um** desfazer; grava os grafos de que precisa em `scripts/` sem sobrescrever os que já existem. Devolve `entity`, `graphs_written`, `graphs_kept` |
 | `graph.list` / `graph.new` `name` / `graph.open` `name` / `graph.close` | — | Grafos de nós (`scripts/<nome>.graph.json`, DR-30). Um grafo aberto por vez; cada edição **grava na hora** (atômico) e a primeira de uma abertura guarda o arquivo em `scripts/.backup/` |
@@ -335,5 +336,9 @@ Uma mira vermelha marca onde o clique caiu na janela. Se a mira aparece sob o po
 |---|---|---|
 | Lógica do editor | `cargo test -p petunia_editor -- --test-threads=2` | Sem janela |
 | Janela de ponta a ponta | `scripts/editor-smoke.sh` | **Display virtual (Xvfb)**: nada aparece na sua tela e suas preferências ficam intactas |
+| Mundo natural (terreno, rio, estrada, ponte) | `scripts/natural-smoke.sh` | Mesmo display virtual |
+| **Sprites (2D)** | `scripts/sprite-smoke.sh` | Monta um projeto com uma caixa 3D e um sprite de uma folha **2x1**, e **lê pixels** da captura: meio, um quarto do centro, borda transparente e fora do quadrado |
 
 O teste de fumaça clica, duplica, cria, anda, gira, salva e tira uma imagem. Ele diz **se roda e desenha**. Não é regressão visual pixel a pixel (isso é o `cargo xtask test-visual`, *planejado*).
+
+**Os scripts de display virtual exportam** `DISPLAY`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `QT_QPA_PLATFORM` e `LIBGL_ALWAYS_SOFTWARE` em vez de prefixá-los a um comando continuado com `\`: um comentário dentro da continuação **termina o comando**, e o editor passa a abrir na tela real e a gravar as preferências reais. Aconteceu em 2026-10-29 com o `editor-smoke.sh`; o conserto é a exportação e o aviso no próprio script.

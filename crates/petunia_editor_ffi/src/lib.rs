@@ -177,6 +177,8 @@ fn empty_frame() -> petunia_render::RenderFrame {
     petunia_render::RenderFrame {
         camera: petunia_render::Camera::default(),
         items: Vec::new(),
+        sprites: Vec::new(),
+        textures: Vec::new(),
         sculpts: Vec::new(),
         overlay: Vec::new(),
         show_grid: false,
@@ -188,6 +190,7 @@ fn empty_frame() -> petunia_render::RenderFrame {
         precipitation: None,
         fog: None,
         grade: petunia_render::Grade::default(),
+        seconds: 0.0,
     }
 }
 

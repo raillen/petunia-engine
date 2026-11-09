@@ -10,6 +10,7 @@ description = "Adapter around the gltf crate: reads a GLB/glTF file into editabl
 petunia_anim.workspace = true
 petunia_math.workspace = true
 gltf.workspace = true
+png.workspace = true
 thiserror.workspace = true
 
 [lints]

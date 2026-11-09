@@ -1,8 +1,10 @@
 # Estado da implementação
 
-**Revisão:** 2026-11-09 (linhas consolidadas: cenas, animação, vegetação, outliner, grid, prefabs e interface de malha) · **Fase atual:** 1 (esqueleto) concluída no código; **fase 2 (editor e construção de mapas) avançou**
+**Revisão:** 2026-11-09 (linhas consolidadas: cenas, animação, vegetação, outliner, grid, prefabs, interface de malha e 2D) · **Fase atual:** 1 (esqueleto) concluída no código; **fase 2 (editor e construção de mapas) avançou**
 
 ## Resumo (TL;DR)
+
+O motor agora também faz **2D do jeito que o 3D faz**: um sprite é uma **entidade comum** com `Transform` e a linha `Sprite` (imagem `.png`, tamanho, cor, camada), então **gizmo, inspetor, snap, andares, desfazer e gravação** valem sem código novo — a câmera ortográfica já existia. Uma **folha de sprites** é só mais uma linha (`SpriteAnimation`): o quadro vem do relógio, nunca da cena. Decisões: [DR-49](../06-decisoes/registro-de-decisoes.md) e [DR-50](../06-decisoes/registro-de-decisoes.md).
 
 O editor agora tem a **cara e as ferramentas de base do Petunia3D**: tema (escuro, claro, alto contraste), ícones próprios, campos numéricos com expressões, uma barra principal com as ferramentas, **gizmo de mover, girar e escalar com snap**, vistas predefinidas e seis primitivas (caixa, rampa, cilindro, cone, esfera, escada).
 
@@ -133,6 +135,30 @@ valor ao vivo da malha e faca por clique, miniatura no autosave, duplicar/renome
 janela, workspaces **Pintura**, **Animação** e **Efeitos** (`DR-24`) e UI de jogo (`DR-17`).
 
 ## Etapa atual: rios, estradas, água e terreno no editor (2026-10-29)
+## Etapa atual: 2D como modo da mesma engine (2026-10-29)
+
+Decisões: [DR-49](../06-decisoes/registro-de-decisoes.md) e [DR-50](../06-decisoes/registro-de-decisoes.md). O 2D **não** é um motor separado: é a mesma cena, com câmera ortográfica e sprites. A folha de sprites também: uma imagem cortada em quadros, com o quadro escolhido pelo relógio do anfitrião.
+
+| Entrega | Evidência |
+|---|---|
+| **Tabela `Sprite`** (`asset` Text, `size` Vec3 com padrão 1×1×0, `color`, `layer` Int, `flip_x`, `flip_y`) em entidade comum | 5 testes de quadro do `petunia_render` (ordem `(layer, entity)`, tamanho e espelhamento, sprite sem tamanho ignorado, pixels ligados por alça, seleção marca o sprite) |
+| **PNG como entrada hostil:** `decode_png` com limite de 32 MiB de arquivo, 4096 por lado e 8 Mi pixels, sempre RGBA8 e linha de cima primeiro; `read_png_file` confere o tamanho **antes** de ler | 7 testes do `petunia_import` (RGBA byte a byte, RGB/cinza opacos, alfa preservado, arquivo que não é PNG, largura acima do limite, arquivo acima do limite, leitura do disco com ausente e vazio) |
+| **Pixels viajam no quadro:** `RenderFrame.textures` + `resolve_textures`; o `petunia_render` continua sem OpenGL | 7 testes de `TextureStore`/`TextureLoader` (alça estável por asset, tamanho errado recusado, asset lido **uma** vez e a falha lembrada, sprite sem asset não pede nada, limpar recomeça as alças) |
+| **Caminho do asset em um só lugar:** `resolve_inside` + `read_png_file` = `petunia_project::load_png_asset`; editor e `petunia run` usam a mesma função | 1 teste do `petunia_project` (lê `assets/…` e recusa caminho fora do projeto) |
+| **Passe de sprites no OpenGL:** quad unitário com textura, mistura alfa, sem descarte de faces e sem escrita de profundidade, textura branca quando falta imagem, cache de 256, estado devolvido antes do overlay | `scripts/sprite-smoke.sh` **4/4** e **a captura foi olhada**: um sprite de borda transparente aparece sobre uma caixa 3D verde; o meio é `(0, 255, 255)` e a borda mostra a caixa `(36, 95, 38)` |
+| **2D com as ferramentas do 3D:** clique e passar o mouse usam `pick_sprite` (mesmo teste de raio do 3D); a regra de andares vale para sprites (esconder/transparente), pela meia diagonal do quad | 1 teste de domínio (`pick_sprite`), 1 de fluxo no editor (clique e `pointer.hover` acham o sprite) e 1 de fluxo de andares (sprite acima do andar fica transparente, sai do alcance do mouse, some no modo Esconder e **nunca** some quando selecionado) |
+| **Inspeção:** `editor.snapshot` informa `textures: {loaded, failed}` | teste do editor que cria a linha `Sprite`, confere largura/altura, camada e os pixels no quadro, e lê `loaded = 1` |
+| **Criar um sprite pela janela:** `asset.import_sprite` copia o `.png` para `assets/` (nome livre, nunca sobrescreve), mantém a proporção da imagem (o lado maior mede 2), apoia a base no andar atual, vira **um** objeto com a linha `Sprite` e já fica selecionado — um passo de desfazer. `asset.list` passa a listar imagens (`kind: image`) e a hierarquia mostra a linha `Sprite` como **Imagem 2D**, com ícone próprio | 1 teste de fluxo no editor (cópia em `assets/dragao.png`, 4×2 pixels viram tamanho 2×1, +1 objeto, seleção, sprite no quadro **com** textura, `ASSET_INVALID`/`ASSET_UNSUPPORTED`/`ASSET_IO`, reimportar pelo caminho do projeto não duplica o arquivo, dois desfazeres) |
+| **Menus** **Arquivo > Importar imagem 2D…** e **Criar > Importar imagem 2D…** | o editor Qt **compila** com a ação, o ícone e o filtro `*.png`; **não abri o seletor de arquivos** |
+| **Folha de sprites e animação por quadro:** tabela `SpriteAnimation` (`frames`, `columns`, `fps`, `loop`, `playing`, `frame`) na **mesma** entidade; o quadro é função pura do relógio (`frame_at`), então nada é gravado na cena e dois sprites podem tocar a mesma folha em tempos diferentes. O `petunia_render_gl` recebe só um retângulo (`u_rect`): uma folha é uma textura, nenhum atlas e nenhum draw call a mais. O editor **congela** em edição e o modo **Jogar** anima; o `petunia run` anima sempre | 5 testes de domínio no `petunia_render` (laço e travamento no último quadro, parado mostra `frame`, `fps`/`seconds` hostis, grade 3×2 do recorte e espelho dentro do quadro, linha `SpriteAnimation` → quadro e `uv` no quadro extraído) e 1 de fluxo no editor (edição mostra `frame = 1`, três passos de 0,1 s a 8 fps mostram o quadro 2 e parar volta ao 1) |
+| **Prova visual do 2D:** `scripts/sprite-smoke.sh` monta um projeto (caixa 3D + sprite de uma folha 2×1: magenta | ciano) e lê quatro pixels da captura do viewport | **4/4**: meio `(0, 255, 255)` e um quarto à esquerda também ciano (a folha escolheu o quadro 1; o quadro 0 seria magenta), borda transparente `(36, 95, 38)` e fora do quadrado `(36, 95, 37)`. A mesma rodada mostrou a hierarquia com o objeto `Folha` e a linha `Sprite` como **Imagem 2D** |
+| **Janela (rodada de 2026-10-29, repetida depois do DR-50):** `scripts/editor-smoke.sh` e `scripts/natural-smoke.sh` | **11/11** e **16/16** no display virtual, depois de acertar a contagem de itens do menu **Criar** (o item novo entrou antes de *Caverna*) |
+
+**Fora desta etapa (declarado):** animação por **estado** (máquina de estados, “parado/andando/pulando”), atlas com vários PNGs, tiles/autotile, física 2D, HUD, texto, ordem por y, luz 2D, encaixe em pixel e limites de câmera.
+
+**Não verificado:** o seletor de arquivos da imagem 2D, **a animação correndo numa janela** (o relógio do modo Jogar e o do `petunia run` existem e são testados, mas nenhuma captura mostra dois quadros diferentes no tempo), a janela na **sessão real** (todas as capturas são de display virtual com OpenGL por software) e o desempenho com muitas centenas de sprites.
+
+## Antes: rios, estradas, água e terreno no editor (2026-10-29)
 
 Decisão: [DR-36](../06-decisoes/registro-de-decisoes.md) e o complemento dela ([DR-37](../06-decisoes/registro-de-decisoes.md)). A interface existe (barra do terreno/rio/estrada no viewport) e o teste de fumaça a exercita no display virtual; nada foi visto na sua sessão real.
 
@@ -713,7 +739,7 @@ Primeira versão do redesenho (uma barra no topo, hierarquia em árvore, inspeto
 
 ## O que existe
 
-**63,4 mil linhas de Rust** em 18 crates (14,1 mil delas copiadas do Petunia3D em `petunia_mesh/src/legacy/`), **10,9 mil linhas de C++** próprias no editor e **3,6 mil linhas de C++ copiadas** do Petunia3D (`editor/src/ui_kit/`; o tema foi reescrito, o resto está igual), medidas em 2026-10-29. A tabela conta só `src/` e não inclui testes.
+**65,7 mil linhas de Rust** em 18 crates (14,1 mil delas copiadas do Petunia3D em `petunia_mesh/src/legacy/`), **11,0 mil linhas de C++** próprias no editor e **3,6 mil linhas de C++ copiadas** do Petunia3D (`editor/src/ui_kit/`; o tema foi reescrito, o resto está igual), medidas em 2026-10-29, depois do 2D e da folha de sprites. A tabela conta só `src/` e não inclui testes.
 
 | Parte | Linhas | O que faz |
 |---|---:|---|
@@ -721,21 +747,22 @@ Primeira versão do redesenho (uma barra no topo, hierarquia em árvore, inspeto
 | `petunia_world` | 2798 | Entidades, tabelas, tags, comandos adiados, RNG; `f32` salvo em decimal curto; tipo de valor **`mesh`**; **mapa de altura em blocos**, carimbos e rede de caminhos |
 | `petunia_schema` | 466 | API como dado |
 | `petunia_commands` | 1392 | Despachante com desfazer/refazer; histórico com **teto de memória** |
-| `petunia_project` | 1710 | Formato de texto, salvar (recusa cena grande demais para abrir), diagnósticos, projeto de exemplo; tabelas **`Mesh`**, `Terrain`, `TerrainChunk`, `River`, `Road`, `Bridge` |
+| `petunia_project` | 1801 | Formato de texto, salvar (recusa cena grande demais para abrir), diagnósticos, projeto de exemplo; tabelas **`Mesh`**, **`Sprite`**, **`SpriteAnimation`**, `Terrain`, `TerrainChunk`, `River`, `Road`, `Bridge`; **`load_png_asset`** (caminho dentro do projeto + decodificação) |
 | `petunia_input` | 166 | Entrada por ações nomeadas |
-| `petunia_import` | 642 | GLB/glTF → malhas editáveis; arquivo tratado como hostil, com limites e avisos |
-| `petunia_render` | 2842 | Câmera, **seis formas** e **malhas editáveis**, picking, **overlay para gizmos**, volumes esculpidos, **terreno, água e estrada** no quadro |
+| `petunia_import` | 877 | GLB/glTF → malhas editáveis; **PNG → RGBA8** para sprites; arquivo tratado como hostil, com limites e avisos |
+| `petunia_render` | 3817 | Câmera, **seis formas**, **malhas editáveis**, **sprites, folha de sprites e pixels de textura**, picking (objetos, sprites e superfície), **overlay para gizmos**, volumes esculpidos, **terreno, água e estrada** no quadro |
 | `petunia_sculpt` | 3745 | **Cavernas** (campo em blocos, *surface nets*, gerador, caminho) e **perfis varridos** de rio/estrada, cruzamentos, ponte/bueiro |
 | `petunia_script` | 6678 | **Script Host**: compila e roda Aipo, API como dado, Doctor de scripts, simulação numa cópia, Aipo ⇄ IR |
 | `petunia_graph` | 5120 | **Grafo de nós** (DR-30): documento tipado, catálogo tirado da API, compilação para Aipo com mapa de linhas, validação, layout |
-| `petunia_render_gl` | 948 | OpenGL 3.3: contorno de seleção, **passe de overlay em pixels**, buffers de malhas editáveis |
-| `petunia_player` | 437 | Janela simples com câmera livre |
+| `petunia_render_gl` | 1268 | OpenGL 3.3: contorno de seleção, **passe de sprites com textura e recorte de quadro**, **passe de overlay em pixels**, buffers de malhas editáveis |
+| `petunia_player` | 461 | Janela simples com câmera livre; carrega as imagens do projeto (`project_root`) e anima as folhas de sprites |
 | `petunia_cli` | 184 | `petunia new / check / run / schema / version` |
 | `petunia_mesh` | 15479 | **Edição de malha**: booleanos, inset, loop cut, bevel… (14100 linhas de legado do Petunia3D + API validada) |
 | `petunia_physics` | 2972 | Corpos rígidos, colisões e consultas (Rapier **só aqui dentro**), água, personagem; física determinística |
 | `petunia_editor` | 16141 | Sessão, operações JSON, **gizmo**, **gestos**, snap a objetos, Modo Livre, **operações de brush**, andares, **esculpir**, **edição de malha**, **terreno/rio/estrada** |
+| `petunia_editor` | 16717 | Sessão, operações JSON, **gizmo**, **gestos**, snap a objetos, Modo Livre, **operações de brush**, andares, **esculpir**, **edição de malha**, **terreno/rio/estrada**, **sprites e animação de sprite** |
 | `petunia_editor_ffi` | 212 | Fronteira C |
-| `editor/` (C++/Qt, próprio) | 10918 | Janela, barras de ferramenta, workspaces, paleta de comandos, docas, inspetor, editor de código, painel de grafo |
+| `editor/` (C++/Qt, próprio) | 10960 | Janela, barras de ferramenta, workspaces, paleta de comandos, docas, inspetor, editor de código, painel de grafo |
 | `editor/src/ui_kit/` (copiado) | 3589 | Tema, campo numérico, campo XYZ, expressões, arrasto, ícones |
 
 Detalhes: [editor](../02-arquitetura/11-editor.md), [paridade](../02-arquitetura/12-paridade-ui-petunia3d.md).
@@ -748,6 +775,10 @@ Detalhes: [editor](../02-arquitetura/11-editor.md), [paridade](../02-arquitetura
 | `cargo test --workspace` (2026-10-31) | **passou: 590, 0 falhas** | 541 da revisão anterior + 4 de fase 2 (autosave, pintura por face, 2 de alça de colisão) + 3 de domínio da cor por face + 10 do `petunia_grid` |
 | `cargo fmt --all` (literal) | **não passa neste repositório** | `--all` também formata a dependência de caminho `../aipo-lang` (27 diferenças, já existentes, nenhuma nos crates `petunia_*`). O que se mede aqui é `cargo fmt -p <cada crate petunia> -- --check`, e esse passa. |
 | Suíte completa, **590 testes** (2026-10-31, com personagem animado na cena) | **passou** | math 21, world 47 (45 + 2 do outliner), sculpt 41, graph 31, grid 10, anim 10, physics 22, render 27 (22 + 5 de skin), editor 88 (81 + 4 do rig + 2 da animação + 1 do import), script 83, mesh 181, project 10, commands 6, import 8, input 3, schema 2 |
+| Suíte completa, **568 testes** (2026-10-29, com folha de sprites) | **passou** | math 21, world 42, sculpt 41, graph 31, physics 22, render 41, editor 75 (73 + 2 de integração), script 82, mesh 181, project 7, commands 6, import 14, input 3, schema 2; `render_gl` e `player` não têm teste (precisam de janela) |
+| Suíte completa, **562 testes** (2026-10-29, com `asset.import_sprite`) | **passou** | 561 + o teste da imagem importada como sprite; a quebra por crate é a da linha de 561, com `editor` em 74 (72 + 2 de integração) |
+| Suíte completa, **561 testes** (2026-10-29, depois do 2D) | **passou** | math 21, world 42, sculpt 41, graph 31, physics 22, render 36, editor 73 (71 + 2 de integração), script 82, mesh 181, project 7, commands 6, import 14, input 3, schema 2; `render_gl` e `player` não têm teste (precisam de janela) |
+| Suíte completa, **535 testes** (2026-10-29, `main` com a linha dos rios mesclada) | **passou** | math 21, world 42, sculpt 41, graph 39, physics 29, render 22, editor 70, script 67, mesh 181, project 6, commands 6, import 6, input 3, schema 2. **Atenção:** a quebra por crate desta linha não fecha com o checkout de hoje — `petunia_graph` tem 31 e `petunia_physics` 22 (`--list` confirma 53 nos dois juntos, não 68) e `petunia_script` 82, não 67. O total de 535 foi medido naquele momento; a quebra não foi reauditada. |
 | Suíte completa, **441 testes** (2026-10-28) | **passou** | inclui 6 de Aipo → IR, 14 de IR → grafo, 1 de `script.to_graph` no editor, 1 de isolamento por objeto e 14 de modelo de grafo com migração v1→v2 |
 | Suíte completa, **414 testes** (2026-10-27) | **passou** | mesh 181 (164 do Petunia3D), script 55 (15 + 16 do host + 7 de física + 17 de grafo), editor 57, graph 22 (13 + 9 de edição), physics 18, sculpt 17, render 16, world 14, math 11, commands 6, import 6, input 3, project 6, schema 2 |
 | Formas orientadas para fora (caixa, rampa, cilindro, cone, esfera, escada) | **passou** | teste por geometria, em vários níveis de detalhe |
@@ -755,6 +786,7 @@ Detalhes: [editor](../02-arquitetura/11-editor.md), [paridade](../02-arquitetura
 | Um arrasto vira **um** passo de desfazer; sem mudança, nenhum | **passou** | teste de gesto |
 | Editor Qt compila e liga | **passou (Qt 6.4.2, 2026-10-30)** | `scripts/editor.sh build`; `editor-smoke.sh` **13/13** (10 da fase Aipo + 3 da fase pNodes) e `natural-smoke.sh` **16/16**. O teste de fumaça **não** exercita os quatro itens novos da fase 2 (autosave, painel de assets, pintura, alças) |
 | Janela: selecionar, **arrastar a seta X**, **adicionar tabela pelo combo**, duplicar, criar, andar, girar, salvar | **passou (display virtual)** | `scripts/editor-smoke.sh` **confere o arquivo salvo** (`x=4.5`, só no eixo X, na grade; tabela `PlayerStart` adicionada) |
+| **Sprite desenhado sobre geometria 3D, com recorte de transparência** | **passou (display virtual, pixels lidos)** | `scripts/sprite-smoke.sh` **3/3**: meio magenta `(255, 0, 255)`, borda transparente mostrando a caixa `(36, 95, 38)`, fora do quadrado verde |
 | Aparência: tema escuro, ícones, campos XYZ, trilho, barra do viewport | **visto (display virtual)** | imagens |
 | Gizmos de girar e de escalar, cone, esfera e escada renderizados | **visto (display virtual)** | imagens |
 | Realce da alça ao passar o mouse | **visto (display virtual)** | imagem do gizmo de escalar (alça Y em amarelo) |

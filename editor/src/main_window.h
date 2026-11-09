@@ -123,6 +123,8 @@ private:
     void chooseNewSample();
     void chooseOpen();
     void chooseImportModel();
+    // File > Importar imagem 2D: a .png becomes a sprite in front of the camera (DR-38).
+    void chooseImportImage();
     void applyAppearance();
     void refreshIcons();
     void setActionIcon(QAction* action, const QString& iconName);
@@ -195,8 +197,9 @@ private:
     GraphPanel* graph_ = nullptr;
     QAction* caveAction_ = nullptr;
     QAction* terrainAction_ = nullptr;
-    // Criar > Luz: a bulb and a sun (DR-29).
+    // File > Importar: a glTF model becomes editable meshes (DR-22), a PNG becomes a sprite (DR-38).
     QAction* importModelAction_ = nullptr;
+    QAction* importImageAction_ = nullptr;
     QAction* pointLightAction_ = nullptr;
     QAction* sunLightAction_ = nullptr;
     QList<QAction*> prefabActions_;

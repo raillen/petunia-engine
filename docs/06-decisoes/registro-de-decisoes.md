@@ -4,7 +4,7 @@
 
 ## Resumo (TL;DR)
 
-São **48 decisões**. Estados possíveis:
+São **50 decisões**. Estados possíveis:
 
 - **HERDADA:** já decidida na especificação anterior (10/10/2026). Esta documentação **mantém**; só reabre com um ADR.
 - **PROPOSTA:** recomendação minha, aguardando você ou um experimento.
@@ -1130,6 +1130,67 @@ editor ficou vazio e os testes de fumaça continuaram passando (`editor-smoke` *
 a prévia de `loop_cut`.
 
 ---
+## DR-49 — 2D como modo da mesma engine: `Sprite` e o passe de sprites · ACEITA (2026-10-29)
+
+**Pedido:** “prossiga a implementação com tudo completamente, o 2d vai aproveitar ferramentas do 3d para desenvolver os games assim como eram unity e unreal há umas versões atrás.” Ou seja: 2D não é um motor à parte; é um **modo** do mesmo mundo, jogando com as mesmas ferramentas.
+
+**Opções**
+
+1. **Motor 2D separado** (cena, editor, renderizador e formato próprios). É o que engines antigas faziam com “modo 2D”. Custa uma segunda cópia de tudo o que a fase 2 já entregou: comandos, desfazer, seleção, gizmo, inspetor, andares, gravação, diagnósticos, MCP e rede — e duas verdades para os mesmos dados.
+2. **2D como modo** (escolhida): a cena é a mesma; o que muda é a **câmera ortográfica** e o **quad texturizado** que cada sprite desenha. Todo o resto é o caminho que já existe. A câmera ortográfica já estava no motor (`ProjectionMode::Orthographic` com `orthographic_height`), então o 2D não pediu renderizador, cena nem formato novos.
+3. **Sprite como caixa achatada** (geometria 3D fina com a imagem numa face): reaproveita a malha pronta, mas ganha iluminação e faces de lado que um sprite não deve ter, e não tem recorte de transparência sem trabalho extra.
+
+**Decisão (opção 2), em partes**
+
+1. **Dado, não tipo de objeto.** Um sprite é uma entidade com `Transform` e a linha **`Sprite`**: `asset` (Text), `size` (Vec3, padrão `1 × 1 × 0`), `color`, `layer` (Int), `flip_x` e `flip_y` (Bool). Ele nasce e muda por `world.create` / `row.set`, como qualquer objeto: um passo de desfazer, uma gravação, o mesmo inspetor. Não existe `SpriteObject` nem um segundo formato de cena.
+2. **O quadro carrega os pixels.** `RenderFrame.sprites` (`SpriteItem`) e `RenderFrame.textures` (`Arc<TexturePixels>` em RGBA8) são **dados**; `petunia_render` continua sem OpenGL. A ordem de desenho é `(layer, entity)` — estável —, então a mesma cena dá a mesma imagem.
+3. **O renderer é dono da GPU.** `petunia_render_gl` sobe cada textura na primeira vez que a vê e a **substitui** quando o mesmo id chega com outro conteúdo (`Arc::ptr_eq`); ao passar de `MAX_CACHED_TEXTURES` (256) o cache é limpo. Sprite sem imagem — ou com arquivo quebrado — cai numa textura branca 1×1 e continua um retângulo colorido: nunca some sem aviso.
+4. **Estado restaurado.** O passe desliga o descarte de faces, liga mistura alfa (`SRC_ALPHA`, `ONE_MINUS_SRC_ALPHA`) e desliga a escrita de profundidade (a ordem decide quem fica na frente). Antes do overlay ele devolve programa, VAO, mistura, descarte e profundidade, então o gizmo continua por cima.
+5. **Recorte de transparência.** O sombreador descarta alfa abaixo de `0,004`: sem isso, os pixels quase transparentes da borda pintam uma franja escura.
+6. **PNG tratado como entrada hostil.** Dependência `png = "=0.18.1"`, **só** dentro de `petunia_import` (registrada em `docs/dependencies.md`). `decode_png` impõe `MAX_IMAGE_BYTES` (32 MiB), `MAX_IMAGE_SIDE` (4096) e `MAX_IMAGE_PIXELS` (8 Mi) e devolve sempre RGBA8, linha de cima primeiro; `read_png_file` confere o tamanho do arquivo **antes** de ler, então um arquivo gigante nem entra na memória.
+7. **Decodificar uma vez, lembrar a falha.** `petunia_project::load_png_asset` resolve o caminho **dentro** do projeto (`resolve_inside`, sem `..` nem absoluto) e decodifica; `petunia_render::TextureLoader` recebe um `read` (callback) e guarda a política: cada asset é lido **uma** vez, o que falhou fica lembrado (não se tenta de novo a cada quadro) e cada sprite recebe a alça. Editor e `petunia_player` chamam a **mesma** função; só muda a raiz do projeto. `petunia_render` não ganhou dependência.
+8. **2D reaproveita as ferramentas do 3D.** Selecionar e passar o mouse usam `pick_sprite`, o **mesmo** teste de raio do 3D, porque o quad vive no plano XY do próprio `Transform`; entre objetos, sprites e superfícies esculpidas vence o mais perto. A regra de **andares** vale para sprites (esconder ou transparente), medida pela meia diagonal do quad para nunca esconder o que ainda aparece. O **gizmo, o inspetor, o snap, as vistas predefinidas, o Modo Livre, o desfazer e a gravação** não mudaram uma linha: já funcionavam sobre `Transform`.
+9. **Superfície de inspeção.** `editor.snapshot` passou a informar `textures: {loaded, failed}`, e o `petunia run` carrega as imagens do projeto (`PlayerConfig.project_root`), então o jogo vê os mesmos sprites do editor.
+10. **Criar o sprite pela janela.** `asset.import_sprite` (**Arquivo > Importar imagem 2D…** e **Criar > Importar imagem 2D…**) copia o `.png` para `assets/` com nome livre (nunca sobrescreve o que existe), mantém a proporção da imagem (lado maior = 2), apoia a base no andar atual, gira para encarar a câmera e faz **um** `world.create` — um passo de desfazer, já selecionado. Reimportar pelo caminho do projeto reconhece que o arquivo já está em `assets/` e não copia de novo. `asset.list` passou a listar imagens (`kind: image`), então a janela e o MCP veem o que pode virar sprite.
+
+**Verificação:** 4 testes de decodificação em `petunia_import` (inclusive `a_png_file_is_read_from_the_disk_and_a_missing_or_empty_one_is_not`); 1 em `petunia_project` (`a_png_asset_of_the_project_is_read_and_an_outside_one_is_not`); em `petunia_render`, 5 de quadro (`sprites_are_sorted_by_layer_and_then_by_id`, tamanho e espelhamento, sprite sem tamanho ignorado, texturas ligadas aos pixels, seleção marca o sprite), 7 de `TextureStore`/`TextureLoader` e `a_sprite_is_picked_where_its_quad_is_and_not_outside_it` no picking; no `petunia_editor`, `a_sprite_row_reaches_the_frame_with_its_picture` (linha `Sprite` → quadro → pixels → `textures.loaded`) e `a_click_and_a_hover_find_the_sprite_under_the_mouse` (o clique e o passar o mouse acham o sprite); e `a_picture_is_copied_into_assets_and_becomes_a_sprite_in_one_undo_step` em `asset.import_sprite` (cópia para `assets/`, 4×2 pixels viram tamanho 2×1, seleção, textura no quadro, reimportação pelo caminho do projeto sem arquivo duplicado, dois desfazeres, `ASSET_INVALID`/`ASSET_UNSUPPORTED`/`ASSET_IO`).
+
+**Prova visual:** `scripts/sprite-smoke.sh` monta um projeto com uma caixa 3D e um sprite magenta de borda transparente na frente dela, abre o editor num display virtual e lê **três pixels** da captura do viewport: o meio do sprite é magenta puro `(255, 0, 255)`, a borda transparente mostra a caixa `(36, 95, 38)` e um ponto fora do quadrado também é verde — **3/3**. A captura foi olhada: o quadrado aparece sobre a caixa, com a borda vazando o fundo. Suíte completa: **562 testes, 0 falhas** (2026-10-29, 2 threads); `scripts/editor-smoke.sh` **11/11** e `scripts/natural-smoke.sh` **16/16**, também no display virtual.
+
+**Fora desta etapa (declarado):** folha de sprites e animação quadro a quadro, tiles e autotile, atlas e recorte por retângulo, física 2D própria (caixa e círculo), HUD, texto, ordem por y, luz 2D, encaixe em pixel, limites de câmera e importação de `.tsx`/`.tmx`. O `gltf` foi aprovado **sem** as funções de imagem (`DR-29`), então um `.glb` texturizado continua sem cor de textura.
+
+**Não verificado:** a janela na **sessão real** — tudo foi medido em display virtual (Xvfb, OpenGL por software), nunca na sua tela; a textura quebrada e o asset ausente foram provados por teste de unidade, não olhados na tela; o desempenho com muitas centenas de sprites e a troca de imagem em tempo real.
+
+**Reabrir se:** a animação precisar de mais que o recorte de `Sprite` (por exemplo folha com tempos), se `layer` não bastar (ordem por y), ou se um draw call por sprite pesar numa cena cheia — aí entra lote/atlas, e isso é decisão nova.
+
+---
+
+## DR-50 — Folha de sprites e animação por quadro · ACEITA (2026-10-29)
+
+**Pedido:** “prossiga, já falei para você prosseguir até o final de toda a implementação.” O `DR-49` deixou animação de fora de propósito (“reabrir se a animação precisar de mais que o recorte de `Sprite`”); é o próximo item que um jogo 2D não dispensa.
+
+**Opções**
+
+1. **Segundo tipo de objeto** (`AnimatedSprite`, um componente separado como em Unity). Duplica o caminho de seleção, inspetor, andares e gravação, e cria duas formas de “ser sprite” — exatamente o que o `DR-49` recusou.
+2. **Mais uma linha na mesma entidade** (escolhida): `SpriteAnimation` (quadros, colunas, fps, laço, tocando, quadro). Quem não tem a linha continua um sprite estático. O quadro mostrado é **derivado do relógio do anfitrião**, nunca gravado na cena.
+3. **Guardar o quadro em `Sprite` e gravar a cena a cada quadro.** Polui o desfazer com um passo por quadro e grava o arquivo a 60 Hz; também impediria dois sprites de compartilhar a mesma folha em tempos diferentes.
+
+**Decisão (opção 2), em partes**
+
+1. **Tabela `SpriteAnimation`:** `frames` (Int, 1), `columns` (Int, 1), `fps` (Float, 8), `loop` (Bool, verdadeiro), `playing` (Bool, verdadeiro) e `frame` (Int, 0 — o quadro mostrado quando está parado). As linhas da folha são `ceil(frames / columns)`; a primeira linha da folha é o **topo** da imagem, que é a primeira linha que o decodificador entrega.
+2. **O quadro é uma função pura do tempo:** `SpriteAnimation::frame_at(seconds)`. Parado — ou com `seconds` 0, não finito ou negativo — vale `frame`; tocando vale `floor(seconds × fps)`, com módulo quando `loop` e travado no último quadro quando não. `RenderFrame.seconds` é o **relógio do anfitrião**: no editor o modo de edição congela (mostra `frame`) e **Jogar** anima; o `petunia run` anima sempre.
+3. **O recorte é dado, não estado do renderizador:** `SpriteItem::uv()` devolve o retângulo do quadro na folha, já com `flip_x`/`flip_y` aplicados dentro do recorte, e o `petunia_render_gl` só recebe quatro floats a mais (`u_rect`). Uma folha é **uma** imagem: nenhuma textura nova, nenhum atlas, nenhum draw call a mais.
+4. **Dados hostis:** `fps` não finito ou ≤ 0 deixa o sprite parado; `columns` fica em 1..=64; `frames` em 1..=4096; `frame` preso ao intervalo; `size` continua recusando zero/negativo. Uma linha só de `SpriteAnimation`, sem `Sprite`, não desenha nada.
+5. **Nenhum comando novo:** a linha entra por `row.set` (inspetor, scripts, MCP, “Adicionar tabela”), então continua **um** passo de desfazer e o mesmo formato de cena. O inspetor mostra `frames`, `columns`, `fps`, `loop`, `playing` e `frame` sem widget novo.
+6. **Ferramentas do 3D inalteradas:** o clique continua no quad inteiro (`pick_sprite`), independente do quadro — trocar de quadro não muda o alvo do mouse.
+
+**Verificação:** 5 testes de domínio no `petunia_render` (laço e travamento no último quadro, parado ou com relógio parado mostra `frame`, `fps`/`seconds` hostis, grade de 6 quadros em 3 colunas com espelho **dentro** do recorte, e a linha `SpriteAnimation` chegando ao quadro extraído com `uv` correto em dois instantes) e 1 teste de fluxo no `petunia_editor` (edição desenha `frame = 1`; três passos de 0,1 s a 8 fps desenham o quadro 2; parar volta ao 1 — é o modo Jogar animando e o editor congelando). Prova visual: `scripts/sprite-smoke.sh` desenha uma folha 2×1 (magenta | ciano) com a linha pedindo o quadro 1 e **pausada**, para a captura não depender do instante do disparo — **4/4**: meio `(0, 255, 255)`, um quarto à esquerda também ciano (o quadro 0 seria magenta), borda transparente `(36, 95, 38)` e fora do quadrado `(36, 95, 37)`.
+
+**Fora desta etapa:** animação por **estado** (máquina de estados, “parado/andando/pulando”), animação pedida pelo script além de `row.set`/`frame`, atlas com vários PNGs, 9-slice, animação de tiles e física 2D.
+
+**Não verificado:** a animação correndo na janela (o relógio do modo Jogar é o mesmo do passo de física, mas nenhuma captura mostra dois quadros diferentes no tempo) e a sessão real.
+
+**Reabrir se:** o jogo precisar escolher a animação por estado (entra uma tabela de estados + transições) ou de quadros de tamanho diferente do retângulo da folha (entra `frame_size` em pixels).
 
 ---
 

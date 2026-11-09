@@ -7,11 +7,16 @@ publish.workspace = true
 description = "Text project format (diff-friendly JSON), hostile-data limits and Project Doctor style diagnostics."
 
 [dependencies]
+petunia_import.workspace = true
 petunia_math.workspace = true
 petunia_world.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+# The asset tests build their own PNGs (DR-38).
+png.workspace = true
 
 [lints]
 workspace = true

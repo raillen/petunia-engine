@@ -9,8 +9,8 @@
 
 use petunia_math::{Color, Vec3};
 use petunia_render::{
-    DrawItem, OverlayItem, RenderFrame, SurfaceHit, item_mesh, mesh_points, model_matrix,
-    pick_entity, pick_surface,
+    DrawItem, OverlayItem, RenderFrame, SpriteItem, SurfaceHit, item_mesh, mesh_points,
+    model_matrix, pick_entity, pick_sprite, pick_surface,
 };
 use petunia_world::PersistentId;
 use serde_json::{Value as Json, json};
@@ -142,6 +142,14 @@ pub(crate) fn item_bounds(item: &DrawItem) -> Option<(Vec3, Vec3)> {
         );
     }
     (low.x <= high.x).then_some((low, high))
+}
+
+/// The nearer of two hits (entity, distance), and the only one when just one of them hit.
+pub(crate) fn nearer(first: Option<(u64, f32)>, second: Option<(u64, f32)>) -> Option<(u64, f32)> {
+    match (first, second) {
+        (Some(first), Some(second)) => Some(if second.1 < first.1 { second } else { first }),
+        (first, second) => first.or(second),
+    }
 }
 
 /// Lowest point of an item's mesh along its own up axis, in its own (unscaled) units.
@@ -408,6 +416,23 @@ impl EditorSession {
             .find(|item| item.entity == entity)
     }
 
+    /// The 2D sprites the tools can hit, with the same floor visibility rule as `draw_items`.
+    pub(crate) fn sprite_items(&self) -> Vec<SpriteItem> {
+        let sprites = self
+            .project
+            .as_ref()
+            .map(|project| {
+                petunia_render::extract_frame_cached(
+                    &project.world,
+                    self.camera.camera,
+                    &mut self.mesh_cache.borrow_mut(),
+                )
+                .sprites
+            })
+            .unwrap_or_default();
+        self.pickable_sprites(sprites)
+    }
+
     /// The object's own pivot in world space: position + rotation · (scale ∘ pivot offset).
     fn object_pivot(&self, id: u64, position: Vec3, rotation: Vec3, scale: Vec3) -> Vec3 {
         let Some(project) = &self.project else {
@@ -534,14 +559,15 @@ impl EditorSession {
             return None;
         }
         let ray = view.ray(pointer.mouse())?;
-        let brush = pick_entity(&self.draw_items(), &ray);
+        // Objects, sprites and sculpted surfaces: the nearest of the three wins.
+        let object = nearer(
+            pick_entity(&self.draw_items(), &ray),
+            pick_sprite(&self.sprite_items(), &ray),
+        );
         let sculpt = self
             .sculpt_hit(&ray, &[])
             .map(|hit| (hit.entity, hit.distance));
-        match (brush, sculpt) {
-            (Some(brush), Some(sculpt)) => Some(if sculpt.1 < brush.1 { sculpt } else { brush }),
-            (brush, sculpt) => brush.or(sculpt),
-        }
+        nearer(object, sculpt)
     }
 
     pub(crate) fn surface_under(

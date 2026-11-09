@@ -19,6 +19,9 @@ pub(crate) struct PlayState {
     saved_camera: FlyCamera,
     /// Whether the world has a character the keyboard drives.
     has_player: bool,
+    /// The game's own clock, in seconds: sprite sheets advance from it and it starts at zero on
+    /// every play, so the same run draws the same pictures (DR-39).
+    clock_seconds: f32,
 }
 
 impl EditorSession {
@@ -136,6 +139,7 @@ impl EditorSession {
             host,
             saved_camera,
             has_player,
+            clock_seconds: 0.0,
         }));
         self.follow_player();
         Ok(json!({
@@ -195,6 +199,7 @@ impl EditorSession {
                 interact,
                 yaw_degrees,
             });
+            state.clock_seconds += seconds;
             state.host.update(f64::from(seconds));
             let log: Vec<Json> = state
                 .host
@@ -313,8 +318,12 @@ impl EditorSession {
         let state = self.play.as_ref()?;
         let world = state.host.world();
         let mut frame = extract_frame(&world, self.camera.camera);
+        // The game is running, so sprite sheets play: the editor freezes them while editing and
+        // lets the same clock that steps the physics choose the frame here (DR-39).
+        frame.animate_sprites(state.clock_seconds);
         frame.sculpts = self.sculpt_items();
         frame.show_grid = false;
+        self.load_textures(&mut frame);
         Some(frame)
     }
 }

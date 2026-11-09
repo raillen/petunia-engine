@@ -23,5 +23,9 @@ petunia_world.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
+[dev-dependencies]
+# The sprite test writes a real PNG into a sample project (DR-38).
+png.workspace = true
+
 [lints]
 workspace = true

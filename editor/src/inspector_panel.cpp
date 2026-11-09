@@ -117,6 +117,16 @@ QString propertyLabel(const QString& table, const QString& column) {
         {QStringLiteral("player"), QStringLiteral("Jogador")},
         {QStringLiteral("layer"), QStringLiteral("Camada")},
         {QStringLiteral("mask"), QStringLiteral("Máscara")},
+        // Sprites and sprite sheets (DR-38, DR-39).
+        {QStringLiteral("asset"), QStringLiteral("Imagem")},
+        {QStringLiteral("flip_x"), QStringLiteral("Espelhar X")},
+        {QStringLiteral("flip_y"), QStringLiteral("Espelhar Y")},
+        {QStringLiteral("frames"), QStringLiteral("Quadros")},
+        {QStringLiteral("columns"), QStringLiteral("Colunas")},
+        {QStringLiteral("fps"), QStringLiteral("Quadros por segundo")},
+        {QStringLiteral("loop"), QStringLiteral("Repetir")},
+        {QStringLiteral("playing"), QStringLiteral("Tocando")},
+        {QStringLiteral("frame"), QStringLiteral("Quadro")},
     };
     if (table == QLatin1String("Collider") && column == QLatin1String("height")) {
         return QStringLiteral("Altura");

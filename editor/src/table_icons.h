@@ -20,6 +20,8 @@ inline QString forTable(const QString& table) {
     if (table == QLatin1String("Collider")) return QStringLiteral("bounding_box");
     if (table == QLatin1String("RigidBody")) return QStringLiteral("bolt");
     if (table == QLatin1String("Character")) return QStringLiteral("orbit");
+    if (table == QLatin1String("Sprite")) return QStringLiteral("texture");
+    if (table == QLatin1String("SpriteAnimation")) return QStringLiteral("play");
     if (table == QLatin1String("Light")) return QStringLiteral("view_lit");
     return QStringLiteral("parts");
 }
@@ -38,13 +40,15 @@ inline QString displayName(const QString& table) {
     if (table == QLatin1String("Collider")) return QStringLiteral("Colisão");
     if (table == QLatin1String("RigidBody")) return QStringLiteral("Corpo físico");
     if (table == QLatin1String("Character")) return QStringLiteral("Personagem");
+    if (table == QLatin1String("Sprite")) return QStringLiteral("Imagem 2D");
+    if (table == QLatin1String("SpriteAnimation")) return QStringLiteral("Animação");
     if (table == QLatin1String("Light")) return QStringLiteral("Luz");
     return table;
 }
 
 // An object is shown by its most telling table: a cave says more than its transform.
 inline QString forEntity(const QStringList& tables) {
-    for (const char* table : {"Light", "Character", "Collider", "PlayerStart", "Floor", "Sculpt", "Door", "Brush", "Script"}) {
+    for (const char* table : {"Sprite", "Light", "Character", "Collider", "PlayerStart", "Floor", "Sculpt", "Door", "Brush", "Script"}) {
         if (tables.contains(QLatin1String(table))) {
             return forTable(QLatin1String(table));
         }

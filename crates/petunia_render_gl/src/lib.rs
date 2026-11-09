@@ -1,8 +1,9 @@
 //! OpenGL 3.3 core adapter.
 //!
-//! Draws a [`RenderFrame`] with one shader (diffuse light plus gentle fog). The renderer owns
-//! every GPU object it creates and deletes them on drop; callers only hold the renderer. No
-//! compute shaders, so the same feature set can later run on WebGL2.
+//! Draws a [`RenderFrame`] with two programs: the lit meshes (diffuse light plus gentle fog) and
+//! the flat sprites of a 2D scene (an unlit textured quad, DR-38). The renderer owns every GPU
+//! object it creates and deletes them on drop; callers only hold the renderer. No compute
+//! shaders, so the same feature set can later run on WebGL2.
 
 // glow exposes OpenGL as `unsafe` functions; this adapter is where that is allowed.
 #![allow(unsafe_code)]
@@ -15,8 +16,8 @@ mod skin;
 mod world_mesh;
 
 use petunia_render::{
-    DrawItem, Mat4, MeshData, OverlayItem, RenderFrame, SculptItem, Shape, axis_lines, build_mesh,
-    grid_lines, model_matrix,
+    DrawItem, Mat4, MeshData, OverlayItem, RenderFrame, SculptItem, Shape, SpriteItem, TextureId,
+    TexturePixels, axis_lines, build_mesh, grid_lines, model_matrix,
 };
 
 const VERTEX_SHADER: &str = r#"#version 330 core
@@ -127,11 +128,50 @@ void main() {
 }
 "#;
 
+const SPRITE_VERTEX_SHADER: &str = r#"#version 330 core
+layout(location = 0) in vec2 a_position;
+layout(location = 1) in vec2 a_uv;
+uniform mat4 u_view_projection;
+uniform mat4 u_model;
+uniform vec2 u_size;
+out vec2 v_uv;
+void main() {
+    vec3 local = vec3(a_position * u_size, 0.0);
+    v_uv = a_uv;
+    gl_Position = u_view_projection * u_model * vec4(local, 1.0);
+}
+"#;
+
+const SPRITE_FRAGMENT_SHADER: &str = r#"#version 330 core
+in vec2 v_uv;
+uniform sampler2D u_texture;
+uniform vec4 u_color;
+uniform vec4 u_tint;
+// The frame of the sheet this sprite shows: left, top, right, bottom, from 0 to 1. Mirroring is
+// already inside these four numbers (DR-39).
+uniform vec4 u_rect;
+out vec4 out_color;
+void main() {
+    // u_rect.xy lands on (0, 0) of the quad and u_rect.zw on (1, 1). A mirrored frame has its ends
+    // swapped, so the interpolation mirrors the picture by itself.
+    vec2 uv = mix(u_rect.xy, u_rect.zw, v_uv);
+    vec4 color = texture(u_texture, uv) * u_color;
+    color.rgb = mix(color.rgb, u_tint.rgb, u_tint.a);
+    if (color.a < 0.004) {
+        discard;
+    }
+    out_color = color;
+}
+"#;
+
 /// Most overlay vertices drawn in one frame (a hostile caller cannot ask for endless geometry).
 const MAX_OVERLAY_VERTICES: usize = 60_000;
 
 /// Upper bound on cached meshes (a hostile scene could ask for endless unique sizes).
 const MAX_CACHED_MESHES: usize = 4096;
+
+/// Upper bound on textures kept on the GPU at once.
+const MAX_CACHED_TEXTURES: usize = 256;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RenderError {
@@ -139,6 +179,7 @@ pub enum RenderError {
     ProgramLink(String),
     Gl(String),
     Mesh(String),
+    Texture(String),
 }
 
 impl std::fmt::Display for RenderError {
@@ -150,6 +191,7 @@ impl std::fmt::Display for RenderError {
             }
             Self::Gl(message) => write!(formatter, "erro de OpenGL: {message}"),
             Self::Mesh(message) => write!(formatter, "malha inválida: {message}"),
+            Self::Texture(message) => write!(formatter, "textura inválida: {message}"),
         }
     }
 }
@@ -246,6 +288,28 @@ struct GradePass {
 }
 
 #[derive(Clone, Copy)]
+/// The flat sprites of a 2D scene: an unlit textured quad, one draw call per sprite.
+struct SpritePass {
+    program: glow::Program,
+    vertex_array: glow::VertexArray,
+    vertex_buffer: glow::Buffer,
+    view_projection: Option<glow::UniformLocation>,
+    model: Option<glow::UniformLocation>,
+    size: Option<glow::UniformLocation>,
+    color: Option<glow::UniformLocation>,
+    tint: Option<glow::UniformLocation>,
+    rect: Option<glow::UniformLocation>,
+    texture: Option<glow::UniformLocation>,
+}
+
+/// A texture on the GPU beside the pixels it came from: the same handle with new pixels (the
+/// host reloaded the file) has to be uploaded again.
+struct CachedTexture {
+    texture: glow::Texture,
+    pixels: Arc<TexturePixels>,
+}
+
+#[derive(Clone, Copy)]
 struct GpuMesh {
     vertex_array: glow::VertexArray,
     vertex_buffer: glow::Buffer,
@@ -296,6 +360,10 @@ pub struct GlRenderer {
     overlay_pass: OverlayPass,
     /// Scene target and the fused grade (DR-13, first cut).
     grade: GradePass,
+    sprite_pass: SpritePass,
+    /// Sprites left without a loaded asset are drawn with this 1x1 white texture.
+    white_texture: glow::Texture,
+    sprite_textures: HashMap<TextureId, CachedTexture>,
 }
 
 impl GlRenderer {
@@ -324,6 +392,8 @@ impl GlRenderer {
         let grid_pass = create_grid_pass(&gl)?;
         let overlay_pass = create_overlay_pass(&gl)?;
         let grade = create_grade_pass(&gl)?;
+        let sprite_pass = create_sprite_pass(&gl)?;
+        let white_texture = create_texture(&gl, 1, 1, &[255, 255, 255, 255])?;
         unsafe {
             gl.enable(glow::DEPTH_TEST);
             gl.enable(glow::CULL_FACE);
@@ -343,6 +413,9 @@ impl GlRenderer {
             grid_pass,
             overlay_pass,
             grade,
+            sprite_pass,
+            white_texture,
+            sprite_textures: HashMap::new(),
             started: std::time::Instant::now(),
         })
     }
@@ -471,6 +544,7 @@ impl GlRenderer {
             }
         }
         self.present_grade(frame, host_framebuffer);
+        self.draw_sprites(frame, &view_projection)?;
         self.draw_overlay(&frame.overlay, &view_projection, (width, height));
         unsafe { self.gl.bind_vertex_array(None) };
         Ok(())
@@ -611,6 +685,143 @@ impl GlRenderer {
             self.gl.depth_func(glow::LESS);
             self.gl.disable(glow::BLEND);
             self.gl.use_program(Some(self.program));
+        }
+    }
+
+    /// Draws the flat sprites of the frame in the order the extractor sorted them (painter's
+    /// order: a higher layer and a later entity are drawn on top), after the scene and before the
+    /// gizmos. A sprite lands on its own XY plane, so the same quad works under a perspective or an
+    /// orthographic camera.
+    fn draw_sprites(
+        &mut self,
+        frame: &RenderFrame,
+        view_projection: &Mat4,
+    ) -> Result<(), RenderError> {
+        // Only the textures of this frame stay on the GPU.
+        let current: std::collections::HashSet<TextureId> =
+            frame.textures.iter().map(|pixels| pixels.id).collect();
+        let stale: Vec<TextureId> = self
+            .sprite_textures
+            .keys()
+            .filter(|id| !current.contains(id))
+            .copied()
+            .collect();
+        for id in stale {
+            if let Some(cached) = self.sprite_textures.remove(&id) {
+                unsafe { self.gl.delete_texture(cached.texture) };
+            }
+        }
+        if frame.sprites.is_empty() {
+            return Ok(());
+        }
+        unsafe {
+            // Two-sided and unlit: the picture already has its own colours, and the sorted order
+            // decides who is on top, so a sprite writes no depth.
+            self.gl.disable(glow::CULL_FACE);
+            self.gl.enable(glow::BLEND);
+            self.gl
+                .blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+            self.gl.depth_mask(false);
+            self.gl.use_program(Some(self.sprite_pass.program));
+            self.gl.uniform_matrix_4_f32_slice(
+                self.sprite_pass.view_projection.as_ref(),
+                false,
+                view_projection,
+            );
+            self.gl.uniform_1_i32(self.sprite_pass.texture.as_ref(), 0);
+            self.gl.active_texture(glow::TEXTURE0);
+            self.gl
+                .bind_vertex_array(Some(self.sprite_pass.vertex_array));
+        }
+        for sprite in &frame.sprites {
+            let texture = match sprite.texture {
+                Some(id) => self
+                    .texture_for(id, &frame.textures)?
+                    .unwrap_or(self.white_texture),
+                None => self.white_texture,
+            };
+            self.draw_sprite(sprite, texture);
+        }
+        unsafe {
+            self.gl.bind_vertex_array(None);
+            self.gl.bind_texture(glow::TEXTURE_2D, None);
+            self.gl.depth_mask(true);
+            self.gl.disable(glow::BLEND);
+            self.gl.enable(glow::CULL_FACE);
+            self.gl.use_program(Some(self.program));
+        }
+        Ok(())
+    }
+
+    /// Sets the uniforms of one sprite and draws the shared unit quad with its texture.
+    fn draw_sprite(&self, sprite: &SpriteItem, texture: glow::Texture) {
+        let model = model_matrix(&sprite.transform);
+        let [r, g, b, amount] = if sprite.selected {
+            SELECTION_TINT
+        } else if sprite.hovered {
+            HOVER_TINT
+        } else {
+            [0.0; 4]
+        };
+        unsafe {
+            self.gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+            self.gl
+                .uniform_matrix_4_f32_slice(self.sprite_pass.model.as_ref(), false, &model);
+            self.gl
+                .uniform_2_f32(self.sprite_pass.size.as_ref(), sprite.width, sprite.height);
+            self.gl.uniform_4_f32(
+                self.sprite_pass.color.as_ref(),
+                sprite.color.r,
+                sprite.color.g,
+                sprite.color.b,
+                sprite.color.a,
+            );
+            self.gl
+                .uniform_4_f32(self.sprite_pass.tint.as_ref(), r, g, b, amount);
+            // The frame of the sheet the sprite shows right now, mirroring included: the pass
+            // never looks at frames or time, it just samples this rectangle (DR-39).
+            let [left, top, right, bottom] = sprite.uv();
+            self.gl
+                .uniform_4_f32(self.sprite_pass.rect.as_ref(), left, top, right, bottom);
+            self.gl.draw_arrays(glow::TRIANGLES, 0, SPRITE_VERTEX_COUNT);
+        }
+    }
+
+    /// The GPU texture of a handle, uploaded on first sight and again when its pixels changed.
+    fn texture_for(
+        &mut self,
+        id: TextureId,
+        textures: &[Arc<TexturePixels>],
+    ) -> Result<Option<glow::Texture>, RenderError> {
+        let Some(pixels) = textures.iter().find(|pixels| pixels.id == id) else {
+            return Ok(None);
+        };
+        if let Some(cached) = self.sprite_textures.get(&id) {
+            if Arc::ptr_eq(&cached.pixels, pixels) {
+                return Ok(Some(cached.texture));
+            }
+            // The host loaded the file again: the old pixels are the wrong ones.
+            if let Some(cached) = self.sprite_textures.remove(&id) {
+                unsafe { self.gl.delete_texture(cached.texture) };
+            }
+        }
+        if self.sprite_textures.len() >= MAX_CACHED_TEXTURES {
+            self.clear_textures();
+        }
+        let texture = create_texture(&self.gl, pixels.width, pixels.height, &pixels.rgba)?;
+        self.sprite_textures.insert(
+            id,
+            CachedTexture {
+                texture,
+                pixels: Arc::clone(pixels),
+            },
+        );
+        Ok(Some(texture))
+    }
+
+    fn clear_textures(&mut self) {
+        for (_, cached) in self.sprite_textures.drain() {
+            unsafe { self.gl.delete_texture(cached.texture) };
         }
     }
 
@@ -937,6 +1148,7 @@ impl GlRenderer {
 impl Drop for GlRenderer {
     fn drop(&mut self) {
         self.clear_meshes();
+        self.clear_textures();
         unsafe {
             self.gl.delete_vertex_array(self.grid_pass.vertex_array);
             self.gl.delete_buffer(self.grid_pass.vertex_buffer);
@@ -949,6 +1161,10 @@ impl Drop for GlRenderer {
             self.gl.delete_framebuffer(self.grade.framebuffer);
             self.gl.delete_texture(self.grade.color);
             self.gl.delete_renderbuffer(self.grade.depth);
+            self.gl.delete_vertex_array(self.sprite_pass.vertex_array);
+            self.gl.delete_buffer(self.sprite_pass.vertex_buffer);
+            self.gl.delete_program(self.sprite_pass.program);
+            self.gl.delete_texture(self.white_texture);
         }
         unsafe { self.gl.delete_program(self.program) };
     }
@@ -964,6 +1180,9 @@ fn delete_mesh(gl: &glow::Context, mesh: &GpuMesh) {
 
 /// Floats per overlay vertex: position (2, clip space) and color (4).
 const OVERLAY_FLOATS_PER_VERTEX: usize = 6;
+
+/// Vertices of the shared sprite quad (two triangles).
+const SPRITE_VERTEX_COUNT: i32 = 6;
 
 /// Projects a world point to pixels (origin at the bottom-left). `None` behind the camera.
 fn project_to_pixels(
@@ -1097,6 +1316,108 @@ fn create_grid_pass(gl: &glow::Context) -> Result<GridPass, RenderError> {
             vertex_buffer,
             vertex_count: (lines.len() * 2) as i32,
         })
+    }
+}
+
+/// Six vertices of a unit square on the XY plane: position (2) and texture coordinate (2).
+fn sprite_quad() -> [f32; 24] {
+    // Texture coordinate (0, 0) is the top-left pixel of the image: the decoder's first row.
+    [
+        -0.5, 0.5, 0.0, 0.0, // top left
+        0.5, 0.5, 1.0, 0.0, // top right
+        -0.5, -0.5, 0.0, 1.0, // bottom left
+        0.5, 0.5, 1.0, 0.0, // top right again
+        0.5, -0.5, 1.0, 1.0, // bottom right
+        -0.5, -0.5, 0.0, 1.0, // bottom left again
+    ]
+}
+
+fn create_sprite_pass(gl: &glow::Context) -> Result<SpritePass, RenderError> {
+    let mut bytes = Vec::with_capacity(sprite_quad().len() * 4);
+    for value in sprite_quad() {
+        bytes.extend_from_slice(&value.to_ne_bytes());
+    }
+    unsafe {
+        let program = compile_source_program(gl, SPRITE_VERTEX_SHADER, SPRITE_FRAGMENT_SHADER)?;
+        let vertex_array = gl.create_vertex_array().map_err(RenderError::Gl)?;
+        let vertex_buffer = gl.create_buffer().map_err(RenderError::Gl)?;
+        gl.bind_vertex_array(Some(vertex_array));
+        gl.bind_buffer(glow::ARRAY_BUFFER, Some(vertex_buffer));
+        gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, &bytes, glow::STATIC_DRAW);
+        let stride = 4 * 4;
+        gl.enable_vertex_attrib_array(0);
+        gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, stride, 0);
+        gl.enable_vertex_attrib_array(1);
+        gl.vertex_attrib_pointer_f32(1, 2, glow::FLOAT, false, stride, 8);
+        gl.bind_vertex_array(None);
+        Ok(SpritePass {
+            view_projection: gl.get_uniform_location(program, "u_view_projection"),
+            model: gl.get_uniform_location(program, "u_model"),
+            size: gl.get_uniform_location(program, "u_size"),
+            color: gl.get_uniform_location(program, "u_color"),
+            tint: gl.get_uniform_location(program, "u_tint"),
+            rect: gl.get_uniform_location(program, "u_rect"),
+            texture: gl.get_uniform_location(program, "u_texture"),
+            program,
+            vertex_array,
+            vertex_buffer,
+        })
+    }
+}
+
+/// Uploads 8-bit RGBA pixels as a texture, rows tightly packed (whatever the width).
+fn create_texture(
+    gl: &glow::Context,
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+) -> Result<glow::Texture, RenderError> {
+    let expected = width as usize * height as usize * 4;
+    if width == 0 || height == 0 || rgba.len() != expected {
+        return Err(RenderError::Texture(format!(
+            "{width} por {height} pixels não cabem em {} bytes",
+            rgba.len()
+        )));
+    }
+    unsafe {
+        let texture = gl.create_texture().map_err(RenderError::Gl)?;
+        gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+        // Rows are tight: without this a texture whose width is not a multiple of four would be
+        // read with padding.
+        gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
+        gl.tex_image_2d(
+            glow::TEXTURE_2D,
+            0,
+            glow::RGBA8 as i32,
+            width as i32,
+            height as i32,
+            0,
+            glow::RGBA,
+            glow::UNSIGNED_BYTE,
+            glow::PixelUnpackData::Slice(Some(rgba)),
+        );
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_MIN_FILTER,
+            glow::LINEAR as i32,
+        );
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_MAG_FILTER,
+            glow::LINEAR as i32,
+        );
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_WRAP_S,
+            glow::CLAMP_TO_EDGE as i32,
+        );
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_WRAP_T,
+            glow::CLAMP_TO_EDGE as i32,
+        );
+        gl.bind_texture(glow::TEXTURE_2D, None);
+        Ok(texture)
     }
 }
 

@@ -12,6 +12,7 @@ mod mesh;
 mod natural;
 mod pick;
 mod sculpt;
+mod texture;
 
 pub mod particles;
 pub mod vegetation;
@@ -21,8 +22,8 @@ pub use camera::{Camera, Mat4, ProjectionMode, model_matrix, multiply};
 pub use fly::FlyCamera;
 pub use frame::{
     DrawItem, Grade, Lighting, MAX_POINT_LIGHTS, OverlayItem, PointLight, RenderFrame, Shape,
-    SkinWeight, extract_frame, extract_frame_cached, skin_mesh, solid_shapes, start_camera,
-    start_camera_at,
+    SkinWeight, SpriteItem, extract_frame, extract_frame_cached, skin_mesh, solid_shapes,
+    start_camera, start_camera_at,
 };
 pub use grid::{GRID_LIFT, GridLine, axis_lines, grid_lines};
 pub use mesh::{MeshCache, MeshData, MeshError, build_mesh, item_mesh, polygon_mesh_data};
@@ -31,5 +32,6 @@ pub use natural::{
     water_mesh_data,
 };
 pub use petunia_sculpt::{ChunkMesh, SurfaceMesh};
-pub use pick::{Ray, SurfaceHit, mesh_points, pick_entity, pick_surface, ray_through};
+pub use pick::{Ray, SurfaceHit, mesh_points, pick_entity, pick_sprite, pick_surface, ray_through};
 pub use sculpt::{SculptCache, SculptItem, SculptVolume, extract_sculpt_volumes, hit_sculpt};
+pub use texture::{TextureId, TextureLoader, TexturePixels, TextureStore};

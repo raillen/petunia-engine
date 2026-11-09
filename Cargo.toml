@@ -24,6 +24,9 @@ glam = { version = "=0.27.0", default-features = false, features = ["std"] }
 manifold-rust = { version = "=0.13.1", default-features = false }
 # glTF/GLB reader (DR-29): meshes and colors only (no image decoding). Only inside petunia_import.
 gltf = { version = "=1.4.1", default-features = false, features = ["utils", "names"] }
+# PNG decoding for sprites and textures (DR-38). Only inside petunia_import, which applies the
+# limits; the decoded pixels reach the renderer as plain RGBA.
+png = { version = "=0.18.1" }
 # Rigid bodies and collision (DR-08, DR-27). Only inside petunia_physics; never in a public API,
 # file or protocol. Enhanced determinism: the same input gives the same steps on every machine.
 rapier3d = { version = "=0.36.1", default-features = false, features = ["dim3", "f32", "std", "enhanced-determinism"] }

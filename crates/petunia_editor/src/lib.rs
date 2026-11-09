@@ -62,6 +62,145 @@ mod tests {
         snapshot["result"]["entity_count"].as_u64().unwrap_or(0)
     }
 
+    fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut out, width, height);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().expect("a header");
+            writer.write_image_data(rgba).expect("the pixels");
+        }
+        out
+    }
+
+    #[test]
+    fn a_sprite_row_reaches_the_frame_with_its_picture() {
+        let root = scratch_dir("sprite");
+        let mut session = EditorSession::new().expect("session");
+        call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "Doces" }),
+        );
+        std::fs::create_dir_all(root.join("assets")).expect("the assets folder");
+        std::fs::write(
+            root.join("assets").join("hero.png"),
+            encode_png(2, 2, &[255, 0, 0, 255].repeat(4)),
+        )
+        .expect("the image file");
+        let created = call(
+            &mut session,
+            json!({ "op": "command.execute", "command": "world.create", "payload": { "rows": {
+                "Name": { "text": "Heroi" },
+                "Transform": { "position": { "x": 0.0, "y": 1.0, "z": 0.0 } },
+                "Sprite": { "asset": "assets/hero.png", "size": { "x": 2.0, "y": 3.0, "z": 0.0 }, "layer": 3 }
+            } } }),
+        );
+        assert_eq!(created["ok"], true, "{created}");
+
+        let frame = session.frame().expect("a frame");
+        let sprite = frame
+            .sprites
+            .iter()
+            .find(|sprite| sprite.asset == "assets/hero.png")
+            .expect("the sprite in the frame");
+        let texture = sprite.texture.expect("the picture was loaded");
+        assert_eq!((sprite.width, sprite.height), (2.0, 3.0));
+        assert_eq!(sprite.layer, 3);
+        assert!(
+            frame.textures.iter().any(|pixels| pixels.id == texture),
+            "the pixels of the picture travel with the frame"
+        );
+        let snapshot = call(&mut session, json!({ "op": "editor.snapshot" }));
+        assert_eq!(snapshot["result"]["textures"]["loaded"], 1, "{snapshot}");
+        assert_eq!(snapshot["result"]["textures"]["failed"], 0, "{snapshot}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_click_and_a_hover_find_the_sprite_under_the_mouse() {
+        let root = scratch_dir("sprite_pick");
+        let mut session = EditorSession::new().expect("session");
+        call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "Doces" }),
+        );
+        let created = call(
+            &mut session,
+            json!({ "op": "command.execute", "command": "world.create", "payload": { "rows": {
+                "Name": { "text": "Heroi" },
+                "Transform": { "position": { "x": 0.0, "y": 1.0, "z": 0.0 } },
+                "Sprite": { "size": { "x": 2.0, "y": 2.0, "z": 0.0 } }
+            } } }),
+        );
+        let entity = created["result"]["entity"]
+            .as_u64()
+            .expect("the new sprite");
+        // Three meters in front of the quad, looking straight at it.
+        session.camera.camera.position = petunia_math::Vec3::new(0.0, 1.0, 3.0);
+        session.camera.camera.yaw_degrees = 0.0;
+        session.camera.camera.pitch_degrees = 0.0;
+        let picked = call(
+            &mut session,
+            json!({ "op": "selection.pick", "x": 0.0, "y": 0.0, "aspect": 800.0 / 600.0 }),
+        );
+        assert_eq!(picked["result"]["selection"], json!(entity), "{picked}");
+        // Hover uses the same hit, so the outline follows the mouse over a sprite.
+        let hovered = call(
+            &mut session,
+            json!({ "op": "pointer.hover", "x": 400.0, "y": 300.0, "width": 800.0, "height": 600.0 }),
+        );
+        assert_eq!(hovered["result"]["entity"], json!(entity), "{hovered}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_sheet_animation_row_plays_only_while_the_game_runs() {
+        let root = scratch_dir("sprite_sheet");
+        let mut session = EditorSession::new().expect("session");
+        call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "Andar" }),
+        );
+        // Four frames in two columns: the sheet is two rows of two pictures (DR-39).
+        let created = call(
+            &mut session,
+            json!({ "op": "command.execute", "command": "world.create", "payload": { "rows": {
+                "Name": { "text": "Andarilho" },
+                "Transform": { "position": { "x": 0.0, "y": 1.0, "z": 0.0 } },
+                "Sprite": { "size": { "x": 2.0, "y": 2.0, "z": 0.0 } },
+                "SpriteAnimation": { "frames": 4, "columns": 2, "fps": 8.0, "loop": true, "playing": true, "frame": 1 }
+            } } }),
+        );
+        let entity = created["result"]["entity"].as_u64().expect("the sprite");
+        let frame_of = |session: &EditorSession| {
+            session
+                .frame()
+                .expect("a frame")
+                .sprites
+                .into_iter()
+                .find(|sprite| sprite.entity == entity)
+                .expect("the sprite is drawn")
+                .frame
+        };
+        // Editing never animates: the scene at rest draws exactly what the row says.
+        assert_eq!(frame_of(&session), 1);
+        let started = call(&mut session, json!({ "op": "play.start" }));
+        assert_eq!(started["result"]["playing"], true, "{started}");
+        // 0.3 s of game time at 8 fps is 2.4 frames: the third picture.
+        for _ in 0..3 {
+            call(&mut session, json!({ "op": "play.tick", "seconds": 0.1 }));
+        }
+        assert_eq!(frame_of(&session), 2);
+        call(&mut session, json!({ "op": "play.stop" }));
+        assert_eq!(
+            frame_of(&session),
+            1,
+            "stopping gives the scene back as it was"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn autosave_writes_a_copy_and_waits_while_a_drag_is_live() {
         let root = scratch_dir("autosave");

@@ -112,7 +112,7 @@ xdotool mousemove 700 300 mousedown 3 mousemove_relative 70 0 mouseup 3; sleep 0
 xdotool key ctrl+Prior;                          sleep 0.6   # up a floor: creates Térreo and Andar 1
 xdotool key ctrl+1;                              sleep 0.6   # a box on floor 1
 xdotool key ctrl+Next;                           sleep 0.6   # back down (the box turns into a ghost)
-xdotool key alt+c; sleep 0.6; xdotool key Up Up Up Up Up Return; sleep 1.0   # Alt+C opens Criar (the menus are behind ≡) > Caverna (5 from the end: Sol, Luz, Importar, aleatória, Caverna)
+xdotool key alt+c; sleep 0.6; xdotool key Up Up Up Up Up Up Return; sleep 1.0   # Alt+C opens Criar (the menus are behind ≡) > Caverna (6 from the end: Sol, Luz, Importar imagem, Importar modelo, aleatória, Caverna)
 xdotool mousemove 600 380; xdotool key b;        sleep 0.6   # sculpting tool
 xdotool mousedown 1                                          # drag across the cave: carve
 for x in 620 640 660 680 700 720; do xdotool mousemove "$x" 380; sleep 0.25; done

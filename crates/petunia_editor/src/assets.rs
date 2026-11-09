@@ -1,15 +1,19 @@
-//! The project's `assets/` folder and importing 3D models (GLB, glTF) into the scene (DR-29).
+//! The project's `assets/` folder, importing 3D models (GLB, glTF) into the scene (DR-29) and
+//! importing a `.png` as a 2D sprite (DR-38).
 //!
 //! An imported model becomes **editable meshes** (the `Mesh` table of DR-22): one object per node
 //! of the file that has geometry, with its place, rotation, scale and base color. They select,
 //! move, get colliders and take the mesh tools like anything else. The file is copied into
 //! `assets/`, so the project keeps what it was made from. Importing is one undo step.
+//!
+//! An imported image becomes an ordinary **entity with a `Sprite` row** in front of the camera,
+//! so the 3D tools (gizmo, inspector, snap, floors, undo) work on it unchanged.
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
 use petunia_commands::{BATCH_COMMAND, CommandRecord};
-use petunia_import::{ImportError, MAX_FILE_BYTES, import_gltf};
+use petunia_import::{ImportError, MAX_FILE_BYTES, MAX_IMAGE_BYTES, decode_png, import_gltf};
 use petunia_math::{Transform, Vec3};
 use petunia_project::{atomic_write, read_limited};
 use petunia_render::model_matrix;
@@ -20,11 +24,14 @@ use crate::session::{EditorSession, vector_json};
 
 pub const ASSETS_DIRECTORY: &str = "assets";
 const MODEL_EXTENSIONS: [&str; 2] = ["glb", "gltf"];
+const IMAGE_EXTENSIONS: [&str; 1] = ["png"];
 /// How deep the folder is read and how many files are listed.
 const MAX_DEPTH: usize = 4;
 const MAX_LISTED: usize = 500;
 /// A new model goes this far in front of the camera.
 const PLACE_DISTANCE: f32 = 6.0;
+/// A new sprite is scaled so its longest side measures this, keeping the picture's proportion.
+const SPRITE_LONGEST_SIDE: f32 = 2.0;
 
 fn failure(code: &str, message: &str, action: &str) -> Failure {
     Failure::new(code, message, action)
@@ -43,6 +50,14 @@ fn is_model(path: &Path) -> bool {
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| {
             MODEL_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str())
+        })
+}
+
+fn is_image(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            IMAGE_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str())
         })
 }
 
@@ -88,7 +103,14 @@ fn collect(directory: &Path, root: &Path, depth: usize, out: &mut Vec<Json>) {
         };
         if metadata.is_dir() {
             collect(&path, root, depth + 1, out);
-        } else if metadata.is_file() && is_model(&path) {
+        } else if metadata.is_file() {
+            let kind = if is_model(&path) {
+                "model"
+            } else if is_image(&path) {
+                "image"
+            } else {
+                continue;
+            };
             let relative = path
                 .strip_prefix(root)
                 .unwrap_or(&path)
@@ -97,11 +119,56 @@ fn collect(directory: &Path, root: &Path, depth: usize, out: &mut Vec<Json>) {
             out.push(json!({
                 "name": path.file_name().and_then(|name| name.to_str()).unwrap_or(""),
                 "path": relative,
-                "kind": "model",
+                "kind": kind,
                 "bytes": metadata.len(),
             }));
         }
     }
+}
+
+/// A free file name inside `assets/`: `nome.png`, then `nome-2.png`, `nome-3.png`…
+fn unique_asset_name(assets: &Path, stem: &str) -> PathBuf {
+    let mut target = assets.join(stem);
+    let base = Path::new(stem)
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or("arquivo");
+    let extension = Path::new(stem).extension().and_then(|name| name.to_str());
+    let mut number = 2;
+    while target.exists() {
+        target = match extension {
+            Some(extension) => assets.join(format!("{base}-{number}.{extension}")),
+            None => assets.join(format!("{base}-{number}")),
+        };
+        number += 1;
+    }
+    target
+}
+
+/// Puts `bytes` in `assets/` (or reuses the copy already there) and returns the path relative to
+/// the project root, like `assets/hero.png`. `source` is already canonical.
+fn store_in_assets(
+    assets: &Path,
+    source: &Path,
+    bytes: &[u8],
+    fallback: &str,
+) -> Result<String, Failure> {
+    if let Ok(root) = std::fs::canonicalize(assets)
+        && let Ok(inside) = source.strip_prefix(&root)
+    {
+        return Ok(format!("{ASSETS_DIRECTORY}/{}", inside.display()));
+    }
+    let stem = clean_name(
+        source
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(fallback),
+    );
+    let target = unique_asset_name(assets, &stem);
+    atomic_write(&target, bytes)
+        .map_err(|error| io_failure("copiar o arquivo para assets/", &error))?;
+    let stored = target.strip_prefix(assets).unwrap_or(&target);
+    Ok(format!("{ASSETS_DIRECTORY}/{}", stored.display()))
 }
 
 impl EditorSession {
@@ -197,20 +264,7 @@ impl EditorSession {
                     .and_then(|name| name.to_str())
                     .unwrap_or("modelo.glb"),
             );
-            let mut target = assets.join(&stem);
-            let mut number = 2;
-            while target.exists() {
-                let base = Path::new(&stem)
-                    .file_stem()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or("modelo");
-                let extension = Path::new(&stem)
-                    .extension()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or("glb");
-                target = assets.join(format!("{base}-{number}.{extension}"));
-                number += 1;
-            }
+            let target = unique_asset_name(&assets, &stem);
             atomic_write(&target, &bytes)
                 .map_err(|error| io_failure("copiar o modelo para assets/", &error))?;
             for (name, data) in used.borrow().iter() {
@@ -404,6 +458,111 @@ impl EditorSession {
             "unskinned": unskinned,
         }))
     }
+
+    /// `asset.import_sprite`: puts a picture into the scene as a **sprite** (DR-38). `path` is a
+    /// file inside `assets/` (relative to the project) or any `.png` on disk, which is copied into
+    /// `assets/`. The new entity sits in front of the camera, keeps the picture's proportion (the
+    /// longest side measures `SPRITE_LONGEST_SIDE`), faces the camera and is one undo step.
+    pub fn asset_import_sprite(&mut self, path: &str) -> Result<Json, Failure> {
+        let assets = self.assets_root()?;
+        let project_root = self
+            .project
+            .as_ref()
+            .ok_or_else(Failure::no_project)?
+            .root
+            .clone();
+        let given = PathBuf::from(path);
+        let source = if given.is_absolute() {
+            given
+        } else {
+            project_root.join(&given)
+        };
+        let source = std::fs::canonicalize(&source)
+            .map_err(|error| io_failure(&format!("abrir `{path}`"), &error))?;
+        if !source.is_file() || !is_image(&source) {
+            return Err(failure(
+                "ASSET_UNSUPPORTED",
+                "só arquivos .png podem virar sprite",
+                "Exporte a imagem como PNG (com transparência, se precisar).",
+            ));
+        }
+        let bytes = read_limited(&source, MAX_IMAGE_BYTES as u64)
+            .map_err(|error| io_failure("ler a imagem", &error))?;
+        let image = decode_png(&bytes).map_err(|error| match error {
+            ImportError::Invalid(message) => failure(
+                "ASSET_INVALID",
+                &format!("o arquivo não é uma imagem válida: {message}"),
+                "Abra e salve de novo no programa de desenho.",
+            ),
+            ImportError::Refused(message) => failure(
+                "ASSET_REFUSED",
+                &message,
+                "Reduza a imagem (o limite é 4096 por lado) ou divida-a em partes.",
+            ),
+        })?;
+        let asset = store_in_assets(&assets, &source, &bytes, "imagem.png")?;
+
+        // Keep the picture's proportion; the longest side is the one that measures the constant.
+        let (width, height) = (image.width.max(1) as f32, image.height.max(1) as f32);
+        let size = if width >= height {
+            Vec3::new(
+                SPRITE_LONGEST_SIDE,
+                SPRITE_LONGEST_SIDE * height / width,
+                0.0,
+            )
+        } else {
+            Vec3::new(
+                SPRITE_LONGEST_SIDE * width / height,
+                SPRITE_LONGEST_SIDE,
+                0.0,
+            )
+        };
+        // In front of the camera, bottom on the floor being built, turned to face the viewer.
+        let camera = self.camera.camera;
+        let forward = camera.forward();
+        let flat = Vec3::new(forward.x, 0.0, forward.z).normalized_or_zero();
+        let flat = if flat.length_squared() == 0.0 {
+            Vec3::new(0.0, 0.0, -1.0)
+        } else {
+            flat
+        };
+        let target = camera.position + flat * PLACE_DISTANCE;
+        let position = Vec3::new(target.x, self.floor_elevation() + size.y * 0.5, target.z);
+        let rotation = Vec3::new(camera.pitch_degrees, camera.yaw_degrees, 0.0);
+        let name = source
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or("Imagem")
+            .to_string();
+        let record = CommandRecord::new(
+            "world.create",
+            json!({ "rows": {
+                "Name": { "text": name },
+                "Transform": {
+                    "position": vector_json(position),
+                    "rotation_degrees": vector_json(rotation)
+                },
+                "Sprite": {
+                    "asset": asset,
+                    "size": vector_json(size),
+                    "layer": 0,
+                    "color": { "r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0 },
+                    "flip_x": false,
+                    "flip_y": false
+                }
+            } }),
+        );
+        let result = self.execute(&record)?;
+        let entity = result.get("entity").and_then(Json::as_u64);
+        self.selection = entity;
+        Ok(json!({
+            "entity": entity,
+            "asset": asset,
+            "width": image.width,
+            "height": image.height,
+            "size": vector_json(size),
+        }))
+    }
 }
 
 impl EditorSession {
@@ -528,6 +687,110 @@ mod tests {
         call(&mut session, json!({ "op": "edit.undo" }));
         assert_eq!(entity_count(&session), before);
 
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_picture_is_copied_into_assets_and_becomes_a_sprite_in_one_undo_step() {
+        let base = std::env::temp_dir().join(format!(
+            "petunia_editor_test_sprite_asset_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("folder");
+        let root = base.join("projeto");
+        let outside = base.join("dragao.png");
+        let pixels = [255u8, 0, 0, 255].repeat(8);
+        let mut picture = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut picture, 4, 2);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().expect("a header");
+            writer.write_image_data(&pixels).expect("the pixels");
+        }
+        std::fs::write(&outside, &picture).expect("write image");
+
+        let mut session = EditorSession::new().expect("session");
+        call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "2D" }),
+        );
+        let before = entity_count(&session);
+        let imported = call(
+            &mut session,
+            json!({ "op": "asset.import_sprite", "path": outside.display().to_string() }),
+        );
+        assert_eq!(imported["asset"], "assets/dragao.png", "{imported}");
+        assert_eq!(
+            (imported["width"].as_u64(), imported["height"].as_u64()),
+            (Some(4), Some(2))
+        );
+        // The picture's proportion is kept: the longest side is the one that measures 2 m.
+        assert_eq!(imported["size"]["x"], json!(2.0), "{imported}");
+        assert_eq!(imported["size"]["y"], json!(1.0), "{imported}");
+        assert_eq!(entity_count(&session), before + 1);
+        assert!(root.join("assets/dragao.png").is_file(), "a copy is kept");
+        assert!(session.selection == imported["entity"].as_u64(), "selected");
+
+        // Drawn with its picture, on a common entity: no sprite-only object.
+        let frame = session.frame().expect("a frame");
+        let sprite = frame
+            .sprites
+            .iter()
+            .find(|sprite| sprite.asset == "assets/dragao.png")
+            .expect("the sprite in the frame");
+        assert!(sprite.texture.is_some(), "the picture was loaded");
+        let despawn = json!({ "op": "entity.describe", "entity": imported["entity"] });
+        assert!(
+            call(&mut session, despawn)
+                .to_string()
+                .contains("\"Sprite\"")
+        );
+
+        // Listing shows the picture, and importing the copy again keeps one file.
+        let listed = call(&mut session, json!({ "op": "asset.list" }));
+        assert_eq!(listed["assets"][0]["kind"], "image", "{listed}");
+        call(
+            &mut session,
+            json!({ "op": "asset.import_sprite", "path": "assets/dragao.png" }),
+        );
+        assert_eq!(entity_count(&session), before + 2);
+        let pictures = std::fs::read_dir(root.join("assets"))
+            .expect("the assets folder")
+            .count();
+        assert_eq!(pictures, 1, "the copy inside the project is not duplicated");
+
+        // One undo per import, and hostile files are refused without touching the scene.
+        call(&mut session, json!({ "op": "edit.undo" }));
+        call(&mut session, json!({ "op": "edit.undo" }));
+        assert_eq!(entity_count(&session), before);
+        let broken = base.join("quebrado.png");
+        std::fs::write(&broken, b"isto nao e um png").expect("write");
+        assert_eq!(
+            call_error(
+                &mut session,
+                json!({ "op": "asset.import_sprite", "path": broken.display().to_string() })
+            ),
+            "ASSET_INVALID"
+        );
+        let text = base.join("nota.txt");
+        std::fs::write(&text, b"oi").expect("write");
+        assert_eq!(
+            call_error(
+                &mut session,
+                json!({ "op": "asset.import_sprite", "path": text.display().to_string() })
+            ),
+            "ASSET_UNSUPPORTED"
+        );
+        assert_eq!(
+            call_error(
+                &mut session,
+                json!({ "op": "asset.import_sprite", "path": base.join("sumiu.png").display().to_string() })
+            ),
+            "ASSET_IO"
+        );
+        assert_eq!(entity_count(&session), before);
         let _ = std::fs::remove_dir_all(&base);
     }
 

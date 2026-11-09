@@ -14,6 +14,12 @@ use std::collections::HashMap;
 use gltf::mesh::Mode;
 use petunia_math::{Color, MAX_MESH_VERTICES, PolygonMesh, Vec3};
 
+mod image;
+
+pub use image::{
+    ImportedImage, MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS, MAX_IMAGE_SIDE, decode_png, read_png_file,
+};
+
 /// Largest file the caller should hand over (a limit it applies before reading).
 pub const MAX_FILE_BYTES: usize = 64 * 1024 * 1024;
 /// Nodes visited in one file.

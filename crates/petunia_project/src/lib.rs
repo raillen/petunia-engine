@@ -27,7 +27,9 @@ mod standard;
 pub use check::{LoadOutcome, LoadedProject, check_project, load_project};
 pub use diagnostics::{Diagnostic, Report, Severity};
 pub use error::ProjectError;
-pub use io::{MAX_MANIFEST_BYTES, MAX_SCENE_BYTES, atomic_write, read_limited, resolve_inside};
+pub use io::{
+    MAX_MANIFEST_BYTES, MAX_SCENE_BYTES, atomic_write, load_png_asset, read_limited, resolve_inside,
+};
 pub use manifest::{FORMAT_VERSION, MANIFEST_FILE, PROGRAMMING_METHODS, ProjectManifest};
 pub use play::{EYE_HEIGHT, PlayerStart, ensure_player, has_player, player_start};
 pub use sample::{create_sample_project, create_sample_project_with};
