@@ -694,7 +694,7 @@ mod tests {
         let mut session = EditorSession::new().expect("session");
         call(
             &mut session,
-            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": name }),
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": name, "method": "nodes" }),
         );
         (session, root)
     }

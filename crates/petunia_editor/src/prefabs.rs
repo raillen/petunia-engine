@@ -10,10 +10,10 @@
 //! revision and instances that follow the mold, come later.
 
 use petunia_commands::{BATCH_COMMAND, CommandRecord};
-use petunia_graph::{GraphDocument, GraphError, PinRef, add_node, connect, set_param};
+use petunia_graph::{GraphDocument, GraphError, PinRef, add_node, compile, connect, set_param};
 use petunia_math::Vec3;
 use petunia_project::{atomic_write, resolve_inside};
-use petunia_script::{GRAPH_SUFFIX, SCRIPTS_DIRECTORY, graph_catalog};
+use petunia_script::{GRAPH_SUFFIX, SCRIPT_EXTENSION, SCRIPTS_DIRECTORY, graph_catalog};
 use serde_json::{Value as Json, json};
 
 use crate::failure::Failure;
@@ -315,7 +315,8 @@ pub fn build(id: &str, at: Vec3) -> Result<Built, Failure> {
                     "Transform": { "position": vector_json(Vec3::new(at.x, at.y + 0.9, at.z)) },
                     "Brush": { "shape": "cylinder", "size": { "x": 0.6, "y": 1.8, "z": 0.6 },
                                "color": { "r": 0.95, "g": 0.55, "b": 0.75, "a": 1.0 } },
-                    "Character": { "player": true }
+                    "Character": { "player": true },
+                    "Camera": { "mode": "fixed", "distance": 4.5, "height": 1.5, "fov_degrees": 50.0 }
                 }),
                 json!({ "Collider": { "owner": { "$entity_of": 0 }, "name": "corpo", "shape": "capsule",
                                       "radius": 0.3, "height": 1.8 } }),
@@ -364,7 +365,12 @@ impl EditorSession {
     }
 
     /// `prefab.spawn`: creates the prefab in front of the camera, on the current floor (one undo
-    /// step), and puts the graphs it needs in `scripts/` when they are not there yet.
+    /// step), and puts the behaviour it needs in `scripts/` when it is not there yet.
+    ///
+    /// The file follows the project's programming method (DR-40): a pNodes project gets the graph
+    /// as `<name>.graph.json`; an Aipo project gets the same graph **compiled** to `<name>.aipo`,
+    /// because that project does not use the node sheet. Either way a file the person already has
+    /// is never overwritten.
     pub fn prefab_spawn(&mut self, id: &str) -> Result<Json, Failure> {
         // `project:<name>` is a prefab saved from the project itself.
         if let Some(name) = id.strip_prefix(crate::user_prefabs::PREFAB_PREFIX) {
@@ -376,6 +382,10 @@ impl EditorSession {
             .ok_or_else(Failure::no_project)?
             .root
             .clone();
+        let node_project = self
+            .project
+            .as_ref()
+            .is_some_and(|project| project.manifest.uses_node_method());
         let camera = self.camera.camera;
         let forward = camera.forward();
         let flat = Vec3::new(forward.x, 0.0, forward.z).normalized_or_zero();
@@ -399,10 +409,12 @@ impl EditorSession {
         let mut written = Vec::new();
         let mut kept = Vec::new();
         for (name, graph) in &graphs {
-            let path = directory.join(format!("{name}{GRAPH_SUFFIX}"));
-            let aipo = directory.join(format!("{name}.aipo"));
-            if path.exists() || aipo.exists() {
-                // Someone's own graph (maybe edited): never overwritten.
+            // Both extensions count as "already there": a project migrated from one method to the
+            // other may have either, and neither may be silently replaced.
+            let as_graph = directory.join(format!("{name}{GRAPH_SUFFIX}"));
+            let as_aipo = directory.join(format!("{name}.{SCRIPT_EXTENSION}"));
+            if as_graph.exists() || as_aipo.exists() {
+                // Someone's own behaviour (maybe edited): never overwritten.
                 kept.push(name.clone());
                 continue;
             }
@@ -413,10 +425,26 @@ impl EditorSession {
                     "Confira se a pasta do projeto pode ser escrita.",
                 )
             })?;
-            atomic_write(&path, graph.to_text().as_bytes()).map_err(|error| {
+            let (path, text) = if node_project {
+                (as_graph, graph.to_text())
+            } else {
+                let compiled = compile(graph, graph_catalog()).map_err(|diagnostics| {
+                    let reason = diagnostics
+                        .first()
+                        .map(|finding| finding.message.clone())
+                        .unwrap_or_else(|| "o compilador não deu motivo".to_string());
+                    Failure::new(
+                        "PREFAB_COMPILE",
+                        &format!("o prefab `{name}` não compilou para Aipo: {reason}"),
+                        "Isto é um defeito do prefab embutido, não do projeto. Reporte com o nome do prefab.",
+                    )
+                })?;
+                (as_aipo, compiled.text)
+            };
+            atomic_write(&path, text.as_bytes()).map_err(|error| {
                 Failure::new(
                     "PREFAB_IO",
-                    &format!("gravar o grafo `{name}`: {error}"),
+                    &format!("gravar o script `{name}`: {error}"),
                     "Confira se há espaço no disco.",
                 )
             })?;
@@ -699,7 +727,18 @@ mod tests {
 
         let made = call(&mut session, json!({ "op": "prefab.spawn", "id": "door" }));
         assert_eq!(made["graphs_written"], json!(["porta"]));
-        assert!(root.join("scripts/porta.graph.json").is_file());
+        // The sample project programs with Aipo, so the prefab writes the *compiled* script, not
+        // pNodes (DR-40): a project follows one method from start to finish.
+        assert!(
+            root.join("scripts/porta.aipo").is_file(),
+            "an Aipo project gets Aipo text"
+        );
+        assert!(!root.join("scripts/porta.graph.json").exists());
+        let compiled = std::fs::read_to_string(root.join("scripts/porta.aipo")).expect("read");
+        assert!(
+            compiled.contains("fn on_collision"),
+            "the prefab behaviour survived compiling: {compiled}"
+        );
         let count = call(&mut session, json!({ "op": "editor.snapshot" }))["entity_count"]
             .as_u64()
             .expect("count");
@@ -711,13 +750,13 @@ mod tests {
         );
         assert_eq!(described["name"], "Porta");
 
-        // A graph the person already has is never overwritten.
-        std::fs::write(root.join("scripts/porta.graph.json"), "meu\n").expect("edit");
+        // A script the person already has is never overwritten.
+        std::fs::write(root.join("scripts/porta.aipo"), "meu\n").expect("edit");
         let second = call(&mut session, json!({ "op": "prefab.spawn", "id": "door" }));
         assert_eq!(second["graphs_written"], json!([]));
         assert_eq!(second["graphs_kept"], json!(["porta"]));
         assert_eq!(
-            std::fs::read_to_string(root.join("scripts/porta.graph.json")).expect("read"),
+            std::fs::read_to_string(root.join("scripts/porta.aipo")).expect("read"),
             "meu\n"
         );
 
@@ -735,7 +774,41 @@ mod tests {
             &mut session,
             json!({ "op": "prefab.spawn", "id": "pickup" }),
         );
-        assert!(root.join("scripts/item.graph.json").is_file());
+        assert!(root.join("scripts/item.aipo").is_file());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_pnodes_project_gets_the_graph_and_an_aipo_project_gets_the_text() {
+        let root = std::env::temp_dir().join(format!(
+            "petunia_editor_test_prefab_method_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let mut session = EditorSession::new().expect("session");
+        call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "metodo" }),
+        );
+        // The method is the project's, not the prefab's: switch the manifest and spawn again.
+        let manifest_path = root.join("petunia.project.json");
+        let mut manifest: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&manifest_path).expect("read"))
+                .expect("manifest");
+        manifest["programming_method"] = json!("nodes");
+        std::fs::write(&manifest_path, manifest.to_string()).expect("write");
+        call(
+            &mut session,
+            json!({ "op": "project.open", "path": root.display().to_string() }),
+        );
+
+        let made = call(&mut session, json!({ "op": "prefab.spawn", "id": "door" }));
+        assert_eq!(made["graphs_written"], json!(["porta"]));
+        assert!(
+            root.join("scripts/porta.graph.json").is_file(),
+            "a pNodes project keeps the editable graph"
+        );
+        assert!(!root.join("scripts/porta.aipo").exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 }

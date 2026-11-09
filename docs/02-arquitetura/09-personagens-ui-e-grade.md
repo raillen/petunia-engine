@@ -86,7 +86,7 @@ O HUD do Digi-Tactics (loja, banco, ouro, nível, dicas, arrastar unidades) é *
 
 ## 5. Módulo `grid`
 
-**Estado: implementado em 2026-11-09 (`DR-38`).** Os jogos táticos reaproveitam a mesma matemática. Em vez de cada jogo reescrever, a engine oferece um **bloco de alto nível** (lição do Godot: nós e APIs valem quando embrulham operações maiores).
+**Estado: implementado em 2026-11-09 (`DR-46`).** Os jogos táticos reaproveitam a mesma matemática. Em vez de cada jogo reescrever, a engine oferece um **bloco de alto nível** (lição do Godot: nós e APIs valem quando embrulham operações maiores).
 
 | Função | Faz |
 |---|---|

@@ -78,19 +78,19 @@ fn callback_for(module: &str, name: &str) -> Option<HostNativeCallback> {
         ("world", "set") => natives::world_set,
         ("world", "create") => natives::world_create,
         ("world", "remove") => natives::world_remove,
-        ("transform", "get_position") => natives::transform_get_position,
+        ("transform", "position") => natives::transform_get_position,
         ("transform", "set_position") => natives::transform_set_position,
         ("transform", "move") => natives::transform_move,
         ("transform", "move_x") => natives::transform_move_x,
         ("transform", "move_y") => natives::transform_move_y,
         ("transform", "move_z") => natives::transform_move_z,
-        ("transform", "get_rotation") => natives::transform_get_rotation,
+        ("transform", "rotation") => natives::transform_get_rotation,
         ("transform", "set_rotation") => natives::transform_set_rotation,
         ("transform", "rotate") => natives::transform_rotate,
         ("transform", "rotate_x") => natives::transform_rotate_x,
         ("transform", "rotate_y") => natives::transform_rotate_y,
         ("transform", "rotate_z") => natives::transform_rotate_z,
-        ("transform", "get_scale") => natives::transform_get_scale,
+        ("transform", "scale") => natives::transform_get_scale,
         ("transform", "set_scale") => natives::transform_set_scale,
         ("transform", "forward") => natives::transform_forward,
         ("transform", "right") => natives::transform_right,
@@ -105,6 +105,10 @@ fn callback_for(module: &str, name: &str) -> Option<HostNativeCallback> {
         ("character", "move") => physics_api::character_move,
         ("character", "jump") => physics_api::character_jump,
         ("character", "grounded") => physics_api::character_grounded,
+        ("interact", "prompt") => natives::interact_prompt,
+        ("health", "current") => natives::health_current,
+        ("health", "damage") => natives::health_damage,
+        ("health", "heal") => natives::health_heal,
         ("collision", "list") => physics_api::collision_list,
         ("collision", "get") => physics_api::collision_get,
         ("collision", "set") => physics_api::collision_set,
@@ -179,12 +183,30 @@ pub struct ScriptHost {
     limits: ScriptLimits,
     /// Whether graphs are compiled with the marks play mode reads (N5).
     debug_marks: bool,
+    /// The interact key was down on the previous frame, so a hold does not fire again.
+    interact_held: bool,
+    /// `Health.current` at the end of the previous frame, to notice a total that reaches zero.
+    health_points: std::collections::BTreeMap<u64, f64>,
+    /// A `Shot` the player chose with interact. Pressing it again clears the choice.
+    view_target: Option<u64>,
+}
+
+/// The camera row of the keyboard-driven character, plus where that character stands.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlayerRig {
+    pub mode: String,
+    pub distance: f32,
+    pub height: f32,
+    pub fov_degrees: f32,
+    pub feet: petunia_math::Vec3,
+    pub yaw_degrees: f32,
 }
 
 impl ScriptHost {
     /// A host that owns `world`; scripts change it through the command dispatcher.
     pub fn new(world: World) -> Result<Self, String> {
         let dispatcher = Dispatcher::with_builtin().map_err(|error| error.to_string())?;
+        let health_points = crate::gameplay::health_points(&world);
         Ok(Self {
             state: GameCell(Rc::new(RefCell::new(GameState {
                 world,
@@ -204,6 +226,9 @@ impl ScriptHost {
             faults: Vec::new(),
             limits: ScriptLimits::default(),
             debug_marks: false,
+            interact_held: false,
+            health_points,
+            view_target: None,
         })
     }
 
@@ -290,11 +315,93 @@ impl ScriptHost {
     /// Tells the player's character what the person is doing (see [`PlayerInput`]). Call it before
     /// [`ScriptHost::update`] each frame.
     pub fn set_player_input(&mut self, input: PlayerInput) {
-        let mut state = self.state.0.borrow_mut();
-        let GameState { world, physics, .. } = &mut *state;
-        if let Some(runtime) = physics {
-            runtime.drive_players(world, input);
+        let rising = input.interact && !self.interact_held;
+        self.interact_held = input.interact;
+        {
+            let mut state = self.state.0.borrow_mut();
+            let GameState { world, physics, .. } = &mut *state;
+            if let Some(runtime) = physics {
+                runtime.drive_players(world, input);
+            }
         }
+        if rising {
+            self.queue_interact();
+        }
+    }
+
+    /// The text of the nearest `Interact` in range, for the line the player reads before pressing.
+    pub fn interact_prompt(&self) -> Option<String> {
+        crate::gameplay::nearest_interact(&self.state.0.borrow().world).map(|offer| offer.prompt)
+    }
+
+    fn queue_interact(&mut self) {
+        let offer = crate::gameplay::nearest_interact(&self.state.0.borrow().world);
+        let Some(offer) = offer else {
+            return;
+        };
+        let mut state = self.state.0.borrow_mut();
+        if state.events.len() >= crate::natives::MAX_QUEUED_EVENTS {
+            return;
+        }
+        state.events.push(crate::natives::QueuedEvent {
+            name: "interact".to_string(),
+            entity: offer.entity,
+        });
+        let has_shot = petunia_world::shot_of(&state.world, offer.entity).is_some();
+        drop(state);
+        if has_shot {
+            self.view_target = if self.view_target == Some(offer.entity) {
+                None
+            } else {
+                Some(offer.entity)
+            };
+        }
+    }
+
+    /// The fixed camera the player last chose by interacting with it.
+    pub fn watched_shot(&self) -> Option<petunia_world::ShotPose> {
+        let entity = self.view_target?;
+        petunia_world::shot_of(&self.state.0.borrow().world, entity)
+    }
+
+    /// How the keyboard-driven character wants to be seen (DR-43). `mode` is `fixed`
+    /// (room shots win, then a chase), `third`, `first` or `isometric`.
+    pub fn player_rig(&self) -> Option<PlayerRig> {
+        let state = self.state.0.borrow();
+        let world = &state.world;
+        let handle = world
+            .entities_with_table("Character")
+            .ok()?
+            .into_iter()
+            .find(|handle| {
+                matches!(
+                    world.get(*handle, "Character", "player"),
+                    Ok(petunia_world::Value::Bool(true))
+                )
+            })?;
+        let pose = petunia_world::composed_transform(world, handle);
+        let number = |column: &str, fallback: f32| match world.get(handle, "Camera", column) {
+            Ok(petunia_world::Value::Float(value)) if value.is_finite() && *value > 0.0 => {
+                *value as f32
+            }
+            _ => fallback,
+        };
+        let mode = match world.get(handle, "Camera", "mode") {
+            Ok(petunia_world::Value::Text(mode)) => mode.clone(),
+            _ => "fixed".to_string(),
+        };
+        let enabled = !matches!(
+            world.get(handle, "Camera", "enabled"),
+            Ok(petunia_world::Value::Bool(false))
+        );
+        Some(PlayerRig {
+            mode: if enabled { mode } else { "fixed".to_string() },
+            distance: number("distance", 4.5),
+            height: number("height", 1.5),
+            fov_degrees: number("fov_degrees", 50.0),
+            feet: pose.position,
+            yaw_degrees: pose.rotation_degrees.y,
+        })
     }
 
     /// Where the first keyboard-driven character is (for a camera that follows it).
@@ -311,10 +418,7 @@ impl ScriptHost {
                     Ok(petunia_world::Value::Bool(true))
                 )
             })
-            .and_then(|handle| match world.get(handle, "Transform", "position") {
-                Ok(petunia_world::Value::Vec3(position)) => Some(*position),
-                _ => None,
-            })
+            .map(|handle| petunia_world::composed_transform(world, handle).position)
     }
 
     /// Where a third-person camera goes: `distance` meters behind the player's head (`height`
@@ -340,10 +444,8 @@ impl ScriptHost {
             })
             .and_then(|handle| {
                 let id = world.persistent_id(handle).ok()?.0;
-                match world.get(handle, "Transform", "position") {
-                    Ok(petunia_world::Value::Vec3(position)) => Some((id, *position)),
-                    _ => None,
-                }
+                let pose = petunia_world::composed_transform(world, handle);
+                Some((id, pose.position))
             })?;
         let head = position + petunia_math::Vec3::new(0.0, height, 0.0);
         let back = forward * -1.0;
@@ -460,9 +562,13 @@ impl ScriptHost {
         }
     }
 
-    /// Loads every `.aipo` file and every `.graph.json` file of `directory` (not recursive). A file that does not compile is
-    /// reported and skipped; the rest still load.
-    pub fn load_directory(&mut self, directory: &Path) -> LoadReport {
+    /// Loads every file of `directory` (not recursive) that belongs to the project's programming
+    /// method: `.aipo` for `aipo`/`luau`, `.graph.json` for `nodes` (DR-40). A file that does not
+    /// compile is reported and skipped; the rest still load.
+    pub fn load_directory(&mut self, directory: &Path, programming_method: &str) -> LoadReport {
+        if programming_method == "nodes" {
+            return self.load_graphs_of_directory(directory);
+        }
         let mut report = LoadReport::default();
         let Ok(entries) = std::fs::read_dir(directory) else {
             return report;
@@ -505,6 +611,13 @@ impl ScriptHost {
                 )),
             }
         }
+        report
+    }
+
+    /// Loads every `.graph.json` of `directory`, for a pNodes project (DR-40). Used instead of the
+    /// `.aipo` scan: a pNodes project runs its graphs, not leftover scripts of the other method.
+    fn load_graphs_of_directory(&mut self, directory: &Path) -> LoadReport {
+        let mut report = LoadReport::default();
         for name in crate::graph::graph_names(directory) {
             let taken =
                 report.loaded.contains(&name) || report.failed.iter().any(|(n, _)| *n == name);
@@ -727,6 +840,17 @@ impl ScriptHost {
                     "on_event",
                     &[Value::string(event.name.clone())],
                 );
+            }
+        }
+        let after = crate::gameplay::health_points(&self.state.0.borrow().world);
+        let died = crate::gameplay::health_deaths(&self.health_points, &after);
+        self.health_points = after;
+        for entity in died {
+            for script in attached.get(&entity).cloned().unwrap_or_default() {
+                if self.disabled.contains(&(entity, script.clone())) {
+                    continue;
+                }
+                self.call_handler(entity, &script, "on_event", &[Value::string("died")]);
             }
         }
         self.deliver_contacts();

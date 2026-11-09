@@ -112,7 +112,8 @@ pub fn register_standard_tables(world: &mut World) -> Result<(), WorldError> {
             .column("position", ValueKind::Vec3, Value::Vec3(Vec3::ZERO))
             .column("rotation_degrees", ValueKind::Vec3, Value::Vec3(Vec3::ZERO))
             .column("scale", ValueKind::Vec3, Value::Vec3(Vec3::ONE))
-            .column("pivot", ValueKind::Vec3, Value::Vec3(Vec3::ZERO)),
+            .column("pivot", ValueKind::Vec3, Value::Vec3(Vec3::ZERO))
+            .column("parent", ValueKind::Int, Value::Int(0)),
     )?;
     world.define_table(
         TableSpec::new("Brush")
@@ -138,6 +139,40 @@ pub fn register_standard_tables(world: &mut World) -> Result<(), WorldError> {
                 Value::Color(Color::rgb(0.8, 0.8, 0.8)),
             ),
     )?;
+    // Imported skeletons and their clips (phase 4): the animation the engine plays.
+    // Vegetation rules (phase 5): a forest is a rule, not a thousand entities.
+    world.define_table(
+        TableSpec::new("FloraRule")
+            .column("species", ValueKind::Text, Value::Text(String::new()))
+            .column("spacing", ValueKind::Float, Value::Float(2.0))
+            .column("seed", ValueKind::Int, Value::Int(0))
+            .column("height_min", ValueKind::Float, Value::Float(-1000.0))
+            .column("height_max", ValueKind::Float, Value::Float(1000.0))
+            .column("max_slope", ValueKind::Float, Value::Float(90.0))
+            .column("scale_min", ValueKind::Float, Value::Float(1.0))
+            .column("scale_max", ValueKind::Float, Value::Float(1.0)),
+    )?;
+    world.define_table(
+        TableSpec::new("Skeleton")
+            .column("joints", ValueKind::Text, Value::Text(String::new()))
+            .column("joint_count", ValueKind::Int, Value::Int(0)),
+    )?;
+    world.define_table(
+        TableSpec::new("Clip")
+            .column("channels", ValueKind::Text, Value::Text(String::new()))
+            .column("duration", ValueKind::Float, Value::Float(0.0)),
+    )?;
+    world.define_table(TableSpec::new("SkeletonLink").column(
+        "skeleton",
+        ValueKind::Int,
+        Value::Int(0),
+    ))?;
+    world.define_table(
+        TableSpec::new("Skin")
+            .column("owner", ValueKind::Int, Value::Int(0))
+            .column("skeleton", ValueKind::Int, Value::Int(0))
+            .column("weights", ValueKind::Text, Value::Text(String::new())),
+    )?;
     // Visibility and locking from the outliner (QT-12): an object without a row is visible and
     // unlocked, so a scene written before this feature still opens and behaves as it did.
     world.define_table(
@@ -145,6 +180,17 @@ pub fn register_standard_tables(world: &mut World) -> Result<(), WorldError> {
             .column("owner", ValueKind::Int, Value::Int(0))
             .column("hidden", ValueKind::Bool, Value::Bool(false))
             .column("locked", ValueKind::Bool, Value::Bool(false)),
+    )?;
+    // Per-face colour (phase 2): an override of the object's colour, one row per painted face.
+    world.define_table(
+        TableSpec::new("FaceColor")
+            .column("owner", ValueKind::Int, Value::Int(0))
+            .column("face", ValueKind::Int, Value::Int(0))
+            .column(
+                "color",
+                ValueKind::Color,
+                Value::Color(Color::rgb(0.8, 0.8, 0.8)),
+            ),
     )?;
     world.define_table(
         TableSpec::new("Script")
@@ -183,6 +229,40 @@ pub fn register_standard_tables(world: &mut World) -> Result<(), WorldError> {
             .column("radius", ValueKind::Float, Value::Float(1.5))
             .column("smooth", ValueKind::Float, Value::Float(0.5))
             .column("strength", ValueKind::Float, Value::Float(0.0)),
+    )?;
+    world.define_table(
+        TableSpec::new("Shot")
+            .column("fov_degrees", ValueKind::Float, Value::Float(50.0))
+            .column("priority", ValueKind::Int, Value::Int(0))
+            .column(
+                "half_extents",
+                ValueKind::Vec3,
+                Value::Vec3(Vec3::new(6.0, 4.0, 6.0)),
+            )
+            .column("enabled", ValueKind::Bool, Value::Bool(true)),
+    )?;
+    world.define_table(
+        TableSpec::new("Camera")
+            .column("mode", ValueKind::Text, Value::Text("fixed".to_string()))
+            .column("distance", ValueKind::Float, Value::Float(4.5))
+            .column("height", ValueKind::Float, Value::Float(1.5))
+            .column("fov_degrees", ValueKind::Float, Value::Float(50.0))
+            .column("enabled", ValueKind::Bool, Value::Bool(true)),
+    )?;
+    world.define_table(
+        TableSpec::new("Interact")
+            .column("radius", ValueKind::Float, Value::Float(2.0))
+            .column(
+                "prompt",
+                ValueKind::Text,
+                Value::Text("Interagir".to_string()),
+            )
+            .column("enabled", ValueKind::Bool, Value::Bool(true)),
+    )?;
+    world.define_table(
+        TableSpec::new("Health")
+            .column("current", ValueKind::Float, Value::Float(100.0))
+            .column("maximum", ValueKind::Float, Value::Float(100.0)),
     )?;
     world.define_table(TableSpec::new("PlayerStart").column(
         "yaw_degrees",

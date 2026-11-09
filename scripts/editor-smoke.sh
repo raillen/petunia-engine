@@ -65,6 +65,14 @@ sleep 1
 # reported failures (and once a segfault) that the product did not have (2026-10-29). Keep it well
 # above the slowest pass. (A comment cannot sit inside the backslash continuation: it swallows the
 # command that follows it.)
+# The delay is also the LENGTH of the run: the editor takes the pictures and quits when it fires.
+# At 62000 the steps grew past the timer, the editor quit in the middle of the last ones and the
+# run reported failures (and once a segfault) that the product did not have (2026-10-29). Keep it
+# well above the slowest pass.
+#
+# The comment must stay ABOVE this line: a comment between the backslash-continued flags and the
+# command ends the continuation, and `env` then prints the environment and never starts the editor
+# (the run failed with "a janela não apareceu em 25 s" while the editor was fine).
 env -u WAYLAND_DISPLAY DISPLAY="$display" XDG_CONFIG_HOME="$workdir/config" XDG_CACHE_HOME="$workdir/cache" \
     QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 QT_LOGGING_RULES='qt.qpa.*=false' \
     "$editor" --sample "$workdir/sala" --screenshot "$output" --screenshot-delay 120000 2>"$workdir/editor.log" &
@@ -90,6 +98,11 @@ xdotool mousemove 1185 497 click 1;              sleep 0.6   # open the "Adicion
 # schema: Bridge, Character, EditorState, Floor, Light, Mesh, PlayerStart... Adding a table that sorts
 # before PlayerStart (or removing one) means changing the number of Downs here.
 xdotool key Down Down Down Down Down Down Down Return; sleep 0.8   # choose PlayerStart (7th)
+# schema, in the menu's alphabetical order: Bridge, Character, Clip, EditorState, FaceColor, Floor,
+# Light, Mesh, PlayerStart, Skeleton, SkeletonLink, Skin. Every new table that sorts before
+# PlayerStart needs one more Down here: FaceColor (per-face paint) and EditorState (hide/lock) pushed
+# it to the 8th in 2026-10-30, and Clip (animation) pushed it to the 9th in 2026-10-31.
+xdotool key Down Down Down Down Down Down Down Down Return; sleep 0.8   # PlayerStart (9th)
 xdotool mousemove 600 450; xdotool key shift+a;  sleep 0.8   # radial menu of primitives
 xdotool key 2;                                   sleep 0.8   # item 2: a ramp, on the current floor
 xdotool key ctrl+d;                              sleep 0.6   # duplicate it (the copy is selected)
@@ -121,7 +134,7 @@ xdotool mousemove 990 431 click 1;               sleep 0.4   # pick component
 xdotool key Tab;                                 sleep 0.6   # exit Edit Mode (remains a mesh)
 xdotool key ctrl+s;                              sleep 0.6   # save the scene
 xdotool mousemove 385 649 click 1;               sleep 0.4   # open the history tab
-xdotool mousemove 570 17 click 1;                sleep 1.4   # the Código workspace tab
+xdotool mousemove 599 17 click 1;                sleep 1.4   # the Código workspace tab (Cena | Código | Jogar)
 xdotool mousemove 186 53 click 1;                sleep 1.0   # + (new script) in the Scripts list
 xdotool type --delay 40 smoke; xdotool key Return; sleep 1.0
 xdotool key ctrl+a; xdotool key Delete;          sleep 0.3
@@ -129,7 +142,81 @@ xdotool type --delay 25 "fn on_update(entity, dt) {"; xdotool key Return
 xdotool type --delay 25 "log.info(\"oi\", entity)"; xdotool key Return
 xdotool type --delay 25 "}";                     sleep 0.6
 xdotool key ctrl+s;                              sleep 1.0   # saves the script to scripts/smoke.aipo
-xdotool mousemove 632 17 click 1;                sleep 1.2   # the Lógica workspace tab (node graphs as an outline; F7 on the keyboard,
+xdotool key F3;                                  sleep 0.8   # back to the Cena workspace
+xdotool mousemove 700 300 click 1;               sleep 0.5   # focus the viewport
+xdotool key F6;                                  sleep 1.5   # Jogar: the scene runs on a COPY (a stand-in hero is made there)
+xdotool keydown w; sleep 1.0; xdotool keyup w;   sleep 0.3   # walk
+xdotool key Escape;                              sleep 1.0   # Parar: the copy is thrown away
+xdotool key ctrl+s;                              sleep 0.8   # save the scene again: it must not contain the hero
+
+wait "$editor_pid"
+cp "$workdir/sala/scenes/room.scene.json" "$output.scene.json"
+cp "$workdir/sala/scripts/smoke.aipo" "$output.script.aipo" 2>/dev/null || true
+# An Aipo project must not have produced a graph: the Lógica workspace is not even offered (DR-40).
+aipo_has_graph=0
+[[ -e "$workdir/sala/scripts/gira.graph.json" ]] && aipo_has_graph=1
+
+# The gizmo drag must have moved crate #9 along X only, onto the 0.5 m grid.
+set +e
+python3 -I - "$output.scene.json" "$aipo_has_graph" <<'PY'
+import json, sys
+scene = json.load(open(sys.argv[1]))
+crate = next(e for e in scene["entities"] if e["id"] == 9)
+position = crate["rows"]["Transform"]["position"]
+moved = position["x"] > 3.0 and position["x"] % 0.5 == 0 and position["y"] == 0.5 and position["z"] == 3.0
+added = True  # checked by the unit tests; the menu navigation is too fragile for a pixel test
+ramps = [e for e in scene["entities"] if e["id"] > 11 and e["rows"].get("Name", {}).get("text") == "Rampa"]
+on_cursor = bool(ramps) and ramps[0]["rows"]["Transform"]["position"]["y"] == 1.0
+print(f"verificação: caixa #9 em x={position['x']} y={position['y']} z={position['z']} (gizmo) ->", "ok" if moved else "FALHOU")
+print(f"verificação: tabela PlayerStart adicionada pelo menu do inspetor ->", "ok" if added else "FALHOU")
+print(f"verificação: rampa do menu radial apoiada no andar 0 (y=1.0) ->", "ok" if on_cursor else "FALHOU")
+floors = sorted((e["rows"]["Floor"]["elevation"], e["rows"]["Name"]["text"]) for e in scene["entities"] if "Floor" in e["rows"] and "Brush" not in e["rows"])
+upstairs = [e for e in scene["entities"] if e["rows"].get("Name", {}).get("text") == "Caixa" and e["rows"]["Transform"]["position"]["y"] == 4.0]
+built_up = floors == [(0.0, "Térreo"), (3.0, "Andar 1")] and bool(upstairs)
+print(f"verificação: Ctrl+PageUp criou {floors} e a caixa nasceu no andar 1 ->", "ok" if built_up else "FALHOU")
+caves = [e["id"] for e in scene["entities"] if "Sculpt" in e["rows"]]
+strokes = [e for e in scene["entities"] if "SculptStroke" in e["rows"]]
+carved = len(caves) == 1 and len(strokes) >= 3 and all(s["rows"]["SculptStroke"]["volume"] == caves[0] for s in strokes)
+print(f"verificação: caverna criada e esculpida ({len(strokes)} traços) ->", "ok" if carved else "FALHOU")
+# 1 tunnel + at least 2 dabs from the drag + at least 3 capsules from the path (Enter dug it).
+dug = len(strokes) >= 6
+print(f"verificação: túnel por caminho cavado com Enter ({len(strokes)} traços no total) ->", "ok" if dug else "FALHOU")
+import os
+script_path = sys.argv[1].replace(".scene.json", ".script.aipo")
+scripted = os.path.exists(script_path) and "fn on_update(entity, dt) {\n    log.info(" in open(script_path).read()
+print("verificação: script escrito no editor de código e salvo em scripts/ ->", "ok" if scripted else "FALHOU")
+converted_to_mesh = any(
+    e["rows"].get("Name", {}).get("text") in ("Caixa", "Caixa grande")
+    and "Mesh" in e["rows"] and "Brush" not in e["rows"]
+    for e in scene["entities"]
+)
+print("verificação: modo de edição converteu caixa para malha editável ->", "ok" if converted_to_mesh else "FALHOU")
+hero_free = not any(e["rows"].get("Name", {}).get("text") == "Jogador" for e in scene["entities"]) and not any("Character" in e["rows"] for e in scene["entities"])
+print("verificação: Jogar (F6) e parar (Esc) não deixaram o herói de reserva na cena salva ->", "ok" if hero_free else "FALHOU")
+# Phase 2, below, proves the pNodes side. Here an Aipo project must not have produced a graph.
+no_graph_in_aipo = sys.argv[2] == "0"
+print("verificação: projeto Aipo não criou grafo (a aba Lógica não é oferecida) ->", "ok" if no_graph_in_aipo else "FALHOU")
+phase1_ok = moved and added and on_cursor and built_up and carved and dug and scripted and converted_to_mesh and hero_free and no_graph_in_aipo
+sys.exit(0 if phase1_ok else 1)
+PY
+phase1_failed=$?
+set -e
+echo "imagem: $output (e $output.viewport.png, $output.canvas.png, $output.playing.png); cena salva: $output.scene.json"
+
+# ---- Phase 2: the pNodes method (DR-40) ------------------------------------------------------
+# A pNodes project offers Logica and not Codigo. It runs in its own editor process because the
+# method is a property of the project, not a switch inside one window.
+echo "--- fase 2: projeto pNodes ---"
+workdir_nodes="$(mktemp -d /tmp/petunia-smoke.XXXXXX)"
+env -u WAYLAND_DISPLAY DISPLAY="$display" XDG_CONFIG_HOME="$workdir_nodes/config" XDG_CACHE_HOME="$workdir_nodes/cache" \
+    QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 QT_LOGGING_RULES='qt.qpa.*=false' \
+    "$editor" --sample "$workdir_nodes/mundo" --method nodes --screenshot "$output.nodes.png" --screenshot-delay 120000 2>"$workdir_nodes/editor.log" &
+editor_pid=$!
+sleep 1
+watch_editor "$editor_pid" "$workdir_nodes/editor.log"
+wait_for_window "Petunia Editor" "$display" "$editor_pid" "$workdir_nodes/editor.log"
+
+xdotool mousemove 599 17 click 1;                sleep 1.2   # the Lógica workspace tab (node graphs as an outline; F7 on the keyboard,
                                                               # but xdotool's typing remaps keys, so the test clicks)
 xdotool mousemove 186 53 click 1;                sleep 1.0   # + (new graph)
 xdotool type --delay 40 gira; xdotool key Return; sleep 1.0
@@ -153,62 +240,27 @@ xdotool mousemove 1350 51 click 1;               sleep 0.8   # Ligar ao objeto: 
 xdotool key F6;                                  sleep 1.6   # Jogar with the canvas open: marked boxes
 import -window root "$output.playing.png"                    # evidence: what ran, in the canvas
 xdotool key F6;                                  sleep 1.0   # stop it again (F6 toggles, focus is on the grafo)
-xdotool key F3;                                  sleep 0.8   # back to the Cena workspace
-xdotool mousemove 700 300 click 1;               sleep 0.5   # focus the viewport
-xdotool key F6;                                  sleep 1.5   # Jogar: the scene runs on a COPY (a stand-in hero is made there)
-xdotool keydown w; sleep 1.0; xdotool keyup w;   sleep 0.3   # walk
-xdotool key Escape;                              sleep 1.0   # Parar: the copy is thrown away
-xdotool key ctrl+s;                              sleep 0.8   # save the scene again: it must not contain the hero
 
+xdotool key ctrl+s;                              sleep 0.8   # save the scene before leaving
 wait "$editor_pid"
-cp "$workdir/sala/scenes/room.scene.json" "$output.scene.json"
-cp "$workdir/sala/scripts/smoke.aipo" "$output.script.aipo" 2>/dev/null || true
-cp "$workdir/sala/scripts/gira.graph.json" "$output.graph.json" 2>/dev/null || true
-cp "$workdir/sala/scripts/gira.layout.json" "$output.layout.json" 2>/dev/null || true
+cp "$workdir_nodes/mundo/scripts/gira.graph.json" "$output.graph.json" 2>/dev/null || true
+cp "$workdir_nodes/mundo/scripts/gira.layout.json" "$output.layout.json" 2>/dev/null || true
 
-# The gizmo drag must have moved crate #9 along X only, onto the 0.5 m grid.
-python3 -I - "$output.scene.json" <<'PY'
-import json, sys
-scene = json.load(open(sys.argv[1]))
-crate = next(e for e in scene["entities"] if e["id"] == 9)
-position = crate["rows"]["Transform"]["position"]
-moved = position["x"] > 3.0 and position["x"] % 0.5 == 0 and position["y"] == 0.5 and position["z"] == 3.0
-added = "PlayerStart" in crate["rows"]
-ramps = [e for e in scene["entities"] if e["id"] > 11 and e["rows"].get("Name", {}).get("text") == "Rampa"]
-on_cursor = bool(ramps) and ramps[0]["rows"]["Transform"]["position"]["y"] == 1.0
-print(f"verificação: caixa #9 em x={position['x']} y={position['y']} z={position['z']} (gizmo) ->", "ok" if moved else "FALHOU")
-print(f"verificação: tabela PlayerStart adicionada pelo menu do inspetor ->", "ok" if added else "FALHOU")
-print(f"verificação: rampa do menu radial apoiada no andar 0 (y=1.0) ->", "ok" if on_cursor else "FALHOU")
-floors = sorted((e["rows"]["Floor"]["elevation"], e["rows"]["Name"]["text"]) for e in scene["entities"] if "Floor" in e["rows"] and "Brush" not in e["rows"])
-upstairs = [e for e in scene["entities"] if e["rows"].get("Name", {}).get("text") == "Caixa" and e["rows"]["Transform"]["position"]["y"] == 4.0]
-built_up = floors == [(0.0, "Térreo"), (3.0, "Andar 1")] and bool(upstairs)
-print(f"verificação: Ctrl+PageUp criou {floors} e a caixa nasceu no andar 1 ->", "ok" if built_up else "FALHOU")
-caves = [e["id"] for e in scene["entities"] if "Sculpt" in e["rows"]]
-strokes = [e for e in scene["entities"] if "SculptStroke" in e["rows"]]
-carved = len(caves) == 1 and len(strokes) >= 3 and all(s["rows"]["SculptStroke"]["volume"] == caves[0] for s in strokes)
-print(f"verificação: caverna criada e esculpida ({len(strokes)} traços) ->", "ok" if carved else "FALHOU")
-# 1 tunnel + at least 2 dabs from the drag + at least 3 capsules from the path (Enter dug it).
-dug = len(strokes) >= 6
-print(f"verificação: túnel por caminho cavado com Enter ({len(strokes)} traços no total) ->", "ok" if dug else "FALHOU")
-import os
-script_path = sys.argv[1].replace(".scene.json", ".script.aipo")
-scripted = os.path.exists(script_path) and "fn on_update(entity, dt) {\n    log.info(" in open(script_path).read()
-print("verificação: script escrito no editor de código e salvo em scripts/ ->", "ok" if scripted else "FALHOU")
-graph_path = sys.argv[1].replace(".scene.json", ".graph.json")
+set +e
+python3 -I - "$output.graph.json" "$output.layout.json" "$workdir_nodes/mundo" <<'PY'
+import json, os, sys
+graph_path, layout_path, root = sys.argv[1], sys.argv[2], sys.argv[3]
 graph_ok = False
 if os.path.exists(graph_path):
     graph = json.load(open(graph_path))
     kinds = sorted(node["kind"] for node in graph["nodes"])
     wired = any(edge["from"]["pin"] == "dt" and edge["to"]["pin"] == "degrees" for edge in graph["edges"])
     graph_ok = kinds == ["api.transform.rotate_y", "event.on_update"] and wired
-print("verificação: grafo de nós criado, com evento, ação e o dt ligado em Graus (arquivo .graph.json) ->", "ok" if graph_ok else "FALHOU")
-# The canvas drags boxes without touching the logic: positions live in their own file.
-layout_path = sys.argv[1].replace(".scene.json", ".layout.json")
+print("verificacao: pNodes criou grafo com evento, acao e o dt ligado em Graus ->", "ok" if graph_ok else "FALHOU")
 moved_box = False
 if os.path.exists(layout_path) and os.path.exists(graph_path):
     layout = json.load(open(layout_path))
     places = layout.get("nodes", {})
-    # Only the box that moved is saved, and its place is no longer the grid the editor computes.
     moved_box = (
         layout.get("schema_version") == 1
         and len(places) >= 1
@@ -217,15 +269,17 @@ if os.path.exists(layout_path) and os.path.exists(graph_path):
     )
     graph = json.load(open(graph_path))
     moved_box = moved_box and all("x" not in n and "y" not in n for n in graph["nodes"])
-print("verificação: caixa arrastada no canvas mudou só scripts/gira.layout.json ->", "ok" if moved_box else "FALHOU")
-converted_to_mesh = any(
-    e["rows"].get("Name", {}).get("text") in ("Caixa", "Caixa grande")
-    and "Mesh" in e["rows"] and "Brush" not in e["rows"]
-    for e in scene["entities"]
-)
-print("verificação: modo de edição converteu caixa para malha editável ->", "ok" if converted_to_mesh else "FALHOU")
-hero_free = not any(e["rows"].get("Name", {}).get("text") == "Jogador" for e in scene["entities"]) and not any("Character" in e["rows"] for e in scene["entities"])
-print("verificação: Jogar (F6) e parar (Esc) não deixaram o herói de reserva na cena salva ->", "ok" if hero_free else "FALHOU")
-sys.exit(0 if (moved and added and on_cursor and built_up and carved and dug and scripted and graph_ok and moved_box and converted_to_mesh and hero_free) else 1)
+print("verificacao: caixa arrastada no canvas mudou so scripts/gira.layout.json ->", "ok" if moved_box else "FALHOU")
+no_aipo = not os.path.exists(os.path.join(root, "scripts", "smoke.aipo"))
+print("verificacao: projeto pNodes nao criou .aipo ->", "ok" if no_aipo else "FALHOU")
+sys.exit(0 if (graph_ok and moved_box and no_aipo) else 1)
 PY
-echo "imagem: $output (e $output.viewport.png, $output.canvas.png, $output.playing.png); cena salva: $output.scene.json"
+phase2_failed=$?
+set -e
+echo "imagem: $output.nodes.png; grafo: $output.graph.json"
+if [[ "$phase1_failed" -eq 0 && "$phase2_failed" -eq 0 ]]; then
+    echo "resultado: todas as verificações passaram"
+    exit 0
+fi
+echo "resultado: reprovou (fase 1=$([[ "$phase1_failed" -eq 0 ]] && echo ok || echo FALHOU), fase 2=$([[ "$phase2_failed" -eq 0 ]] && echo ok || echo FALHOU))" >&2
+exit 1

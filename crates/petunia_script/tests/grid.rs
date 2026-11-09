@@ -79,12 +79,13 @@ fn on_start(entity) {
     let celula = grid.from_world(grade, { "x": 2.4, "y": 0.0, "z": -1.2 })
     log.info("celula", celula["q"], celula["r"])
     let metros = grid.to_world(grade, { "q": 2, "r": -1 })
-    log.info("metros", metros["x"], metros["z"])
+    log.info("metros", metros.x, metros.z)
 }
 "#,
     );
     host.update(0.016);
-    assert!(host.take_faults().is_empty());
+    let faults = host.take_faults();
+    assert!(faults.is_empty(), "{faults:?}");
     let lines = lines(&mut host);
     assert!(lines.contains(&"sem caminho true".to_string()), "{lines:?}");
     assert!(lines.contains(&"celula 2 -1".to_string()), "{lines:?}");

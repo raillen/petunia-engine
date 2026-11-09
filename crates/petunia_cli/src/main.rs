@@ -98,7 +98,11 @@ fn command_check(args: &[String]) -> Result<ExitCode, String> {
     let outcome = petunia_project::load_project(&folder);
     let mut report = outcome.report;
     if let Some(project) = &outcome.project {
-        report.extend(petunia_script::project_diagnostics(&folder, &project.world));
+        report.extend(petunia_script::project_diagnostics(
+            &folder,
+            &project.world,
+            &project.manifest.programming_method,
+        ));
     }
     if args.iter().any(|argument| argument == "--json") {
         let text = serde_json::to_string_pretty(&report).map_err(|error| error.to_string())?;
@@ -152,6 +156,7 @@ fn command_run(args: &[String]) -> Result<ExitCode, String> {
         width: 1280,
         height: 720,
         scripts: Some(folder.join(petunia_script::SCRIPTS_DIRECTORY)),
+        programming_method: project.manifest.programming_method.clone(),
     };
     petunia_player::run(project.world, config).map_err(|error| error.to_string())?;
     Ok(ExitCode::SUCCESS)

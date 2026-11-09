@@ -5,12 +5,16 @@
 #include <QCheckBox>
 #include <QColorDialog>
 #include <QComboBox>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QGridLayout>
 #include <QHash>
 #include <QHBoxLayout>
+#include <QInputDialog>
 #include <QJsonArray>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QMenu>
 #include <QPushButton>
 #include <QScrollArea>
@@ -336,23 +340,17 @@ void InspectorPanel::rebuild(const QJsonObject& description) {
     }
 
     const QJsonArray addable = description.value("addable_tables").toArray();
+    addableTables_.clear();
+    for (const QJsonValue& name : addable) {
+        addableTables_ << name.toString();
+    }
     if (!addable.isEmpty()) {
         auto* add = new QPushButton(QStringLiteral("Adicionar tabela"));
         add->setProperty("role", QStringLiteral("addRow"));
         add->setIcon(PetuniaIcons::get(QStringLiteral("plus")));
         add->setAccessibleName(QStringLiteral("Adicionar uma tabela a este objeto"));
-        add->setToolTip(QStringLiteral("Dá ao objeto mais um conjunto de dados (por exemplo, um script)"));
-        auto* menu = new QMenu(add);
-        for (const QJsonValue& name : addable) {
-            const QString tableName = name.toString();
-            QAction* action = menu->addAction(PetuniaIcons::get(TableIcons::forTable(tableName)),
-                                              QStringLiteral("%1  (%2)").arg(TableIcons::displayName(tableName), tableName));
-            connect(action, &QAction::triggered, this, [this, tableName] {
-                runCommand(QStringLiteral("row.create"),
-                           QJsonObject{{"entity", static_cast<double>(entity_)}, {"table", tableName}});
-            });
-        }
-        add->setMenu(menu);
+        add->setToolTip(QStringLiteral("Busca uma tabela pelo nome e acrescenta neste objeto"));
+        connect(add, &QPushButton::clicked, this, &InspectorPanel::addTable);
         content_->addWidget(add);
     }
     // Named colliders (DR-27): each is its own entity, listed under the object in the hierarchy.
@@ -418,6 +416,21 @@ QWidget* InspectorPanel::makeSection(const QString& tableName, const QJsonArray&
     connect(remove, &QAction::triggered, this, [this, tableName] {
         runCommand(QStringLiteral("row.remove"), QJsonObject{{"entity", static_cast<double>(entity_)}, {"table", tableName}});
     });
+    if (tableName == QLatin1String("Character") || tableName == QLatin1String("Script")) {
+        QAction* editScript = menu->addAction(PetuniaIcons::get(QStringLiteral("script")), QStringLiteral("Editar script"));
+        connect(editScript, &QAction::triggered, this, [this, tableName] {
+            if (tableName == QLatin1String("Script")) {
+                for (const auto& field : fields_) {
+                    if (field->table == QLatin1String("Script") && field->column == QLatin1String("file") &&
+                        !field->current.toString().isEmpty()) {
+                        emit scriptOpenRequested(field->current.toString());
+                        return;
+                    }
+                }
+            }
+            attachScript();
+        });
+    }
     if (tableName == QLatin1String("Collider")) {
         // Removing the row would leave an empty entity: a collider is deleted as a whole.
         remove->setText(QStringLiteral("Excluir esta colisão"));
@@ -563,7 +576,11 @@ QWidget* InspectorPanel::makeEditor(const QString& table, const QJsonObject& col
             });
             field->show = [combo](const QJsonValue& value) {
                 const QSignalBlocker blocker(combo);
-                combo->setCurrentText(value.toString());
+                const QString text = value.toString();
+                if (combo->findText(text) < 0) {
+                    combo->addItem(text);
+                }
+                combo->setCurrentText(text);
             };
             return combo;
         }
@@ -671,6 +688,107 @@ void InspectorPanel::cancelValue() {
     }
     bridge_->call(QStringLiteral("gesture.cancel"));
     emit edited();
+}
+
+QString InspectorPanel::chooseName(const QString& title, const QStringList& names, const QString& empty) const {
+    QDialog dialog(const_cast<InspectorPanel*>(this));
+    dialog.setWindowTitle(title);
+    dialog.setAccessibleName(title);
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* search = new QLineEdit(&dialog);
+    search->setPlaceholderText(QStringLiteral("Buscar pelo nome"));
+    search->setAccessibleName(QStringLiteral("Buscar pelo nome"));
+    search->setClearButtonEnabled(true);
+    layout->addWidget(search);
+    auto* list = new QListWidget(&dialog);
+    list->setAccessibleName(title);
+    for (const QString& name : names) {
+        list->addItem(name);
+    }
+    if (names.isEmpty()) {
+        auto* note = new QListWidgetItem(empty);
+        note->setFlags(Qt::NoItemFlags);
+        list->addItem(note);
+    }
+    layout->addWidget(list);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("Escolher"));
+    buttons->button(QDialogButtonBox::Cancel)->setText(QStringLiteral("Cancelar"));
+    layout->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    connect(search, &QLineEdit::textChanged, list, [list](const QString& text) {
+        const QString needle = text.trimmed();
+        for (int row = 0; row < list->count(); ++row) {
+            QListWidgetItem* item = list->item(row);
+            const bool usable = item->flags().testFlag(Qt::ItemIsEnabled);
+            item->setHidden(usable && !needle.isEmpty() && !item->text().contains(needle, Qt::CaseInsensitive));
+        }
+    });
+    connect(list, &QListWidget::itemActivated, &dialog, &QDialog::accept);
+    search->setFocus();
+    if (dialog.exec() != QDialog::Accepted || list->currentItem() == nullptr ||
+        !list->currentItem()->flags().testFlag(Qt::ItemIsEnabled)) {
+        return {};
+    }
+    return list->currentItem()->text();
+}
+
+void InspectorPanel::addTable() {
+    QStringList labels;
+    QHash<QString, QString> tables;
+    for (const QString& table : addableTables_) {
+        const QString label = QStringLiteral("%1 (%2)").arg(TableIcons::displayName(table), table);
+        labels << label;
+        tables.insert(label, table);
+    }
+    const QString chosen = chooseName(QStringLiteral("Adicionar tabela"), labels, QStringLiteral("Nenhuma tabela disponível"));
+    if (chosen.isEmpty()) {
+        return;
+    }
+    const QString table = tables.value(chosen);
+    if (table == QLatin1String("Script")) {
+        attachScript();
+        return;
+    }
+    runCommand(QStringLiteral("row.create"), QJsonObject{{"entity", static_cast<double>(entity_)}, {"table", table}});
+}
+
+void InspectorPanel::attachScript() {
+    const Reply listed = bridge_->call(QStringLiteral("script.list"));
+    if (!listed.ok) {
+        emit editFailed(listed.explanation());
+        return;
+    }
+    QStringList names;
+    names << QStringLiteral("Novo script…");
+    for (const QJsonValue& value : listed.result.toObject().value(QStringLiteral("scripts")).toArray()) {
+        names << value.toObject().value(QStringLiteral("name")).toString();
+    }
+    const QString chosen = chooseName(QStringLiteral("Escolher script"), names, QStringLiteral("Nenhum script no projeto"));
+    if (chosen.isEmpty()) {
+        return;
+    }
+    QString name = chosen;
+    if (chosen == QLatin1String("Novo script…")) {
+        bool accepted = false;
+        name = QInputDialog::getText(this, QStringLiteral("Novo script"), QStringLiteral("Nome do script"), QLineEdit::Normal, QStringLiteral("teste"), &accepted).trimmed();
+        if (!accepted || name.isEmpty()) {
+            return;
+        }
+        const Reply created = bridge_->call(QStringLiteral("script.new"), QJsonObject{{"name", name}});
+        if (!created.ok) {
+            emit editFailed(created.explanation());
+            return;
+        }
+    }
+    const Reply attached = bridge_->call(QStringLiteral("script.attach"), QJsonObject{{"name", name}});
+    if (!attached.ok) {
+        emit editFailed(attached.explanation());
+        return;
+    }
+    emit edited();
+    emit scriptOpenRequested(name);
 }
 
 void InspectorPanel::runOperation(const QString& operation, const QJsonObject& fields) {

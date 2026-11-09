@@ -14,12 +14,12 @@ use petunia_world::{PersistentId, World};
 use serde_json::{Value as Json, json};
 
 use crate::api::CONTEXT_GLOBAL;
-use crate::convert::{display_text, json_to_value, value_to_json};
+use crate::convert::{display_text, value_to_json, vec3_from_script, vec3_value, world_to_script};
 
 /// The console keeps this many lines; older ones are dropped.
 const MAX_LOG_LINES: usize = 1000;
 /// A script queues at most this many events per call.
-const MAX_QUEUED_EVENTS: usize = 256;
+pub(crate) const MAX_QUEUED_EVENTS: usize = 256;
 /// A frame keeps this many debug marks; older ones are dropped (the newest frame wins).
 const MAX_DEBUG_EVENTS: usize = 256;
 
@@ -226,11 +226,7 @@ pub(crate) fn float_arg(args: &[Value], index: usize, operation: &str) -> Result
 }
 
 pub(crate) fn vec3_to_value(vector: Vec3) -> Value {
-    json_to_value(&json!({
-        "x": vector.x,
-        "y": vector.y,
-        "z": vector.z,
-    }))
+    vec3_value(vector)
 }
 
 pub(crate) fn read_transform(world: &World, entity: u64) -> Result<Transform, String> {
@@ -301,7 +297,7 @@ pub(crate) fn world_get(vm: &mut Vm, args: &[Value]) -> Native {
         return failure(format!("o objeto {entity} não existe"));
     };
     match state.world.get(handle, &table, &column) {
-        Ok(value) => Ok(json_to_value(&value.to_json())),
+        Ok(value) => Ok(world_to_script(value)),
         Err(error) => failure(error.to_string()),
     }
 }
@@ -321,10 +317,19 @@ pub(crate) fn world_row(vm: &mut Vm, args: &[Value]) -> Native {
     let Some(values) = snapshot.rows.get(&table) else {
         return failure(format!("o objeto {entity} não tem a tabela `{table}`"));
     };
-    match state.world.row_to_json(&table, values) {
-        Ok(row) => Ok(json_to_value(&Json::Object(row))),
-        Err(error) => failure(error.to_string()),
-    }
+    let spec = match state.world.table_spec(&table) {
+        Some(spec) => spec,
+        None => return failure(format!("a tabela `{table}` não existe")),
+    };
+    let entries = spec
+        .columns
+        .iter()
+        .zip(values.iter())
+        .map(|(column, value)| (Value::string(column.name.clone()), world_to_script(value)))
+        .collect();
+    Ok(Value::Dict(Rc::new(RefCell::new(
+        aipo_vm::DictMap::from_entries(entries),
+    ))))
 }
 
 pub(crate) fn world_has(vm: &mut Vm, args: &[Value]) -> Native {
@@ -518,9 +523,16 @@ pub(crate) fn log_error(vm: &mut Vm, args: &[Value]) -> Native {
 
 // ---- transform.* -----------------------------------------------------------------------------
 
+fn vec3_arg(args: &[Value], index: usize, operation: &str) -> Result<Vec3, VmError> {
+    let Some(value) = args.get(index) else {
+        return Err(internal("faltou o argumento"));
+    };
+    vec3_from_script(value).map_err(|_| wrong_type(&format!("Vec3 em {operation}"), value))
+}
+
 pub(crate) fn transform_get_position(vm: &mut Vm, args: &[Value]) -> Native {
-    let cell = context(vm, "world.read", "transform.get_position")?;
-    let entity = entity_arg(args, 0, "transform.get_position")?;
+    let cell = context(vm, "world.read", "transform.position")?;
+    let entity = entity_arg(args, 0, "transform.position")?;
     let state = cell.0.borrow();
     let Ok(handle) = state.world.handle_of(PersistentId(entity)) else {
         return failure(format!("o objeto {entity} não existe"));
@@ -535,9 +547,10 @@ pub(crate) fn transform_get_position(vm: &mut Vm, args: &[Value]) -> Native {
 pub(crate) fn transform_set_position(vm: &mut Vm, args: &[Value]) -> Native {
     let cell = context(vm, "world.write", "transform.set_position")?;
     let entity = entity_arg(args, 0, "transform.set_position")?;
-    let x = float_arg(args, 1, "transform.set_position")?;
-    let y = float_arg(args, 2, "transform.set_position")?;
-    let z = float_arg(args, 3, "transform.set_position")?;
+    let position = vec3_arg(args, 1, "transform.set_position")?;
+    let x = position.x;
+    let y = position.y;
+    let z = position.z;
     match run_command(
         &cell,
         "world.set",
@@ -556,9 +569,10 @@ pub(crate) fn transform_set_position(vm: &mut Vm, args: &[Value]) -> Native {
 pub(crate) fn transform_move(vm: &mut Vm, args: &[Value]) -> Native {
     let cell = context(vm, "world.write", "transform.move")?;
     let entity = entity_arg(args, 0, "transform.move")?;
-    let dx = float_arg(args, 1, "transform.move")?;
-    let dy = float_arg(args, 2, "transform.move")?;
-    let dz = float_arg(args, 3, "transform.move")?;
+    let offset = vec3_arg(args, 1, "transform.move")?;
+    let dx = offset.x;
+    let dy = offset.y;
+    let dz = offset.z;
     let current = {
         let state = cell.0.borrow();
         match read_transform(&state.world, entity) {
@@ -660,8 +674,8 @@ pub(crate) fn transform_move_z(vm: &mut Vm, args: &[Value]) -> Native {
 }
 
 pub(crate) fn transform_get_rotation(vm: &mut Vm, args: &[Value]) -> Native {
-    let cell = context(vm, "world.read", "transform.get_rotation")?;
-    let entity = entity_arg(args, 0, "transform.get_rotation")?;
+    let cell = context(vm, "world.read", "transform.rotation")?;
+    let entity = entity_arg(args, 0, "transform.rotation")?;
     let state = cell.0.borrow();
     let Ok(handle) = state.world.handle_of(PersistentId(entity)) else {
         return failure(format!("o objeto {entity} não existe"));
@@ -678,9 +692,10 @@ pub(crate) fn transform_get_rotation(vm: &mut Vm, args: &[Value]) -> Native {
 pub(crate) fn transform_set_rotation(vm: &mut Vm, args: &[Value]) -> Native {
     let cell = context(vm, "world.write", "transform.set_rotation")?;
     let entity = entity_arg(args, 0, "transform.set_rotation")?;
-    let x = float_arg(args, 1, "transform.set_rotation")?;
-    let y = float_arg(args, 2, "transform.set_rotation")?;
-    let z = float_arg(args, 3, "transform.set_rotation")?;
+    let rotation = vec3_arg(args, 1, "transform.set_rotation")?;
+    let x = rotation.x;
+    let y = rotation.y;
+    let z = rotation.z;
     match run_command(
         &cell,
         "world.set",
@@ -699,9 +714,10 @@ pub(crate) fn transform_set_rotation(vm: &mut Vm, args: &[Value]) -> Native {
 pub(crate) fn transform_rotate(vm: &mut Vm, args: &[Value]) -> Native {
     let cell = context(vm, "world.write", "transform.rotate")?;
     let entity = entity_arg(args, 0, "transform.rotate")?;
-    let dx = float_arg(args, 1, "transform.rotate")?;
-    let dy = float_arg(args, 2, "transform.rotate")?;
-    let dz = float_arg(args, 3, "transform.rotate")?;
+    let degrees = vec3_arg(args, 1, "transform.rotate")?;
+    let dx = degrees.x;
+    let dy = degrees.y;
+    let dz = degrees.z;
     let current = {
         let state = cell.0.borrow();
         match read_transform(&state.world, entity) {
@@ -803,8 +819,8 @@ pub(crate) fn transform_rotate_z(vm: &mut Vm, args: &[Value]) -> Native {
 }
 
 pub(crate) fn transform_get_scale(vm: &mut Vm, args: &[Value]) -> Native {
-    let cell = context(vm, "world.read", "transform.get_scale")?;
-    let entity = entity_arg(args, 0, "transform.get_scale")?;
+    let cell = context(vm, "world.read", "transform.scale")?;
+    let entity = entity_arg(args, 0, "transform.scale")?;
     let state = cell.0.borrow();
     let Ok(handle) = state.world.handle_of(PersistentId(entity)) else {
         return failure(format!("o objeto {entity} não existe"));
@@ -819,9 +835,10 @@ pub(crate) fn transform_get_scale(vm: &mut Vm, args: &[Value]) -> Native {
 pub(crate) fn transform_set_scale(vm: &mut Vm, args: &[Value]) -> Native {
     let cell = context(vm, "world.write", "transform.set_scale")?;
     let entity = entity_arg(args, 0, "transform.set_scale")?;
-    let x = float_arg(args, 1, "transform.set_scale")?;
-    let y = float_arg(args, 2, "transform.set_scale")?;
-    let z = float_arg(args, 3, "transform.set_scale")?;
+    let scale = vec3_arg(args, 1, "transform.set_scale")?;
+    let x = scale.x;
+    let y = scale.y;
+    let z = scale.z;
     match run_command(
         &cell,
         "world.set",
@@ -865,4 +882,78 @@ pub(crate) fn transform_up(vm: &mut Vm, args: &[Value]) -> Native {
         Ok(transform) => Ok(vec3_to_value(transform.up())),
         Err(err) => failure(err),
     }
+}
+
+pub(crate) fn interact_prompt(vm: &mut Vm, _args: &[Value]) -> Native {
+    let cell = context(vm, "world.read", "interact.prompt")?;
+    let offer = crate::gameplay::nearest_interact(&cell.0.borrow().world);
+    Ok(match offer {
+        Some(offer) => Value::string(offer.prompt),
+        None => Value::None,
+    })
+}
+
+pub(crate) fn health_current(vm: &mut Vm, args: &[Value]) -> Native {
+    let cell = context(vm, "world.read", "health.current")?;
+    let entity = entity_arg(args, 0, "health.current")?;
+    let state = cell.0.borrow();
+    match health_pair(&state.world, entity) {
+        Ok((current, _)) => Ok(Value::Float(current)),
+        Err(message) => failure(message),
+    }
+}
+
+pub(crate) fn health_damage(vm: &mut Vm, args: &[Value]) -> Native {
+    health_change(vm, args, "health.damage", -1.0)
+}
+
+pub(crate) fn health_heal(vm: &mut Vm, args: &[Value]) -> Native {
+    health_change(vm, args, "health.heal", 1.0)
+}
+
+fn health_change(vm: &mut Vm, args: &[Value], operation: &str, sign: f64) -> Native {
+    let cell = context(vm, "world.write", operation)?;
+    let entity = entity_arg(args, 0, operation)?;
+    let amount = f64::from(float_arg(args, 1, operation)?);
+    if amount < 0.0 {
+        return failure(format!("{operation} pede um número maior ou igual a zero"));
+    }
+    let (current, maximum) = {
+        let state = cell.0.borrow();
+        match health_pair(&state.world, entity) {
+            Ok(pair) => pair,
+            Err(message) => return failure(message),
+        }
+    };
+    let ceiling = if maximum.is_finite() && maximum > 0.0 {
+        maximum
+    } else {
+        current.max(0.0)
+    };
+    let next = (current + sign * amount).clamp(0.0, ceiling);
+    match run_command(
+        &cell,
+        "world.set",
+        json!({
+            "entity": entity,
+            "table": "Health",
+            "column": "current",
+            "value": next
+        }),
+    ) {
+        Ok(_) => Ok(Value::None),
+        Err(message) => failure(message),
+    }
+}
+
+fn health_pair(world: &World, entity: u64) -> Result<(f64, f64), String> {
+    let handle = world
+        .handle_of(PersistentId(entity))
+        .map_err(|_| format!("o objeto {entity} não existe"))?;
+    let number = |column: &str| match world.get(handle, "Health", column) {
+        Ok(petunia_world::Value::Float(value)) if value.is_finite() => Ok(*value),
+        Ok(_) => Err(format!("a coluna `{column}` de {entity} não é um número")),
+        Err(error) => Err(error.to_string()),
+    };
+    Ok((number("current")?, number("maximum")?))
 }

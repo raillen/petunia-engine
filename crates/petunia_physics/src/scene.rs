@@ -374,15 +374,7 @@ fn read_terrain_collider(
 }
 
 fn transform_of(world: &World, handle: EntityHandle) -> Transform {
-    let vector = |column: &str, fallback: Vec3| match world.get(handle, "Transform", column) {
-        Ok(Value::Vec3(value)) => *value,
-        _ => fallback,
-    };
-    Transform {
-        position: vector("position", Vec3::ZERO),
-        rotation_degrees: vector("rotation_degrees", Vec3::ZERO),
-        scale: vector("scale", Vec3::ONE),
-    }
+    petunia_world::composed_transform(world, handle)
 }
 
 fn float(world: &World, handle: EntityHandle, table: &str, column: &str) -> Result<f32, String> {

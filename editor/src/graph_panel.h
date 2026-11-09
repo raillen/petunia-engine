@@ -53,7 +53,6 @@ private:
     void refreshView();
     void renderView(const QJsonObject& view);
     void showCode();
-    void applyCode();
 
     void addEvent();
     void addAfter();
@@ -102,7 +101,6 @@ private:
     QToolButton* redoButton_;
     QToolButton* codeButton_;
     QToolButton* asScriptButton_;
-    QToolButton* applyCodeButton_ = nullptr;
     QToolButton* attachButton_;
     QToolButton* zoomOutButton_ = nullptr;
     QToolButton* zoomInButton_ = nullptr;

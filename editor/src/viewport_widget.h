@@ -71,6 +71,8 @@ signals:
     void playStopRequested();
     // What the scripts wrote and which handlers failed in the last frame.
     void playOutput(const QJsonArray& log, const QJsonArray& faults);
+    // The "press E to …" line, empty when nothing is in range.
+    void playPrompt(const QString& text);
 
 protected:
     void initializeGL() override;
@@ -155,5 +157,7 @@ private:
     QElapsedTimer playClock_;
     QSet<int> playKeys_;
     bool playJump_ = false;
+    bool playInteract_ = false;
+    QString playPrompt_;
     ComponentMode componentMode_ = ComponentMode::Face;
 };

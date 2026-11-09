@@ -3,15 +3,77 @@
 //! fits Aipo's safe range is an `Int`, anything else a `Float`.
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::rc::Rc;
 
-use aipo_vm::{DictMap, Value};
+use aipo_vm::{DictMap, StructInstance, Value};
+use petunia_math::{Color, Vec3};
+use petunia_world::Value as WorldValue;
 use serde_json::{Map, Number, Value as Json};
 
 /// Aipo's `Int` is exact up to this magnitude (2^53 - 1).
 const MAX_SAFE_INT: i64 = (1 << 53) - 1;
 /// Nesting deeper than this is refused: a script cannot build a value that overflows the stack.
 const MAX_DEPTH: usize = 16;
+
+/// A `Vec3` the script reads with `.x`, `.y` and `.z`. Field order matches the prelude struct.
+pub(crate) fn vec3_value(vector: Vec3) -> Value {
+    number_struct(
+        "Vec3",
+        &[
+            ("x", f64::from(vector.x)),
+            ("y", f64::from(vector.y)),
+            ("z", f64::from(vector.z)),
+        ],
+    )
+}
+
+/// A `Color` the script reads with `.r`, `.g`, `.b` and `.a`.
+pub(crate) fn color_value(color: Color) -> Value {
+    number_struct(
+        "Color",
+        &[
+            ("r", f64::from(color.r)),
+            ("g", f64::from(color.g)),
+            ("b", f64::from(color.b)),
+            ("a", f64::from(color.a)),
+        ],
+    )
+}
+
+/// What a script sees for one world cell. Vectors and colors stay structs; open values stay JSON.
+pub(crate) fn world_to_script(value: &WorldValue) -> Value {
+    match value {
+        WorldValue::Vec3(vector) => vec3_value(*vector),
+        WorldValue::Color(color) => color_value(*color),
+        other => json_to_value(&other.to_json()),
+    }
+}
+
+fn number_struct(type_name: &str, fields: &[(&str, f64)]) -> Value {
+    Value::Struct(Rc::new(RefCell::new(StructInstance {
+        type_name: type_name.to_string(),
+        fields: fields
+            .iter()
+            .map(|(name, number)| (name.to_string(), Value::Float(*number)))
+            .collect(),
+        fixed_fields: HashSet::new(),
+        under_construction: false,
+    })))
+}
+
+/// `Vec3` or `Color` from a script value. A dictionary with the same keys still works, because
+/// the graph compiler writes one.
+pub(crate) fn vec3_from_script(value: &Value) -> Result<Vec3, String> {
+    let json = value_to_json(value)?;
+    let axis = |name: &str| json.get(name).and_then(Json::as_f64);
+    match (axis("x"), axis("y"), axis("z")) {
+        (Some(x), Some(y), Some(z)) if x.is_finite() && y.is_finite() && z.is_finite() => {
+            Ok(Vec3::new(x as f32, y as f32, z as f32))
+        }
+        _ => Err("esperado um Vec3 com x, y e z finitos".to_string()),
+    }
+}
 
 pub(crate) fn json_to_value(json: &Json) -> Value {
     match json {
@@ -70,6 +132,20 @@ fn to_json(value: &Value, depth: usize) -> Result<Json, String> {
             }
             Json::Object(fields)
         }
+        Value::Struct(instance) => {
+            let instance = instance.borrow();
+            if instance.type_name != "Vec3" && instance.type_name != "Color" {
+                return Err(format!(
+                    "um valor `{}` não pode ir para o mundo; use Vec3, Color ou um dicionário",
+                    instance.type_name
+                ));
+            }
+            let mut fields = Map::new();
+            for (name, item) in &instance.fields {
+                fields.insert(name.clone(), to_json(item, depth + 1)?);
+            }
+            Json::Object(fields)
+        }
         other => {
             return Err(format!(
                 "um valor `{}` não pode ir para o mundo",
@@ -113,6 +189,18 @@ mod tests {
     fn the_extreme_integer_becomes_a_float_instead_of_panicking() {
         assert!(matches!(json_to_value(&json!(i64::MIN)), Value::Float(_)));
         assert!(matches!(json_to_value(&json!(i64::MAX)), Value::Float(_)));
+    }
+
+    #[test]
+    fn a_vec3_struct_round_trips_as_x_y_z() {
+        let value = vec3_value(Vec3::new(1.0, 2.0, 3.0));
+        assert!(matches!(value, Value::Struct(_)));
+        assert_eq!(
+            value_to_json(&value).expect("json"),
+            json!({ "x": 1.0, "y": 2.0, "z": 3.0 })
+        );
+        let back = vec3_from_script(&value).expect("vec3");
+        assert!((back.y - 2.0).abs() < 1e-5);
     }
 
     #[test]

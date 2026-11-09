@@ -244,6 +244,35 @@ impl Transform {
     pub fn up(&self) -> Vec3 {
         self.rotation_direction(Vec3::new(0.0, 1.0, 0.0))
     }
+
+    /// Rotates an offset by this transform. Unlike [`Self::rotation_direction`], the length is kept.
+    pub fn rotate_offset(self, offset: Vec3) -> Vec3 {
+        let (pitch, yaw, roll) = (
+            self.rotation_degrees.x.to_radians(),
+            self.rotation_degrees.y.to_radians(),
+            self.rotation_degrees.z.to_radians(),
+        );
+        rotate_y(rotate_x(rotate_z(offset, roll), pitch), yaw)
+    }
+
+    /// Places `local` in this transform's axes. Rotations add. A yaw of 90° sends a local +X
+    /// offset toward -Z, which is what a child object and a fixed camera expect.
+    pub fn compose(self, local: Self) -> Self {
+        let scaled = Vec3::new(
+            local.position.x * self.scale.x,
+            local.position.y * self.scale.y,
+            local.position.z * self.scale.z,
+        );
+        Self {
+            position: self.position + self.rotate_offset(scaled),
+            rotation_degrees: self.rotation_degrees + local.rotation_degrees,
+            scale: Vec3::new(
+                self.scale.x * local.scale.x,
+                self.scale.y * local.scale.y,
+                self.scale.z * local.scale.z,
+            ),
+        }
+    }
 }
 
 fn rotate_z(v: Vec3, angle: f32) -> Vec3 {
@@ -270,6 +299,23 @@ impl Default for Transform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_yaw_of_ninety_degrees_swings_a_child_offset_toward_negative_z() {
+        let parent = Transform {
+            position: Vec3::new(10.0, 0.0, 0.0),
+            rotation_degrees: Vec3::new(0.0, 90.0, 0.0),
+            scale: Vec3::ONE,
+        };
+        let child = Transform {
+            position: Vec3::new(2.0, 0.0, 0.0),
+            ..Transform::IDENTITY
+        };
+        let world = parent.compose(child);
+        assert!((world.position.x - 10.0).abs() < 0.001);
+        assert!((world.position.z + 2.0).abs() < 0.001);
+        assert!((world.rotation_degrees.y - 90.0).abs() < 0.001);
+    }
 
     #[test]
     fn cross_of_x_and_y_is_z() {

@@ -176,12 +176,50 @@ MainWindow::MainWindow() : bridge_(std::make_unique<EngineBridge>()) {
     // The canvas highlights what ran and answers "por que esta condição falhou?" while playing.
     // A UI timer rather than the viewport's frame loop: 200 ms is enough to read and cannot
     // compete with drawing.
+
+    // The animation clock (phase 4): the window drives time, the engine computes the pose. It runs
+    // only while something plays, so an idle editor does no work.
+    animationTimer_ = new QTimer(this);
+    animationTimer_->setInterval(16);
+    connect(animationTimer_, &QTimer::timeout, this, [this] {
+        if (!bridge_->hasProject()) {
+            return;
+        }
+        static qint64 last = 0;
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        const float seconds = last == 0 ? 0.016f : float(now - last) / 1000.0f;
+        last = now;
+        const Reply reply = perform(QStringLiteral("anim.advance"),
+                                    QJsonObject{{QStringLiteral("seconds"), double(seconds)}},
+                                    false);
+        if (!reply.ok) {
+            return;
+        }
+        // The clock keeps running while something moves: a clip, or rain falling. It stops only
+        // when both are idle, so a still scene does no work.
+        const QJsonObject weather = bridge_->snapshot().value(QStringLiteral("weather")).toObject();
+        const QString preset = weather.value(QStringLiteral("weather")).toString();
+        const bool raining = preset == QLatin1String("rain") || preset == QLatin1String("snow");
+        if (reply.result.toObject().value(QStringLiteral("playing")).toInt() == 0 && !raining) {
+            animationTimer_->stop();
+            last = 0;
+        }
+        viewport_->update();
+    });
+
     debugTimer_ = new QTimer(this);
     debugTimer_->setInterval(200);
     connect(debugTimer_, &QTimer::timeout, this, [this] {
         const Reply reply = bridge_->call(QStringLiteral("play.debug"));
         if (reply.ok) {
             graph_->showDebug(reply.result.toObject());
+        }
+    });
+    connect(viewport_, &ViewportWidget::playPrompt, this, [this](const QString& text) {
+        if (text.isEmpty()) {
+            statusBar()->clearMessage();
+        } else {
+            statusBar()->showMessage(QStringLiteral("E — %1").arg(text));
         }
     });
     connect(viewport_, &ViewportWidget::playOutput, this, [this](const QJsonArray& log, const QJsonArray& faults) {
@@ -243,6 +281,12 @@ MainWindow::MainWindow() : bridge_(std::make_unique<EngineBridge>()) {
     });
     connect(inspector_, &InspectorPanel::edited, this, [this] { bridge_->refresh(); });
     connect(inspector_, &InspectorPanel::previewed, viewport_, qOverload<>(&QWidget::update));
+    connect(inspector_, &InspectorPanel::scriptOpenRequested, this, [this](const QString& name) {
+        switchWorkspace(QStringLiteral("code"));
+        code_->reload();
+        code_->open(name);
+        code_->focusEditor();
+    });
     connect(inspector_, &InspectorPanel::editFailed, this, [this](const QString& text) {
         statusBar()->showMessage(text.section('\n', 0, 0), 8000);
     });
@@ -656,11 +700,17 @@ void MainWindow::buildActions() {
         }
     });
     connect(codeAction_, &QAction::triggered, this, [this] {
+        if (!codeAction_->isEnabled()) {
+            return;
+        }
         switchWorkspace(QStringLiteral("code"));
         code_->reload();
         code_->focusEditor();
     });
     connect(logicAction_, &QAction::triggered, this, [this] {
+        if (!logicAction_->isEnabled()) {
+            return;
+        }
         switchWorkspace(QStringLiteral("logic"));
         graph_->reload();
     });
@@ -839,6 +889,39 @@ void MainWindow::buildMenus() {
         tools->addAction(action);
     }
 
+    // Climate and vegetation (phases 4 and 5). The engine already scatters plants and steps rain;
+    // this menu is the door. Climate lasts for the session. A plant rule is a scene row, so Ctrl+Z
+    // removes it.
+    QMenu* world = menus_->addMenu(QStringLiteral("&Mundo"));
+    QMenu* climate = world->addMenu(QStringLiteral("Clima"));
+    auto* climateGroup = new QActionGroup(climate);
+    const QList<QPair<QString, QString>> climates = {
+        {QStringLiteral("clear"), QStringLiteral("Limpo")},
+        {QStringLiteral("cloudy"), QStringLiteral("Nublado")},
+        {QStringLiteral("rain"), QStringLiteral("Chuva")},
+        {QStringLiteral("fog"), QStringLiteral("Neblina")},
+        {QStringLiteral("snow"), QStringLiteral("Neve")},
+    };
+    for (const auto& [preset, label] : climates) {
+        QAction* action = climate->addAction(label);
+        action->setCheckable(true);
+        action->setData(preset);
+        climateGroup->addAction(action);
+        worldActions_.append(action);
+        connect(action, &QAction::triggered, this, [this, preset = preset] {
+            setClimate(preset);
+        });
+    }
+    QAction* hourAction = world->addAction(QStringLiteral("Hora do dia…"));
+    hourAction->setToolTip(QStringLiteral("0 é meia-noite, 12 é meio-dia. Vale nesta sessão."));
+    worldActions_.append(hourAction);
+    connect(hourAction, &QAction::triggered, this, &MainWindow::chooseHour);
+    QAction* plantAction = world->addAction(QStringLiteral("Plantar regra…"));
+    plantAction->setToolTip(
+        QStringLiteral("Espalha uma espécie no terreno. Ctrl+Z desfaz a regra."));
+    worldActions_.append(plantAction);
+    connect(plantAction, &QAction::triggered, this, &MainWindow::chooseFlora);
+
     QMenu* view = menus_->addMenu(QStringLiteral("E&xibir"));
     viewMenu_ = view;
     view->addAction(paletteAction_);
@@ -873,6 +956,41 @@ void MainWindow::buildMenus() {
             updateCameraLabel();
         });
     }
+    // How the viewport draws solid geometry (QT-09): solid, aramado or raio-X. A view mode, so it
+    // never touches the scene and never enters the undo history.
+    QMenu* shadingMenu = view->addMenu(QStringLiteral("Sombreamento"));
+    auto* shadingGroup = new QActionGroup(shadingMenu);
+    const QList<QPair<QString, QString>> shadingModes = {
+        {QStringLiteral("solid"), QStringLiteral("Sólido")},
+        {QStringLiteral("wireframe"), QStringLiteral("Aramado")},
+        {QStringLiteral("xray"), QStringLiteral("Raio-X (atravessa tudo)")},
+    };
+    for (const auto& [mode, label] : shadingModes) {
+        QAction* action = shadingMenu->addAction(label);
+        action->setCheckable(true);
+        action->setData(mode);
+        action->setChecked(mode == QLatin1String("solid"));
+        shadingGroup->addAction(action);
+        connect(action, &QAction::triggered, this, [this, mode = mode] {
+            if (perform(QStringLiteral("view.shading"), QJsonObject{{QStringLiteral("mode"), mode}},
+                        false)
+                    .ok) {
+                viewport_->update();
+            }
+        });
+    }
+    comfortAction_ = view->addAction(QStringLiteral("Conforto visual"));
+    comfortAction_->setCheckable(true);
+    comfortAction_->setToolTip(QStringLiteral(
+        "Reduz contraste, vinheta e granulação, e limita o brilho que sobe de um quadro para o outro."));
+    connect(comfortAction_, &QAction::triggered, this, [this](bool enabled) {
+        if (perform(QStringLiteral("view.comfort"),
+                    QJsonObject{{QStringLiteral("enabled"), enabled}}, false)
+                .ok) {
+            viewport_->update();
+        }
+    });
+
     QMenu* aboveMenu = view->addMenu(QStringLiteral("Objetos acima do andar"));
     auto* aboveGroup = new QActionGroup(this);
     const QList<QPair<QString, QString>> aboveModes = {
@@ -1141,6 +1259,10 @@ void MainWindow::buildToolPalette() {
         }
         auto* tool = new QToolButton(palette);
         tool->setDefaultAction(toolActions_[index]);
+        if (index == 4 || index == 5) {
+            editOnlyTools_.append(tool);
+            tool->hide();
+        }
         tool->setProperty("role", QStringLiteral("appTool"));
         tool->setIconSize(QSize(16, 16));
         tool->setFixedSize(28, 28);
@@ -1786,6 +1908,25 @@ void MainWindow::buildDocks() {
     tabifyDockWidget(diagnosticsDock, historyDock);
     diagnosticsDock->raise();
 
+    // Animation (phase 4): choose a clip for the selected object, or stop it.
+    animationAction_ = new QAction(QStringLiteral("Tocar animação…"), this);
+    animationAction_->setToolTip(
+        QStringLiteral("Escolhe um clipe importado e toca neste objeto"));
+    connect(animationAction_, &QAction::triggered, this, &MainWindow::chooseAnimation);
+    stopAnimationAction_ = new QAction(QStringLiteral("Parar animação"), this);
+    stopAnimationAction_->setToolTip(QStringLiteral("Volta o objeto à pose de repouso"));
+    connect(stopAnimationAction_, &QAction::triggered, this, [this] {
+        const quint64 entity = bridge_->selection();
+        if (entity == 0) {
+            return;
+        }
+        if (perform(QStringLiteral("anim.stop"),
+                    QJsonObject{{QStringLiteral("entity"), static_cast<double>(entity)}}, false)
+                .ok) {
+            viewport_->update();
+        }
+    });
+
     auto* createMenu = new QMenu(hierarchy_);
     for (QAction* action : shapeActions_) {
         createMenu->addAction(action);
@@ -1796,6 +1937,9 @@ void MainWindow::buildDocks() {
     }
     createMenu->addMenu(projectPrefabsMenu_);
     createMenu->addAction(savePrefabAction_);
+    createMenu->addSeparator();
+    createMenu->addAction(animationAction_);
+    createMenu->addAction(stopAnimationAction_);
     createMenu->addSeparator();
     createMenu->addAction(terrainAction_);
     createMenu->addAction(caveAction_);
@@ -1870,7 +2014,8 @@ bool MainWindow::openProjectAt(const QString& path, bool interactive) {
     return reply.ok;
 }
 
-bool MainWindow::createSampleAt(const QString& path, const QString& name, bool interactive) {
+bool MainWindow::createSampleAt(const QString& path, const QString& name, bool interactive,
+                                const QString& method) {
     if (viewport_ != nullptr) {
         viewport_->cancelActiveEdit();
     }
@@ -1880,7 +2025,9 @@ bool MainWindow::createSampleAt(const QString& path, const QString& name, bool i
     if (interactive && !confirmDiscardChanges()) {
         return false;
     }
-    const Reply reply = perform(QStringLiteral("project.new_sample"), QJsonObject{{"path", path}, {"name", name}}, interactive);
+    const Reply reply = perform(QStringLiteral("project.new_sample"),
+                                QJsonObject{{"path", path}, {"name", name}, {"method", method}},
+                                interactive);
     if (reply.ok) {
         statusBar()->showMessage(QStringLiteral("Projeto de exemplo criado em %1.").arg(path), 6000);
     }
@@ -1907,7 +2054,21 @@ void MainWindow::chooseNewSample() {
     if (!accepted || name.isEmpty()) {
         return;
     }
-    createSampleAt(parent + QLatin1Char('/') + name, name, true);
+    // One programming method per project, chosen now and kept to the end (DR-40).
+    const QStringList labels{QStringLiteral("Aipo (texto)"), QStringLiteral("pNodes (nós)"),
+                             QStringLiteral("Luau (planejado)")};
+    const QStringList values{QStringLiteral("aipo"), QStringLiteral("nodes"), QStringLiteral("luau")};
+    bool picked = false;
+    const QString label = QInputDialog::getItem(
+        this, QStringLiteral("Como programar este projeto?"),
+        QStringLiteral("Escolha o método. A aba do outro método não aparece; "
+                       "para trocar depois, edite `programming_method` no manifesto."),
+        labels, 0, false, &picked);
+    if (!picked) {
+        return;
+    }
+    const QString method = values.value(labels.indexOf(label), QStringLiteral("aipo"));
+    createSampleAt(parent + QLatin1Char('/') + name, name, true, method);
 }
 
 void MainWindow::chooseImportModel() {
@@ -2111,6 +2272,23 @@ void MainWindow::onSnapshot() {
                                    : QStringLiteral("Nenhum projeto"));
     projectLabel_->setToolTip(project && info.value("dirty").toBool() ? QStringLiteral("Alterações não salvas (Ctrl+S salva)") : QString());
 
+    // One programming method per project (DR-40): the workspace of the other method is not
+    // offered at all, so nothing in the window suggests a second way to program.
+    const QString method = info.value(QStringLiteral("programming_method")).toString();
+    const bool nodes = method == QLatin1String("nodes");
+    workspaces_->setItemVisible(QStringLiteral("logic"), project && nodes);
+    workspaces_->setItemVisible(QStringLiteral("code"), project && !nodes);
+    codeAction_->setEnabled(project && !nodes);
+    logicAction_->setEnabled(project && nodes);
+    workspaces_->setGroupLabel(nodes ? QStringLiteral("Workspaces · pNodes")
+                                     : QStringLiteral("Workspaces"));
+    // A project opened on the other method leaves the window on a hidden workspace; go back to the
+    // scene instead of showing a page the bar no longer offers.
+    if (project && ((nodes && workspace_ == QLatin1String("code"))
+                    || (!nodes && workspace_ == QLatin1String("logic")))) {
+        switchWorkspace(QStringLiteral("scene"));
+    }
+
     saveAction_->setEnabled(project);
     openSceneAction_->setEnabled(project);
     newSceneAction_->setEnabled(project);
@@ -2128,6 +2306,21 @@ void MainWindow::onSnapshot() {
     }
     savePrefabAction_->setEnabled(project && snapshot.value("selection").isDouble());
     projectPrefabsMenu_->setEnabled(project);
+    animationAction_->setEnabled(project && selected);
+    stopAnimationAction_->setEnabled(project);
+    const QString climate = snapshot.value(QStringLiteral("weather")).toObject()
+                                .value(QStringLiteral("weather")).toString();
+    for (QAction* action : std::as_const(worldActions_)) {
+        action->setEnabled(project);
+        if (action->isCheckable()) {
+            action->setChecked(action->data().toString() == climate);
+        }
+    }
+    if (comfortAction_ != nullptr) {
+        comfortAction_->blockSignals(true);
+        comfortAction_->setChecked(snapshot.value(QStringLiteral("comfort")).toBool());
+        comfortAction_->blockSignals(false);
+    }
     sculptRadius_ = snapshot.value("sculpt").toObject().value(QStringLiteral("radius")).toDouble(sculptRadius_);
     syncSculptBar(snapshot);
     syncNaturalBar(snapshot);
@@ -2168,6 +2361,16 @@ void MainWindow::onSnapshot() {
     for (QAction* action : {duplicateAction_, deleteAction_, focusAction_, clearSelectionAction_}) {
         action->setEnabled(selected);
     }
+    // Rain and snow need a clock even with nothing playing (phase 5).
+    if (project && animationTimer_ != nullptr && !animationTimer_->isActive()) {
+        const QString preset = info.value(QStringLiteral("weather")).toObject()
+                                   .value(QStringLiteral("weather"))
+                                   .toString();
+        if (preset == QLatin1String("rain") || preset == QLatin1String("snow")) {
+            animationTimer_->start();
+        }
+    }
+
     if (!selected && viewport_->isEditMode()) {
         viewport_->setEditMode(false);
         bridge_->call(QStringLiteral("mesh.edit_mode"), QJsonObject{{QStringLiteral("active"), false}});
@@ -3004,6 +3207,15 @@ void MainWindow::syncEditMode() {
     if (booleanAction_ != nullptr) {
         booleanAction_->setEnabled(bridge_->hasSelection());
     }
+    if (toolActions_[4] != nullptr) {
+        toolActions_[4]->setEnabled(inEdit);
+    }
+    if (toolActions_[5] != nullptr) {
+        toolActions_[5]->setEnabled(inEdit);
+    }
+    for (QWidget* tool : std::as_const(editOnlyTools_)) {
+        tool->setVisible(inEdit);
+    }
 }
 
 void MainWindow::showAbout() {
@@ -3043,4 +3255,141 @@ void MainWindow::captureAndQuit(const QString& path, int delayMilliseconds) {
         fprintf(stderr, "screenshot: janela=%s viewport=%s\n", window ? "ok" : "falhou", view ? "ok" : "falhou");
         QApplication::exit(window && view ? 0 : 3);
     });
+}
+
+void MainWindow::startWorldClock() {
+    if (animationTimer_ != nullptr && !animationTimer_->isActive()) {
+        animationTimer_->start();
+    }
+}
+
+void MainWindow::setClimate(const QString& preset) {
+    const double hours = bridge_->snapshot().value(QStringLiteral("weather")).toObject()
+                             .value(QStringLiteral("hours")).toDouble(13.0);
+    const Reply reply = perform(
+        QStringLiteral("weather.set"),
+        QJsonObject{{QStringLiteral("hours"), hours}, {QStringLiteral("weather"), preset}},
+        false);
+    if (!reply.ok) {
+        return;
+    }
+    const bool falling = preset == QLatin1String("rain") || preset == QLatin1String("snow");
+    if (falling) {
+        startWorldClock();
+    }
+    viewport_->update();
+    statusBar()->showMessage(
+        falling ? QStringLiteral("Clima desta sessão: queda ligada.")
+                : QStringLiteral("Clima desta sessão atualizado."),
+        4000);
+}
+
+void MainWindow::chooseHour() {
+    const QJsonObject weather = bridge_->snapshot().value(QStringLiteral("weather")).toObject();
+    const double current = weather.value(QStringLiteral("hours")).toDouble(13.0);
+    bool accepted = false;
+    const double hours = QInputDialog::getDouble(
+        this, QStringLiteral("Hora do dia"),
+        QStringLiteral("Hora (0 = meia-noite, 12 = meio-dia):"), current, 0.0, 24.0, 1, &accepted);
+    if (!accepted) {
+        return;
+    }
+    const QString preset = weather.value(QStringLiteral("weather")).toString(QStringLiteral("clear"));
+    if (perform(QStringLiteral("weather.set"),
+                QJsonObject{{QStringLiteral("hours"), hours}, {QStringLiteral("weather"), preset}},
+                false)
+            .ok) {
+        viewport_->update();
+        statusBar()->showMessage(
+            QStringLiteral("Hora desta sessão: %1.").arg(hours, 0, 'f', 1), 4000);
+    }
+}
+
+void MainWindow::chooseFlora() {
+    bool accepted = false;
+    const QString species = QInputDialog::getText(
+        this, QStringLiteral("Plantar regra"), QStringLiteral("Espécie:"), QLineEdit::Normal,
+        QStringLiteral("grama"), &accepted);
+    if (!accepted || species.trimmed().isEmpty()) {
+        return;
+    }
+    const double spacing = QInputDialog::getDouble(
+        this, QStringLiteral("Plantar regra"),
+        QStringLiteral("Espaçamento em metros (menor espalha mais):"), 2.0, 0.25, 64.0, 2,
+        &accepted);
+    if (!accepted) {
+        return;
+    }
+    const Reply added = perform(
+        QStringLiteral("flora.add"),
+        QJsonObject{{QStringLiteral("species"), species.trimmed()},
+                    {QStringLiteral("spacing"), spacing},
+                    {QStringLiteral("seed"), 1}},
+        true);
+    if (!added.ok) {
+        return;
+    }
+    const Reply counted = bridge_->call(QStringLiteral("flora.count"));
+    const int plants = counted.ok ? counted.result.toObject().value(QStringLiteral("plants")).toInt() : 0;
+    const bool truncated = counted.ok && counted.result.toObject().value(QStringLiteral("truncated")).toBool();
+    statusBar()->showMessage(
+        truncated ? QStringLiteral("Regra gravada. O terreno encheu o orçamento de plantas.")
+                  : QStringLiteral("Regra gravada: %1 planta(s) no terreno. Ctrl+Z desfaz.").arg(plants),
+        8000);
+    viewport_->update();
+}
+
+void MainWindow::chooseAnimation() {
+    const quint64 entity = bridge_->selection();
+    if (entity == 0) {
+        statusBar()->showMessage(QStringLiteral("Escolha um objeto primeiro."), 5000);
+        return;
+    }
+    const Reply listed = bridge_->call(QStringLiteral("anim.list"));
+    if (!listed.ok) {
+        statusBar()->showMessage(listed.explanation(), 8000);
+        return;
+    }
+    const QJsonArray clips = listed.result.toObject().value(QStringLiteral("clips")).toArray();
+    if (clips.isEmpty()) {
+        statusBar()->showMessage(
+            QStringLiteral("Este projeto não tem clipes. Importe um modelo animado (.glb)."), 8000);
+        return;
+    }
+    QStringList labels;
+    QList<quint64> ids;
+    for (const QJsonValue& value : clips) {
+        const QJsonObject clip = value.toObject();
+        const double duration = clip.value(QStringLiteral("duration")).toDouble();
+        labels << QStringLiteral("%1 — %2 s")
+                      .arg(clip.value(QStringLiteral("name")).toString())
+                      .arg(duration, 0, 'f', 2);
+        ids << static_cast<quint64>(clip.value(QStringLiteral("id")).toDouble());
+    }
+    bool accepted = false;
+    const QString chosen = QInputDialog::getItem(
+        this, QStringLiteral("Tocar animação"), QStringLiteral("Clipe:"), labels, 0, false,
+        &accepted);
+    if (!accepted) {
+        return;
+    }
+    const int index = labels.indexOf(chosen);
+    if (index < 0 || index >= ids.size()) {
+        return;
+    }
+    const Reply played = perform(
+        QStringLiteral("anim.play"),
+        QJsonObject{{QStringLiteral("entity"), static_cast<double>(entity)},
+                    {QStringLiteral("clip"), static_cast<double>(ids.at(index))},
+                    {QStringLiteral("start"), 0.0},
+                    {QStringLiteral("speed"), 1.0},
+                    {QStringLiteral("loop"), true}},
+        false);
+    if (played.ok) {
+        statusBar()->showMessage(QStringLiteral("Animação tocando (laço)."), 4000);
+        startWorldClock();
+        viewport_->update();
+    } else {
+        statusBar()->showMessage(played.explanation(), 8000);
+    }
 }

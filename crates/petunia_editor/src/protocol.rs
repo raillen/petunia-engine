@@ -172,7 +172,11 @@ impl EditorSession {
             "project.new_sample" => {
                 let path = text(request, "path")?;
                 let name = text(request, "name").unwrap_or("Meu projeto");
-                self.new_sample_project(Path::new(path), name)
+                let method = request
+                    .get("method")
+                    .and_then(Json::as_str)
+                    .unwrap_or("aipo");
+                self.new_sample_project(Path::new(path), name, method)
             }
             "project.open" => self.open_project(Path::new(text(request, "path")?)),
             "project.save" => self.save(),
@@ -483,6 +487,48 @@ impl EditorSession {
             }
             "collider.handle_end" => self.collider_handle_end(),
             "collider.handle_cancel" => self.collider_handle_cancel(),
+            "view.shading" => self.set_shading(text(request, "mode")?),
+            "view.comfort" => Ok(self.set_comfort(
+                request
+                    .get("enabled")
+                    .and_then(Json::as_bool)
+                    .unwrap_or(true),
+            )),
+            "transform.set_parent" => self.set_parent(
+                entity(request)?,
+                request.get("parent").and_then(Json::as_u64).unwrap_or(0),
+            ),
+            "transform.clear_parent" => self.clear_parent(entity(request)?),
+            "shot.add" => self.add_shot(
+                entity(request)?,
+                request.get("priority").and_then(Json::as_i64).unwrap_or(0),
+            ),
+            "shot.list" => self.list_shots(),
+            "flora.add" => self.flora_add(
+                text(request, "species")?,
+                number_or(request, "spacing", 2.0),
+                request.get("seed").and_then(Json::as_u64).unwrap_or(0),
+            ),
+            "flora.list" => self.flora_list(),
+            "flora.count" => self.flora_count(),
+            "weather.set" => self.weather_set(
+                number_or(request, "hours", 13.0),
+                request
+                    .get("weather")
+                    .and_then(Json::as_str)
+                    .unwrap_or("clear"),
+            ),
+            "weather.get" => Ok(self.weather_get()),
+            "anim.list" => self.animation_list(),
+            "anim.play" => self.animation_play(
+                entity(request)?,
+                request.get("clip").and_then(Json::as_u64).unwrap_or(0),
+                number_or(request, "start", 0.0),
+                number_or(request, "speed", 1.0),
+                request.get("loop").and_then(Json::as_bool).unwrap_or(true),
+            ),
+            "anim.stop" => self.animation_stop(request.get("entity").and_then(Json::as_u64)),
+            "anim.advance" => self.animation_advance(number_or(request, "seconds", 0.0)),
             "asset.list" => self.asset_list(),
             "asset.import" => self.asset_import(text(request, "path")?),
             "create.light" => self.create_light(
@@ -499,6 +545,10 @@ impl EditorSession {
                 number_or(request, "forward", 0.0),
                 number_or(request, "right", 0.0),
                 request.get("jump").and_then(Json::as_bool).unwrap_or(false),
+                request
+                    .get("interact")
+                    .and_then(Json::as_bool)
+                    .unwrap_or(false),
                 (
                     number_or(request, "look_x", 0.0),
                     number_or(request, "look_y", 0.0),

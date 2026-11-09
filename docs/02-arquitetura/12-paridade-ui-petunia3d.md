@@ -6,7 +6,13 @@
 
 **Atualização (2026-10-25):** o trilho à esquerda saiu; as ferramentas e as primitivas estão numa coluna dentro do viewport. Vieram do Petunia3D também o controle segmentado e a ideia da paleta de comandos ([design](15-design-da-interface.md)) ([DR-26](../06-decisoes/registro-de-decisoes.md), [layout](11-editor.md#layout-da-janela)). As linhas abaixo que falam do trilho valem para essa barra.
 
-Da lista de decisões de interface do Petunia3D (`QT-00` a `QT-16`, 20 linhas), esta etapa trouxe a **base visual e de entrada**: tema, ícones, campos numéricos e XYZ, trilho de ferramentas, gizmo, snap e vistas. Das **20 linhas** da lista: 7 feitas, 6 parciais, 4 planejadas e 3 fora de escopo.
+Da lista de decisões de interface do Petunia3D (`QT-00` a `QT-16`, 20 linhas), esta etapa trouxe a **base visual e de entrada**: tema, ícones, campos numéricos e XYZ, trilho de ferramentas, gizmo, snap e vistas. Das **20 linhas** da lista: **10 feitas, 7 parciais, 0 planejadas e 3 fora de escopo** (recontado em 2026-10-31).
+
+**Por que não há "1 para 1":** três linhas são **fora de escopo por decisão registrada** — QT-03
+(cursor 3D, retirado a seu pedido), QT-04 (Poly Pen) e QT-10 (operador e perfil de desenho), os dois
+últimos de **modelagem de malha**, que esta engine faz pelo workspace de malha e não pelo outliner.
+"1 para 1" com o Petunia3D incluiria copiar o editor de modelagem inteiro, o que o `DR-22` recusou.
+As parciais restantes estão listadas com o que falta, uma por uma.
 
 O que **não** vem é o que só existe por causa da modelagem de malha (Poly Pen, perfis de desenho, loop cut). Isso fica para a [edição de malha](13-primitivas-e-edicao-de-malha.md), se você aprovar.
 
@@ -27,7 +33,7 @@ Estados: **Feito** (rodou e foi visto), **Parcial**, **Planejado** (viável, ain
 | Item do Petunia3D | Estado | Na engine |
 |---|---|---|
 | QT-00 · Transforms em linha única, tags de eixo coloridas | **Feito** | `PetuniaVector3Field`: X vermelho, Y verde, Z azul, **sempre com a letra** (a cor não é o único sinal) |
-| QT-00 · Botões sem caixas duras | **Parcial** | Tema do Petunia3D aplicado; os botões da barra ainda têm borda fina |
+| QT-00 · Botões sem caixas duras | **Parcial** | Tema do Petunia3D aplicado; os botões da barra ainda têm borda fina (**decisão de gosto, não trabalho pendente**) |
 | QT-00 · Barra inferior contextual dinâmica | **Planejado** | Depende de ter operações por contexto (face, aresta) |
 | QT-00 · Densidade compacta do Outliner | **Feito** | Densidade **Compacta por padrão** (campos e ícones menores: 16 px na barra, 18 px no trilho); Padrão e Confortável no menu |
 | QT-00 · Barra superior unificada (menus, abas, busca) | **Planejado** | Hoje: menu + barra de ações |
@@ -36,15 +42,15 @@ Estados: **Feito** (rodou e foi visto), **Parcial**, **Planejado** (viável, ain
 | QT-03 · Cursor 3D | **Fora** | Retirado a seu pedido: o **pivô por objeto**, editável e sempre visível, cobre o caso |
 | QT-04 · Poly Pen em vistas ortográficas | **Fora** | Modelagem de malha |
 | QT-05, QT-06 · Pivô e cursor no inspetor | **Feito** | Pivô **por objeto** (`Transform.pivot`, no inspetor), modo **Editar pivô** (`Alt+P`), marcador sempre visível; políticas centro da caixa e base |
-| QT-07 · Docas e janelas flutuantes | **Parcial** | Docas do Qt (arrastar, abas, flutuar). Falta testar e guardar o layout versionado |
+| QT-07 · Docas e janelas flutuantes | **Parcial** | Docas do Qt (arrastar, abas, flutuar) com o arranjo guardado **por workspace** em `QSettings`. Falta um layout nomeado, versionado em arquivo |
 | QT-08 · Primitivas num menu do trilho | **Feito** | Caixa, rampa, cilindro, cone, esfera e escada |
-| QT-09 · Sombreamento na barra do viewport | **Parcial** | Snap, eixos e pivô na barra; vistas no cubo. Faltam aramado e raio-X |
+| QT-09 · Sombreamento na barra do viewport | **Feito** (2026-10-31) | Snap, eixos e pivô na barra; vistas no cubo; **Sólido · Aramado · Raio-X** no menu **Exibir › Sombreamento** (`view.shading`), como modo de visão: muda o quadro, nunca a cena nem o desfazer |
 | QT-10 · Operador e perfil de desenho | **Fora** | Modelagem |
 | QT-11 · Cena vazia | **Parcial** | O mundo aceita zero objetos; não testei apagar tudo na interface |
-| QT-12 · Outliner: ocultar, travar, solo, cor, multisseleção, arrastar | **Parcial** | Há lista e filtro; faltam os demais |
-| QT-13 · Seletor Persp · Orto · 2:1 | **Planejado** | A câmera ortográfica ainda não existe |
+| QT-12 · Outliner: ocultar, travar, solo, cor, multisseleção, arrastar | **Parcial** (2026-10-31) | Lista, filtro, **ocultar**, **travar** (não selecionável) e **ver só este** por linha e por menu de contexto; estado sobrevive a salvar e reabrir. **Faltam:** cor por linha, multisseleção e arrastar para reordenar |
+| QT-13 · Seletor Persp · Orto · 2:1 | **Feito** | `ProjectionMode` com perspectiva e ortográfica, menu **Exibir › Projeção** e o cubo de navegação; o tamanho no plano de foco é preservado |
 | QT-14 · Sensibilidade de zoom, roda de cor, atalhos configuráveis | **Planejado** | `color_picker` e `keybinds` estão prontos para copiar |
-| QT-15 · Painéis flutuantes (referências, paleta) | **Parcial** | As docas flutuam; paleta e referências não existem |
+| QT-15 · Painéis flutuantes (referências, paleta) | **Parcial** | As docas flutuam e a **paleta de comandos** (`Ctrl+K`) existe; um painel de **referências visuais** não existe |
 | QT-16 · Menu radial `Shift+A` | **Feito** | `PetuniaPieMenu` copiado sem alteração: aponte e clique, números 1–8, setas e Enter |
 
 ## O que veio além da lista

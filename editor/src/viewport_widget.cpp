@@ -100,6 +100,11 @@ void ViewportWidget::setPlaying(bool on) {
     playing_ = on;
     playKeys_.clear();
     playJump_ = false;
+    playInteract_ = false;
+    if (!playPrompt_.isEmpty()) {
+        playPrompt_.clear();
+        emit playPrompt(QString());
+    }
     heldKeys_.clear();
     moveTimer_.stop();
     if (on) {
@@ -130,8 +135,14 @@ void ViewportWidget::playTick() {
     }
     const bool jump = playJump_;
     playJump_ = false;
+    const bool interact = playInteract_;
+    playInteract_ = false;
     const Reply reply = bridge_->call(QStringLiteral("play.tick"),
-                                      QJsonObject{{"seconds", seconds}, {"forward", forward}, {"right", right}, {"jump", jump}});
+                                      QJsonObject{{"seconds", seconds},
+                                                  {"forward", forward},
+                                                  {"right", right},
+                                                  {"jump", jump},
+                                                  {"interact", interact}});
     if (!reply.ok) {
         playTimer_.stop();
         emit renderFailed(reply.message);
@@ -143,6 +154,11 @@ void ViewportWidget::playTick() {
     const QJsonArray faults = result.value(QStringLiteral("faults")).toArray();
     if (!log.isEmpty() || !faults.isEmpty()) {
         emit playOutput(log, faults);
+    }
+    const QString prompt = result.value(QStringLiteral("prompt")).toString();
+    if (prompt != playPrompt_) {
+        playPrompt_ = prompt;
+        emit playPrompt(prompt);
     }
     update();
     emit cameraChanged();
@@ -473,7 +489,8 @@ bool ViewportWidget::event(QEvent* event) {
         const int code = key->key();
         const bool gameKey = plain && (code == Qt::Key_W || code == Qt::Key_A || code == Qt::Key_S || code == Qt::Key_D ||
                                        code == Qt::Key_Up || code == Qt::Key_Down || code == Qt::Key_Left ||
-                                       code == Qt::Key_Right || code == Qt::Key_Space || code == Qt::Key_Escape);
+                                       code == Qt::Key_Right || code == Qt::Key_Space || code == Qt::Key_E ||
+                                       code == Qt::Key_Escape);
         if (gameKey) {
             if (event->type() == QEvent::ShortcutOverride) {
                 event->accept();
@@ -484,6 +501,8 @@ bool ViewportWidget::event(QEvent* event) {
                     emit playStopRequested();
                 } else if (code == Qt::Key_Space) {
                     playJump_ = true;
+                } else if (code == Qt::Key_E) {
+                    playInteract_ = true;
                 } else {
                     playKeys_.insert(code);
                 }
@@ -714,6 +733,20 @@ void ViewportWidget::mousePressEvent(QMouseEvent* event) {
         setCursor(Qt::ClosedHandCursor);
     } else if (event->button() == Qt::LeftButton) {
         if (hasProject() && editMode_) {
+            if (faceTool()) {
+                const Reply reply = bridge_->call(QStringLiteral("face.begin"), pointerFields(event->pos()));
+                if (reply.ok && reply.result.toObject().value(QStringLiteral("started")).toBool()) {
+                    faceDragging_ = true;
+                    clickCandidate_ = false;
+                    emit selectionChanged();
+                    update();
+                    event->accept();
+                    return;
+                }
+                if (!reply.ok) {
+                    emit renderFailed(reply.message);
+                }
+            }
             pressPosition_ = event->pos();
             if (!liveMeshOperation_.isEmpty() && !knifeArmed_) {
                 clickCandidate_ = false;

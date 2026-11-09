@@ -46,9 +46,9 @@ fn catalog() -> Catalog {
             ),
             api(
                 "transform",
-                "get_position",
+                "position",
                 &[("entity", "Int")],
-                "Dict",
+                "Vec3",
                 "world.read",
             ),
             api("world", "create", &[("rows", "Dict")], "Int", "world.write"),
@@ -476,8 +476,7 @@ fn sources_list_only_what_exists_when_the_node_runs() {
     );
     assert!(after_sources.contains(&format!("{start}.dt")));
     // A pure node asks the question for the chain node that reads it; none reads it yet.
-    let position =
-        add_node(&mut document, &catalog, "api.transform.get_position", None).expect("pure");
+    let position = add_node(&mut document, &catalog, "api.transform.position", None).expect("pure");
     assert!(sources(&document, &catalog, position, "entity").is_empty());
 }
 

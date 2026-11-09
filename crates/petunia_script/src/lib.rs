@@ -16,6 +16,7 @@ mod api;
 mod compile;
 mod convert;
 mod doctor;
+mod gameplay;
 mod graph;
 mod grid_api;
 mod host;
@@ -32,7 +33,7 @@ pub use graph::{
     graph_catalog, graph_max_bytes, graph_names,
 };
 pub use host::{
-    LoadReport, RunReport, SCRIPT_EXTENSION, SCRIPTS_DIRECTORY, ScriptFault, ScriptHost,
+    LoadReport, PlayerRig, RunReport, SCRIPT_EXTENSION, SCRIPTS_DIRECTORY, ScriptFault, ScriptHost,
     ScriptLimits, simulate,
 };
 pub use natives::{LogLevel, LogLine};

@@ -163,7 +163,17 @@ fn build_sample_world() -> Result<World, WorldError> {
 /// Creates a new project folder with a small sample room (floor, walls, ramp, pillar, crates).
 /// Refuses to overwrite an existing project.
 pub fn create_sample_project(root: &Path, name: &str) -> Result<(), ProjectError> {
-    let manifest = ProjectManifest::new(name, SCENE_PATH);
+    create_sample_project_with(root, name, "aipo")
+}
+
+/// Creates the sample project with the programming method the person picked (DR-40).
+pub fn create_sample_project_with(
+    root: &Path,
+    name: &str,
+    programming_method: &str,
+) -> Result<(), ProjectError> {
+    let mut manifest = ProjectManifest::new(name, SCENE_PATH);
+    manifest.programming_method = programming_method.to_string();
     if let Some(problem) = manifest.validate().first() {
         return Err(ProjectError::InvalidName(problem.message.clone()));
     }

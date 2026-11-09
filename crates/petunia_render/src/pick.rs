@@ -243,6 +243,10 @@ mod tests {
             color: Color::WHITE,
             mesh: None,
             mesh_fingerprint: 0,
+            skin: Vec::new(),
+            skin_matrices: Vec::new(),
+            wireframe: false,
+            xray: false,
         }
     }
 

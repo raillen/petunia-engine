@@ -48,7 +48,15 @@ public:
 
     // Used by the command line (`--project`, `--sample`) and by the menus.
     bool openProjectAt(const QString& path, bool interactive);
-    bool createSampleAt(const QString& path, const QString& name, bool interactive);
+    void chooseAnimation();
+    // Mundo: climate and a vegetation rule. The commands already exist; this is the window.
+    void setClimate(const QString& preset);
+    void chooseHour();
+    void chooseFlora();
+    // Starts the editor clock that steps clips and falling precipitation.
+    void startWorldClock();
+    bool createSampleAt(const QString& path, const QString& name, bool interactive,
+                        const QString& method = QStringLiteral("aipo"));
     void selectEntity(quint64 entity);
     // Saves a picture of the window (and of the 3D view alone) after a short delay, then quits.
     void captureAndQuit(const QString& path, int delayMilliseconds);
@@ -121,9 +129,9 @@ private:
     HierarchyPanel* hierarchy_ = nullptr;
     InspectorPanel* inspector_ = nullptr;
     DiagnosticsPanel* diagnostics_ = nullptr;
+    AssetPanel* assets_ = nullptr;
     HistoryPanel* history_ = nullptr;
     ApiPanel* api_ = nullptr;
-    AssetPanel* assets_ = nullptr;
     QLabel* cameraLabel_ = nullptr;
     QLabel* countLabel_ = nullptr;
     QList<QDockWidget*> docks_;
@@ -197,6 +205,8 @@ private:
     QAction* booleanAction_ = nullptr;
     QAction* convertMeshAction_ = nullptr;
     QComboBox* meshPreviewBox_ = nullptr;
+    // Push/pull and extrude belong to edit mode. Hidden while the viewport is in object mode.
+    QList<QWidget*> editOnlyTools_;
     QDoubleSpinBox* meshDistance_ = nullptr;
     QSpinBox* meshCuts_ = nullptr;
     QSpinBox* meshSegments_ = nullptr;
@@ -264,6 +274,12 @@ private:
     QToolButton* playButton_ = nullptr;
     // While the game runs, asks what the graphs reported (which node ran, why a condition failed).
     QTimer* debugTimer_ = nullptr;
+    QTimer* animationTimer_ = nullptr;
+    QAction* animationAction_ = nullptr;
+    QAction* stopAnimationAction_ = nullptr;
+    // Mundo: climate presets, hour and a vegetation rule. Enabled only with a project open.
+    QList<QAction*> worldActions_;
+    QAction* comfortAction_ = nullptr;
     // Actions disabled while the game runs, so they can be given back.
     QList<QAction*> lockedActions_;
     // Operações > Colisão: add a named collider of each shape, fit the selected one (DR-27).

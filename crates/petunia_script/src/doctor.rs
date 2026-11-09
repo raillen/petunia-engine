@@ -32,11 +32,41 @@ pub fn script_names(directory: &Path) -> Vec<String> {
 }
 
 /// The findings about the scripts of the project at `root`, whose scene is `world`.
-pub fn project_diagnostics(root: &Path, world: &World) -> Vec<Diagnostic> {
+///
+/// `programming_method` is the project's method (DR-40). A project follows one method to the end,
+/// so a file of the other kind is reported instead of being loaded in silence: an assembled
+/// project would run something the person never sees in their chosen workspace.
+pub fn project_diagnostics(
+    root: &Path,
+    world: &World,
+    programming_method: &str,
+) -> Vec<Diagnostic> {
     let directory = root.join(SCRIPTS_DIRECTORY);
     let surface = script_surface();
     let names = script_names(&directory);
     let mut found = Vec::new();
+    let uses_nodes = programming_method == "nodes";
+    if uses_nodes {
+        for name in &names {
+            found.push(Diagnostic::warning(
+                "project.method_script",
+                &format!("{SCRIPTS_DIRECTORY}/{name}.{SCRIPT_EXTENSION}"),
+                &format!("o projeto usa pNodes, mas existe o script `{name}.{SCRIPT_EXTENSION}`"),
+                "O script não roda enquanto o projeto for pNodes. Apague-o, ou troque o método do projeto para \"aipo\".",
+            ));
+        }
+    } else {
+        for name in crate::graph::graph_names(&directory) {
+            found.push(Diagnostic::warning(
+                "project.method_graph",
+                &format!("{SCRIPTS_DIRECTORY}/{name}{GRAPH_SUFFIX}"),
+                &format!(
+                    "o projeto usa `{programming_method}`, mas existe o grafo `{name}{GRAPH_SUFFIX}`"
+                ),
+                "O grafo não roda enquanto o projeto não usar pNodes. Apague-o, ou troque o método em `programming_method`.",
+            ));
+        }
+    }
     for name in &names {
         let file = format!("{name}.{SCRIPT_EXTENSION}");
         let path = directory.join(&file);

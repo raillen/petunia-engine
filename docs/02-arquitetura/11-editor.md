@@ -34,6 +34,29 @@ Se algo falha, a resposta explica o que fazer:
   "action": "Use Arquivo > Novo projeto de exemplo, ou Arquivo > Abrir projeto." } }
 ```
 
+## Um método de programação por projeto (DR-40)
+
+Um projeto programa com **um** método, escolhido ao criar e mantido até o fim:
+
+| Método (`programming_method`) | O que aparece | O que roda |
+|---|---|---|
+| `aipo` (padrão) | Cena · **Código** | Aipo |
+| `luau` (planejado) | Cena · **Código** | nada ainda (aviso `project.manifest.luau_pending`) |
+| `nodes` (**pNodes**) | Cena · **Lógica** | Aipo — o grafo compila para Aipo |
+
+A aba do outro método **não é oferecida** (`F4` ou `F7` não faz nada nela), então a janela nunca sugere
+dois caminhos para programar. Arquivos do outro tipo em `scripts/` não carregam em silêncio: o Project
+Doctor avisa (`project.method_script` / `project.method_graph`).
+
+Os **prefabs** seguem o método: em `nodes` gravam `<nome>.graph.json`; em `aipo` compilam o mesmo
+grafo para `<nome>.aipo`. Um arquivo que já existe, de qualquer das duas extensões, nunca é
+sobrescrito.
+
+**Não há troca de método**, e não está prevista: a escolha é feita uma vez, ao criar o projeto, e
+vale até o fim (decisão de 2026-10-30). O projeto antigo continua abrindo, porque quem não tem o
+campo assume `aipo`. Editar `programming_method` à mão não é um fluxo apoiado: o editor não converte
+lógica entre métodos, então o arquivo do outro método simplesmente deixa de rodar.
+
 ## Como funciona
 
 ```text
@@ -190,7 +213,7 @@ As regras de tamanho, cor e texto estão em [design da interface](15-design-da-i
 | **Hierarquia** | Árvore com o projeto na raiz, ícone por tipo, número em cinza; busca e `+` (criar) |
 | **Assets** | Aba ao lado de **Hierarquia**: modelos `.glb`/`.gltf` de `assets/` com nome e tamanho; **duplo clique** põe o modelo na frente da câmera como malhas editáveis (um desfazer), sem copiar de novo se ele já está em `assets/`; **Importar modelo…** abre o seletor de *Arquivo > Importar modelo 3D…* |
 | **Inspetor** | Ícone, nome e número; uma seção por tabela, com nome em português, que **recolhe**; `⋯` remove; **Adicionar tabela** no fim |
-| **Workspace Código** | Lista de scripts (`+` cria), editor, Problemas e Console, e a **Referência da API** (funções do script primeiro) |
+| **Workspace Código** | Lista de scripts (`+` cria), editor, Problemas e Console, e a **Referência da API** (funções do script primeiro). **Só aparece em projeto Aipo ou Luau** (ver "um método por projeto") |
 
 **Paleta de comandos** (`Ctrl+K` ou `Ctrl+Shift+P`): digite parte do nome, em qualquer ordem de letras ("cvr" acha "Caverna"); `↑ ↓` escolhem, `Enter` executa, `Esc` fecha. Os comandos usados por último aparecem primeiro.
 
@@ -225,7 +248,7 @@ As regras de tamanho, cor e texto estão em [design da interface](15-design-da-i
 | Cavar e Tornar oco | `Ctrl+Alt+C` e `Ctrl+Alt+H` |
 | Cortar com plano, Arranjo em linha, Arranjo em círculo e Espelhar | `Ctrl+Alt+P`, `Ctrl+Alt+L`, `Ctrl+Alt+O` e `Ctrl+Alt+M` |
 | Esculpir caverna (modo nas opções da ferramenta, sob a faixa do viewport; `Ctrl` faz o oposto) | `B`; `[` e `]` mudam o raio; `Esc` cancela o arrasto |
-| Workspace Código | `F4` (e `F3` volta à cena); `F5` executa numa cópia; `Ctrl+S` dentro do editor salva o **script**; `Ctrl+Shift+F` formata; `Ctrl+Espaço` sugestões; **`Esc` e depois `Tab` sai do editor** |
+| Workspace Código | `F4` (e `F3` volta à cena); `F5` executa numa cópia; `Ctrl+S` dentro do editor salva o **script**; `Ctrl+Shift+F` formata; `Ctrl+Espaço` sugestões; **`Esc` e depois `Tab` sai do editor**. Indisponível em projeto pNodes |
 | Túnel por caminho: clique pontos na rocha | `Shift+B`; `Enter` cava, `Backspace` tira o último ponto, `Esc` cancela |
 | Editar o pivô do objeto | `Alt+P` |
 | Subir e descer de andar (acima do último, cria um novo) | `Ctrl+PageUp` e `Ctrl+PageDown`, ou a lista de andares na barra |
