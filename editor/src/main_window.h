@@ -33,6 +33,7 @@ class QMenu;
 class QMenuBar;
 class QShortcut;
 class QStackedWidget;
+class QTimer;
 class QVBoxLayout;
 class PetuniaSegmented;
 class CommandPalette;
@@ -93,6 +94,20 @@ private:
     void syncNaturalBar(const QJsonObject& snapshot);
     void buildDocks();
     // Several scenes per project, the automatic save and its recovery.
+    void meshBoolean();
+    void meshKnife();
+    // The knife by clicking: two clicks on the mesh, each naming a point on an edge.
+    void startKnifeByClick();
+    bool handleKnifeClick(const QPoint& position);
+    void cancelKnife();
+    // A mesh operation shown live while the key is held: press shows it, moving the mouse changes
+    // the value, releasing the key (or clicking/Enter) applies it as ONE undo step, Esc cancels.
+    void startMeshPreview(const QString& operation);
+    void updateMeshPreview();
+    void endMeshPreview(bool commit);
+    void showMeshInfo();
+    // Several scenes per project, the automatic save and its recovery.
+    void buildSceneActions();
     void chooseOpenScene();
     void chooseNewScene();
     void autosaveNow();
@@ -101,6 +116,7 @@ private:
 
     Reply perform(const QString& operation, const QJsonObject& fields, bool interactive = true);
     void showFailure(const Reply& reply, bool interactive);
+    bool eventFilter(QObject* watched, QEvent* event) override;
     void onSnapshot();
     void updateCameraLabel();
     bool confirmDiscardChanges();
@@ -201,7 +217,6 @@ private:
     // column at the default window size, and a toolbar in a layout clips instead of scrolling.
     QToolBar* meshValuesBar_ = nullptr;
     QList<QAction*> meshActions_;
-    QAction* knifeAction_ = nullptr;
     QAction* booleanAction_ = nullptr;
     QAction* convertMeshAction_ = nullptr;
     QComboBox* meshPreviewBox_ = nullptr;
@@ -211,6 +226,18 @@ private:
     QSpinBox* meshCuts_ = nullptr;
     QSpinBox* meshSegments_ = nullptr;
     QDoubleSpinBox* meshSlide_ = nullptr;
+    QAction* knifeAction_ = nullptr;
+    QAction* knifeNumbersAction_ = nullptr;
+    bool meshPreviewing_ = false;
+    QTimer* meshPreviewCommitTimer_ = nullptr;
+    QString meshPreviewOperation_;
+    double meshPreviewBase_ = 0.2;
+    double meshPreviewValue_ = 0.2;
+    QPoint meshPreviewOrigin_;
+    bool knifeClick_ = false;
+    bool knifeHasStart_ = false;
+    QJsonObject knifeStart_;
+    QAction* meshInfoAction_ = nullptr;
     // Options bar of the sculpting tools; only visible while one of them is active.
     QToolBar* sculptBar_ = nullptr;
     QToolBar* naturalBar_ = nullptr;

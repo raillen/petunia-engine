@@ -211,6 +211,13 @@ void ViewportWidget::keyPressEvent(QKeyEvent* event) {
 }
 
 void ViewportWidget::keyReleaseEvent(QKeyEvent* event) {
+    // The live mesh value ends when the key that opened it is let go: a tap applies the value of
+    // the bar (as before), holding and moving adjusts it.
+    if (!event->isAutoRepeat()
+        && (event->key() == Qt::Key_I || event->key() == Qt::Key_E || event->key() == Qt::Key_B
+            || event->key() == Qt::Key_R)) {
+        emit meshValueKeyReleased();
+    }
     if (isAlwaysMovementKey(event->key()) || isLetterMovementKey(event->key())) {
         if (!event->isAutoRepeat()) {
             heldKeys_.remove(event->key());
@@ -306,6 +313,9 @@ void ViewportWidget::setEditMode(bool on) {
     }
     editMode_ = on;
     if (editMode_) {
+        // Editing happens in the 3D view: give it the keyboard so the mesh shortcuts (K, I, E…)
+        // work right after choosing an object in the hierarchy.
+        setFocus(Qt::OtherFocusReason);
         setCursor(Qt::CrossCursor);
     } else {
         unsetCursor();
@@ -1050,6 +1060,19 @@ void ViewportWidget::pickAt(const QPoint& position) {
     if (reply.ok) {
         emit selectionChanged();
     }
+}
+
+QJsonObject ViewportWidget::pickMeshPartAt(const QPoint& position) {
+    if (width() <= 0 || height() <= 0 || !hasProject() || !bridge_->hasSelection()) {
+        return QJsonObject();
+    }
+    QJsonObject fields = pointerFields(position);
+    fields.insert(QStringLiteral("entity"), static_cast<double>(bridge_->selection()));
+    const Reply reply = bridge_->call(QStringLiteral("mesh.pick"), fields);
+    if (!reply.ok || !reply.result.isObject()) {
+        return QJsonObject();
+    }
+    return reply.result.toObject();
 }
 
 void ViewportWidget::pickComponentAt(const QPoint& position, Qt::KeyboardModifiers modifiers) {

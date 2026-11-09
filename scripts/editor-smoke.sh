@@ -156,6 +156,24 @@ cp "$workdir/sala/scripts/smoke.aipo" "$output.script.aipo" 2>/dev/null || true
 aipo_has_graph=0
 [[ -e "$workdir/sala/scripts/gira.graph.json" ]] && aipo_has_graph=1
 
+# `--pointer-info` is the diagnostic used when a click "does not work": it must print the scale
+# state without blocking anything. A short run of its own, on the same virtual display, checks the
+# line exists; the crosshair over a click needs eyes and is checked in a real run.
+pointer_log="$workdir/pointer.log"
+if ! env -u WAYLAND_DISPLAY DISPLAY="$display" XDG_CONFIG_HOME="$workdir/config" XDG_CACHE_HOME="$workdir/cache" \
+        QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 QT_LOGGING_RULES='qt.qpa.*=false' \
+        "$editor" --pointer-info --sample "$workdir/sonda" --screenshot "$output.pointer.png" \
+        --screenshot-delay 3500 2>"$pointer_log"; then
+    echo "verificação: --pointer-info abriu e fechou -> FALHOU"
+else
+    echo "verificação: --pointer-info abriu e fechou -> ok"
+fi
+if grep -q '^\[escala\]' "$pointer_log"; then
+    echo "verificação: --pointer-info imprimiu a escala da tela -> ok"
+else
+    echo "verificação: --pointer-info imprimiu a escala da tela -> FALHOU"
+fi
+
 # The gizmo drag must have moved crate #9 along X only, onto the 0.5 m grid.
 set +e
 python3 -I - "$output.scene.json" "$aipo_has_graph" <<'PY'
@@ -230,7 +248,16 @@ xdotool mousemove 360 146 click 1;               sleep 0.5   # the "Graus" input
 xdotool key Return;                              sleep 0.6   # its menu
 xdotool key Down Down Return;                    sleep 0.6   # "Usar o valor de…"
 xdotool key Return;                              sleep 1.0   # the first source: dt of the event
-xdotool mousemove 1153 51 click 1;               sleep 0.8   # Ver como código
+# Snapshot of the graph the PALETTE built, before the text below replaces it: the two checks read
+# the same file otherwise and the second one would hide a broken palette.
+cp "$workdir_nodes/mundo/scripts/gira.graph.json" "$workdir_nodes/mundo/scripts/gira.palette.json"
+# Editing the text and applying it must reach scripts/<name>.graph.json (the panel looked updated
+# while the file kept the old logic, 2026-10-29). A constant replaces the dt wire.
+xdotool key F8;                                  sleep 0.8   # Ver como código (the button moves with the list)
+xdotool mousemove 500 200 click 1;               sleep 0.4
+xdotool key ctrl+a;                              sleep 0.2
+xdotool type --delay 12 'fn on_update(entity, dt) { transform.rotate_y(entity, 45.0) }'; sleep 0.6
+xdotool key ctrl+Return;                         sleep 1.5   # Aplicar código
 xdotool mousemove 925 51 click 1;                sleep 0.8   # Caixas e fios: the same graph as boxes
 import -window root "$output.canvas.png"                     # one picture of the canvas
 xdotool mousemove 600 390 mousedown 1;                       # drag the event box
@@ -255,8 +282,26 @@ if os.path.exists(graph_path):
     graph = json.load(open(graph_path))
     kinds = sorted(node["kind"] for node in graph["nodes"])
     wired = any(edge["from"]["pin"] == "dt" and edge["to"]["pin"] == "degrees" for edge in graph["edges"])
-    graph_ok = kinds == ["api.transform.rotate_y", "event.on_update"] and wired
-print("verificacao: pNodes criou grafo com evento, acao e o dt ligado em Graus ->", "ok" if graph_ok else "FALHOU")
+    # The text typed into "Ver como código" and applied with "Aplicar código" must be in the FILE
+    # (the panel used to change while the graph on disk kept the old logic, 2026-10-29). Applying it
+    # replaces the dt wire with a constant, which is why the palette's chain was copied before.
+    rotate = [n for n in graph["nodes"] if n["kind"] == "api.transform.rotate_y"]
+    applied_ok = (
+        kinds == ["api.transform.rotate_y", "event.on_update"]
+        and len(rotate) == 1
+        and rotate[0].get("params", {}).get("degrees") == 45.0
+        and not any(edge["from"]["pin"] == "dt" for edge in graph["edges"])
+    )
+    graph_ok = applied_ok
+print("verificacao: pNodes gravou o Graus=45 do texto aplicado no arquivo ->", "ok" if graph_ok else "FALHOU")
+palette_ok = False
+palette_copy = os.path.join(root, "scripts", "gira.palette.json")
+if os.path.exists(palette_copy):
+    built = json.load(open(palette_copy))
+    palette_ok = sorted(n["kind"] for n in built["nodes"]) == ["api.transform.rotate_y", "event.on_update"] and any(
+        edge["from"]["pin"] == "dt" and edge["to"]["pin"] == "degrees" for edge in built["edges"]
+    )
+print("verificacao: a paleta montou a cadeia com dt em Graus ->", "ok" if palette_ok else "FALHOU")
 moved_box = False
 if os.path.exists(layout_path) and os.path.exists(graph_path):
     layout = json.load(open(layout_path))

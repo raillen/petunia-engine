@@ -1,6 +1,6 @@
 # Estado da implementação
 
-**Revisão:** 2026-11-09 (linhas consolidadas: cenas, animação, vegetação, outliner, grid e prefabs) · **Fase atual:** 1 (esqueleto) concluída no código; **fase 2 (editor e construção de mapas) avançou**
+**Revisão:** 2026-11-09 (linhas consolidadas: cenas, animação, vegetação, outliner, grid, prefabs e interface de malha) · **Fase atual:** 1 (esqueleto) concluída no código; **fase 2 (editor e construção de mapas) avançou**
 
 ## Resumo (TL;DR)
 
@@ -14,7 +14,7 @@ Três análises novas pedem a sua decisão: [paridade da interface](../02-arquit
 
 ## Etapa atual: módulo `grid` e A\* (2026-11-09)
 
-Decisão: [DR-38](../06-decisoes/registro-de-decisoes.md). O desenho existia desde 2026-10-24 ([personagens, UI e grade](../02-arquitetura/09-personagens-ui-e-grade.md) §5) com uma API ilustrativa e nenhuma linha de código; agora as oito funções existem e rodam em script.
+Decisão: [DR-47](../06-decisoes/registro-de-decisoes.md). O desenho existia desde 2026-10-24 ([personagens, UI e grade](../02-arquitetura/09-personagens-ui-e-grade.md) §5) com uma API ilustrativa e nenhuma linha de código; agora as oito funções existem e rodam em script.
 
 | Entrega | Evidência |
 |---|---|
@@ -60,6 +60,79 @@ Fecha o que faltava do **nível 2** da [edição de brushes](../02-arquitetura/1
 **Próximo da lista:** material por face e prefabs do próprio projeto. (O `grid`/A\\* foi feito em 2026-11-09, acima; o Event Sheet foi descartado pelo DR-30, que o trocou pelo sistema de nós; as alças no viewport para redimensionar colisões foram feitas em 2026-11-08, abaixo.)
 
 ## Antes: rios, estradas, água e terreno no editor (2026-10-29)
+## Etapa atual: valor ao vivo e faca por clique (2026-10-30, mesma rodada)
+
+Decisão: [`DR-48`](../06-decisoes/registro-de-decisoes.md). Fecha os ganchos de interface que a
+[edição de malha](../02-arquitetura/13-primitivas-e-edicao-de-malha.md#ganchos-da-interface)
+declarava — valor ao vivo, faca por clique e as contagens da malha no inspetor. Nada mudou no
+motor: `mesh.preview`, `mesh.preview_end`, `mesh.pick`, `mesh.knife` e `mesh.info` já existiam e
+tinham teste; o que faltava era o gesto e o resumo na janela.
+
+| Entrega | Evidência |
+|---|---|
+| **Valor ao vivo:** segurar `I`, `Ctrl+E`, `Ctrl+B` ou `Ctrl+R` mostra a operação e o mouse muda o valor (1 cm por pixel, 0,01 a 10 m; no corte em laço, 40 px por corte); soltar a tecla, clicar ou `Enter` aplica como **um** desfazer; `Esc` cancela | na janela, cada uma das quatro: `I` segurado e arrastado 100 px aplicou **um** inset de **1,20 m** (a barra tinha 0,20 m); `Ctrl+E` deu **10 faces e 12 vértices**; `Ctrl+B` deu **7 faces e 10 vértices**; `Ctrl+R` deu **14 faces e 16 vértices**. `Esc` no meio da prévia deixou a malha **idêntica** (6 faces, 8 vértices) com o rodapé "Prévia cancelada; a malha não mudou." |
+| **Uma batida continua uma batida:** a prévia começa com o valor da barra, então soltar sem mover aplica o mesmo valor de antes | o gesto de prévia é o mesmo caminho; a confirmação espera 120 ms para não confundir a repetição automática do teclado (o X11 manda pares pressionar/soltar) |
+| **Faca por clique:** `K` arma a faca; cada clique escolhe o ponto na aresta mais próxima (`mesh.pick` dá aresta e fração); o segundo clique corta; `Esc` cancela | na janela: `K` + dois cliques numa face cortaram a malha de **6 para 7 faces** e de **8 para 10 vértices**, e o arquivo da cena guardou o corte. Um clique em arestas que não dividem a mesma face mostra o erro do motor no rodapé e não muda a malha |
+| **Faca por números** continua: **Malha ▸ Faca por números…** | o diálogo antigo foi mantido (caminho sem mouse e única opção com o ponteiro fora do viewport) |
+| **Foco no viewport ao entrar no modo de edição** (`Tab`) | sem isso, escolher o objeto na Hierarquia e apertar `K` não fazia nada: os atalhos de malha valem só com o foco no viewport, e é assim que deve ser para não roubar letras da edição de código |
+| **`Enter` e sair do viewport também aplicam** o valor mostrado | `Enter` aplica sem soltar a tecla; trocar o foco (escolher outro objeto na Hierarquia) aplica, para a prévia nunca ficar presa bloqueando o salvar |
+| **Contagens no inspetor:** a seção `Mesh` mostra `8 vértices · 12 arestas · 6 faces` em vez de "malha editável" | medido na janela com um corte de faca: a seção passou de `8 vértices · 12 arestas · 6 faces` para `10 vértices · 15 arestas · 7 faces` (os mesmos números do arquivo salvo) |
+| **Corte em laço ao vivo** (`Ctrl+R`): a tecla abre a prévia, o arrasto muda o número de cortes (1 a 32) e o campo **Cortes** acompanha | na janela: `Ctrl+R` segurado e arrastado cortou a caixa de **6 para 14 faces** (16 vértices) e **um** `Ctrl+Z` voltou para 6 faces e 8 vértices |
+| **Ajuda ▸ Atalhos** e a documentação do editor ganharam os gestos novos | texto do diálogo e `docs/02-arquitetura/11-editor.md` + `13-primitivas-e-edicao-de-malha.md` |
+
+**Gates medidos agora (fim da rodada):** `cargo test --workspace --no-default-features -j 2` →
+**543 testes, 0 falhas**; clippy e fmt por pacote **limpos**; editor Qt compila; `editor-smoke.sh`
+**12/12**; `natural-smoke.sh` **16/16** (medidos na build final).
+
+**Não verificado:** a janela na **sua sessão real**; leitor de tela; mesa digitalizadora; o botão
+**Faca por números…** pela janela (o caminho é o mesmo diálogo de antes, compilado).
+
+## Etapa atual: várias cenas, salvamento automático e painel de assets (2026-10-30)
+
+Decisão: [`DR-47`](../06-decisoes/registro-de-decisoes.md). Fecha os dois limites que a tabela do
+editor declarava desde a primeira versão — **"só a cena padrão do projeto abre"** e **"sem salvamento
+automático"** — e o painel de assets que faltava. A janela foi exercitada no **display virtual**;
+nada apareceu na sua tela.
+
+| Entrega | Evidência |
+|---|---|
+| **Várias cenas:** `project.scenes` (lista), `project.open_scene` (troca sem fechar o projeto) e `project.new_scene` (cena vazia; nome ocupado é recusado) | 2 testes de fluxo no `petunia_editor`: criar/listar/trocar, cena inexistente recusada com a aberta intacta, nome ocupado recusado, desfazer não atravessa cenas; 3 testes do `petunia_project` (lista só de `*.scene.json`, ordenada e sem seguir link; abrir cena com e sem entidades; caminho fora do projeto recusado) |
+| **Troca de cena** substitui o mundo, a seleção e o **histórico de desfazer**; manifesto, scripts, `assets/` e câmera ficam | o teste confere as entidades depois de voltar à cena original e que `edit.undo` responde `false` na cena nova |
+| **Salvamento automático** a cada 90 s, só com mudanças e fora de arrasto, em `scenes/<nome>.scene.autosave.json` (gravação atômica; **nunca** escreve a cena) | 1 teste de fluxo: sem mudança não grava; com caixa grava e a cena no disco continua sem a caixa; sessão nova vê `newer: true`; `project.recover` traz a caixa e deixa a sessão **suja**; `Ctrl+S` grava e **apaga** a cópia; descartar sem cópia responde `removed: false` |
+| **Recuperação oferecida, nunca automática:** a janela pergunta **Recuperar / Descartar / Agora não**; a linha de comando e os testes nunca abrem diálogo | **visto no display virtual:** abrir o projeto pelo menu fez a pergunta "O editor guardou trabalho não salvo desta cena em 30/10/2026 às 01:51…"; **Recuperar** trocou o mundo (a Hierarquia passou a mostrar `Recuperado`), o título ficou `minha_sala · room*` e o rodapé disse "Trabalho recuperado. Salve (Ctrl+S) para manter no arquivo da cena."; a cena no disco não mudou |
+| **Painel de assets** (aba embaixo, ao lado de Diagnósticos e Histórico): lista `assets/`, **Importar…**, **Inserir na cena** e **Atualizar**; clique duplo insere | visto no display virtual: a lista mostrou `tri.glb — 672 B`, o clique duplo criou **Triangulo #29** com tabela `Mesh`, o inspetor abriu nele e o rodapé disse "1 objeto(s) do modelo tri.glb entraram na cena — Ctrl+Z desfaz" |
+| **O título da janela mostra a cena aberta** (`projeto · cena`), não só a cena padrão do manifesto; a barra de cima mostra o projeto | visto: `minha_sala · room*` antes de salvar, `minha_sala · outra` depois de trocar de cena |
+| **Documentação corrigida:** o editor dizia que "não há botão Jogar" (há, `F6`) e que a edição de malha "não tem botões nem atalhos" (tem barra, menu e atalhos desde 2026-10-27/29) | `docs/02-arquitetura/11-editor.md` e `13-primitivas-e-edicao-de-malha.md` atualizados com o que falta de verdade: **valor ao vivo**, **faca por clique** e as **contagens no inspetor** |
+
+**Como a janela foi verificada (2026-10-30, displays virtuais `:94` e `:95`):** um projeto de teste foi aberto
+com `--project` (sem diálogo, como a linha de comando faz), uma caixa foi criada com `Ctrl+1`
+(título ficou `*`), a cópia automática apareceu depois do intervalo de 90 s e **sumiu** depois do
+`Ctrl+S` (a cena salva tinha a caixa); o menu **Arquivo ▸ Abrir outra cena…** trocou para
+`outra.scene.json` e o título mudou para `minha_sala · outra`; a aba **Assets** listou o modelo e o
+clique duplo o inseriu na cena; o log do editor ficou **vazio** (nenhum aviso de Qt, nenhum
+`nullptr`). O roteiro foi um script descartável em `/tmp`, não um gate permanente: o que fica
+automatizado são os testes Rust acima e os dois testes de fumaça.
+
+**Gates medidos agora:** `cargo test --workspace --no-default-features -j 2` → **543 testes, 0
+falhas** (eram 536; +7 desta etapa); `cargo clippy --workspace --all-targets --no-default-features
+-- -D warnings` → **limpo**; `cargo fmt` por pacote → **limpo**; editor Qt compila (`Qt 6.4.2`);
+`scripts/editor-smoke.sh` → **12/12**; `scripts/natural-smoke.sh` → **16/16**.
+
+**Uma rodada do `editor-smoke.sh` morreu com SIGSEGV no encerramento (2026-10-30).** Os 12 passos
+já tinham rodado; a rodada seguinte, sozinha, passou **12/12** e o log ficou limpo. Não se repetiu
+em duas rodadas seguintes e não havia núcleo acessível (`ulimit -c` é 0), então a causa não foi
+isolada; a regra de rodar **um teste de janela por vez** continua valendo.
+
+**Não verificado:** a janela na **sua sessão real**; leitor de tela; os botões **Descartar** e
+**Agora não** do diálogo de recuperação (só o **Recuperar** foi clicado); abrir uma cena **enquanto
+joga** (o despacho recusa, sem teste de janela); nome de cena com acentos (o saneamento aceita letras
+acentuadas; só a unidade cobre).
+
+**Continua faltando no editor (declarado):** material por face/UV (exige mudança de schema),
+valor ao vivo da malha e faca por clique, miniatura no autosave, duplicar/renomear cenas pela
+janela, workspaces **Pintura**, **Animação** e **Efeitos** (`DR-24`) e UI de jogo (`DR-17`).
+
+## Etapa atual: rios, estradas, água e terreno no editor (2026-10-29)
 
 Decisão: [DR-36](../06-decisoes/registro-de-decisoes.md) e o complemento dela ([DR-37](../06-decisoes/registro-de-decisoes.md)). A interface existe (barra do terreno/rio/estrada no viewport) e o teste de fumaça a exercita no display virtual; nada foi visto na sua sessão real.
 
@@ -82,9 +155,9 @@ Decisão: [DR-36](../06-decisoes/registro-de-decisoes.md) e o complemento dela (
 | **Ponte e bueiro:** a ponte ganha convés e defensas; o bueiro/corte fica só como dado (o terreno é a estrutura) | teste do editor com estrada acima do terreno (ponte) e dentro do corte (bueiro) |
 | **Física:** cada bloco de terreno entra como malha sólida, então o leito do rio é chão andável; a água continua meio (empuxo, nado, correnteza) | 2 testes do `petunia_physics` (bloco andável, bloco quebrado reportado e deixado de fora) |
 | Editor Qt | compila (`scripts/editor.sh build`); `scripts/natural-smoke.sh` **16/16** no display virtual: cria o terreno, pinta alturas, **erode** e aplica **ruído** (cada um muda o material e conserva o volume), aplica **um passo por teclado** e **desfaz** (o terreno volta ao medido), grava um **carimbo de cratera** (meio afundou, borda subiu) e um **de monte** (só subiu), carimba a **mesma crista reta e girada 90°** (a medida longa troca de eixo), cria rio e estrada, cava sob a estrada e **detecta a ponte** (entidade `Ponte`, vão 0..2) |
-| **Merge na `main` (2026-10-29):** `feat/mundo-natural-rios-estradas` mesclada; as decisões daquela linha renumeradas para **`DR-36`/`DR-37`** porque a `main` já usava `DR-33`, `DR-34` e `DR-35` | conflitos resolvidos guardando os dois lados (verificação de `PlayerStart` da `main` **e** as checagens de terreno/caminho; `_virtual-display.sh` **e** a limpeza de saídas antigas); 535 testes depois do merge |
-| Editor Qt na `main` mesclada | `scripts/editor-smoke.sh` **11/11** (124 s) e `scripts/natural-smoke.sh` **16/16** (77 s), no display virtual |
-| Workspace inteiro | **535 testes, 0 falhas** (`main` com esta linha mesclada, 2026-10-29, 2 threads); `cargo clippy --workspace --all-targets -- -D warnings` ok; `cargo fmt` ok **por pacote** (ver a nota do `fmt` abaixo); `cargo deny` **não rodou** (ferramenta não instalada) e nenhuma dependência nova entrou |
+| Merge na `main` (2026-10-29): `feat/mundo-natural-rios-estradas` mesclada; as decisões daquela linha renumeradas para **`DR-36`/`DR-37`** porque a `main` já usava `DR-33`, `DR-34` e `DR-35` | conflitos resolvidos guardando os dois lados (verificação de `PlayerStart` da `main` **e** as checagens de terreno/caminho; `_virtual-display.sh` **e** a limpeza de saídas antigas); 535 testes depois do merge |
+| Editor Qt na `main` mesclada | `scripts/editor-smoke.sh` **12/12** (122 s) e `scripts/natural-smoke.sh` **16/16** (77 s), no display virtual |
+| Workspace inteiro | **536 testes, 0 falhas** (`main` com esta linha mesclada, 2026-10-29, 2 threads); `cargo clippy --workspace --all-targets -- -D warnings` ok; `cargo fmt` ok **por pacote** (ver a nota do `fmt` abaixo); `cargo deny` **não rodou** (ferramenta não instalada) e nenhuma dependência nova entrou |
 
 **Corrigido ao ligar o teste de fumaça à janela (2026-10-28):** a barra de opções mostrava todos os controles de uma vez, não cabia na largura da janela e o botão **Pontes e bueiros** caía fora da área visível (o canto `⋯` da barra não alcança widgets, só ações); e a checagem de "há estrada selecionada?" comparava `selected_road` — que é o **número** do id — com booleano, então o botão e a caixa **Defensas** nunca habilitavam. Agora cada ferramenta mostra só os seus controles e o teste é `isDouble()`.
 
@@ -145,6 +218,37 @@ vira dependência git fixada por commit; enquanto for de caminho, o primeiro bui
 falha com uma mensagem que não diz que o problema é a pasta irmã.
 
 **Ainda falta (declarado):** decals de faixa (bloqueado: `DR-12` é só proposta), LOD em quadtree, tubo visível de bueiro e partículas na queda.
+
+## Auditoria de 2026-10-29 (implementação × documentação)
+
+Auditoria feita sobre a `main` @ `84a44ad`, com os gates rodados de verdade nesta máquina (não lidos de
+registros antigos). Os números da tabela "O que existe" e o estado abaixo foram **reconferidos**: batem
+com o código (`63.428` linhas de Rust em `src/`, `14.100` de legado em `petunia_mesh`, `10.918` linhas
+próprias de C++, `3.589` copiadas no `ui_kit`).
+
+**Gates medidos agora:** `cargo test --workspace --no-default-features -j 2` → **536 testes, 0 falhas**;
+`cargo clippy --workspace --all-targets -- -D warnings` → **limpo**; `cargo fmt` por pacote → **limpo**
+(`--all` continua tocando a dependência `../aipo-lang`); `cargo deny` / `cargo nextest` **não rodaram**
+(não instalados); `cargo xtask …` **não existe** ainda. Editor Qt compila no Qt 6.4.2 e os dois testes de
+fumaça passam no display virtual: `editor-smoke.sh` **12/12** e `natural-smoke.sh` **16/16**.
+
+### Defeitos encontrados e corrigidos nesta auditoria
+
+| Defeito | Como apareceu | Correção |
+|---|---|---|
+| **O teste de fumaça abria o editor na sessão real do usuário** | Reproduzido: um comentário bash estava **dentro** da continuação com `\`, então a linha lógica terminava no comentário; `env` rodava sozinho e o editor começava como comando separado, herdando o `DISPLAY` real. Ele abriu na tela do usuário e regravou `~/.config/Petunia/Petunia Editor.conf` (tema, geometria de janela). O teste então falhava com "a janela não apareceu", porque procurava a janela no display virtual | Comentário movido para fora da continuação; `require_virtual_display` novo em `_virtual-display.sh` lê `/proc/<pid>/environ` e **para o teste** se o `DISPLAY` ou o `XDG_CONFIG_HOME` não forem os de automação. O `AGENTS.md` pede exatamente isso ("nunca abrir o editor na sessão do usuário a partir de automação") |
+| **`graph.from_code` não gravava o arquivo** | O painel mostrava o texto aplicado e o `.graph.json` continuava com a lógica antiga, então **o Jogar rodava o código velho**. `graph_edit` grava, mas o caminho de aplicar código só trocava o documento em memória | Passa a gravar como as outras edições: converte primeiro (texto fora do subconjunto deixa o arquivo intacto), copia para `scripts/.backup/`, grava atômico, apaga o `.layout.json` velho (os ids mudaram) e empilha o desfazer. Teste `applied_code_reaches_the_file_and_a_refused_text_keeps_it` falha sem a correção |
+| **O botão "Aplicar código" não existia** | O `graph_panel.cpp` conectava `applyCodeButton_`, que era `nullptr`: o Qt imprimia `QObject::connect(QAbstractButton, GraphPanel): invalid nullptr parameter` a cada abertura e o botão documentado **nunca apareceu**. O campo de código era `setReadOnly(true)`, então a "edição contínua das duas vistas" declarada no `DR-34` não tinha como ser usada pela janela | Botão criado no cabeçalho do código (com ícone e nome falado); campo editável; `showCode` não sobrescreve mais o que a pessoa digitou; um `writeCode` interno separa a escrita do programa da digitação |
+| **O painel de código ficava vazio para sempre** | `code_->clear()` ao trocar de grafo disparava `textChanged` e marcava o texto como "editado", então a atualização seguinte era bloqueada. Sintoma: "2 nó(s), nenhum erro" com a área em branco | As duas chamadas passaram a usar `writeCode(QString())`, que limpa a marca |
+| **O teste de fumaça não alcançava "Ver como código"** | O botão fica no fim de uma barra que se desloca conforme a largura da lista de scripts; o clique em `x=1153` acertava outro lugar e a vista não trocava. Era a causa do meu próprio "apply não funciona" | Atalhos novos, que também servem à acessibilidade: **`F8`** alterna a vista de código e **`Ctrl+Enter`** aplica. O teste usa os atalhos, sem pixel fixo |
+
+### O que a auditoria confirmou como correto
+
+Spline e perfis varridos, terreno em blocos com erosão/ruído/carimbos girados, rios com descida e
+confluências, estradas com cruzamento e ponte/bueiro, grafo de navegação, os comandos `terrain.*`,
+`path.*` e `road.detect_structures` com desfazer, as tabelas `Terrain`, `TerrainChunk`, `River`, `Road` e
+`Bridge` salvando e reabrindo, o convés de ponte no quadro, os blocos de terreno na física e o teste de
+isolamento de VM por anexo. O aviso de `nullptr` no log do editor **sumiu** depois da correção do botão.
 
 **Não verificado:** a janela na sua sessão real (a evidência é o display virtual); leitor de tela (o passo por teclado escreve no rodapé, mas **não foi testado** se o leitor de tela anuncia); o mesmo passo no pincel de esculpir caverna; campo numérico para `times` na barra; terreno grande (desempenho e memória); a forma **platô** só tem teste no domínio — na janela foram vistos a cratera, o monte e a crista (reta e girada); e a silhueta girada **não** é previsualizada antes do clique.
 
@@ -293,6 +397,7 @@ implementado.
 | **Editor:** `script.to_graph` e menu **Transformar em grafo…** no script | teste de operação cria o grafo, abre, compila e converte função auxiliar; recusa lista como valor e nome ocupado. O menu não foi exercitado no smoke |
 | **Schema v2 e migração** | **implementado:** grafos v1 são lidos e migrados para v2; `flow.while`, `flow.loop`, `flow.break`, `flow.continue` e `flow.each.with_index`; 14 testes de modelo e 21 testes públicos de grafo |
 | **Um método por projeto (`DR-40`)** | **implementado:** `programming_method` no manifesto; a janela esconde a aba do outro método; prefabs gravam `.aipo` ou `.graph.json`; o Doctor avisa a mistura. `graph.from_code` continua no protocolo, mas deixou de ser o fluxo normal |
+| **Edição contínua das duas vistas** | **implementado no recorte suportado:** `graph.code` gera Aipo e `graph.from_code` recria o grafo; botão **Aplicar código** (`Ctrl+Enter`) no painel Lógica, com o texto **editável**; **Ver como código** também no `F8`. Fora do subconjunto, diagnóstico e o arquivo não muda. Aplicar grava o `.graph.json` na hora, como as outras edições. Um teste de 2026-10-29 prova que o texto aplicado chega ao arquivo e que um texto recusado o deixa intacto; o teste de fumaça digita, aplica e lê o `Graus = 45` do arquivo |
 
 ## Antes: renomear e apagar scripts/grafos (2026-10-27)
 
@@ -658,6 +763,7 @@ Detalhes: [editor](../02-arquitetura/11-editor.md), [paridade](../02-arquitetura
 | Trocar tema, densidade e escala pelo menu; alto contraste | **não rodou** | código escrito; só o tema escuro foi visto |
 | Digitar expressões nos campos (`2+3*4`) | **não rodou** | campo copiado e compilado; o caminho de confirmação tem teste |
 | Editor na **sua sessão real** (RTX 3060) | **não rodou a janela** | `--gl-info` passou |
+| Cliques sob **escala fracionária** (niri a 0,95) | **não se reproduziu** | reproduzido em niri aninhado a 0,95 (1920x1080 físico → 2021x1136 lógico), no Wayland e no XWayland: o clique chega em `físico ÷ 0,95`, exato, inclusive no canto direito; falta a sua sessão real, que o `--pointer-info` mede |
 | Acessibilidade (leitor de tela, só teclado) | **não rodou** | |
 | `cargo deny check` | **passou até 2026-10-25** (com avisos normais de duplicações transitivas) | `deny.toml` com `allow-wildcard-paths` e `RUSTSEC-2026-0192` justificado; `cargo-deny` não está instalado nesta revisão |
 | `cargo nextest` | **não rodou** | `cargo-nextest` não está instalado; a suíte rodou com `cargo test` |
@@ -670,7 +776,9 @@ cd ~/Documentos/Projetos/petunia-engine
 scripts/editor.sh
 ```
 
-Se o Wayland recusar o OpenGL, o editor reinicia sozinho via X11. Para diagnosticar: `/tmp/petunia-editor-build/petunia-editor --gl-info`.
+Se o Wayland recusar o OpenGL, o editor reinicia sozinho via X11. Para diagnosticar: `scripts/editor.sh build` e depois `/tmp/petunia-editor-petunia-engine/petunia-editor --gl-info`.
+
+Quando um **clique não responder**, rode o mesmo comando com `--pointer-info` e guarde o log (`2> ponteiro.log`): a cruz vermelha mostra onde o Qt recebeu o clique, e a linha `[escala]` mostra plataforma, telas e tamanho da janela ([detalhes](../02-arquitetura/11-editor.md#quando-um-clique-não-funciona---pointer-info)).
 
 No editor:
 

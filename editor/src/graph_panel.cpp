@@ -253,7 +253,7 @@ GraphPanel::GraphPanel(EngineBridge* bridge, QWidget* parent) : QWidget(parent),
     bar->addWidget(switch_);
     bar->addStretch(1);
     codeButton_ = makeButton(QStringLiteral("Ver como código"), QStringLiteral("terminal"),
-                             QStringLiteral("Mostra o texto Aipo que este grafo gera. Só leitura: editar o grafo é pelas linhas"));
+                             QStringLiteral("Mostra o texto Aipo que este grafo gera (F8). O texto é editável: use Aplicar código para voltar ao grafo"));
     codeButton_->setCheckable(true);
     attachButton_ = makeButton(QStringLiteral("Ligar ao objeto"), QStringLiteral("link"),
                                QStringLiteral("Liga este grafo ao objeto selecionado na cena (tabela Script)"));
@@ -321,6 +321,17 @@ GraphPanel::GraphPanel(EngineBridge* bridge, QWidget* parent) : QWidget(parent),
     auto* codeHeader = new QHBoxLayout;
     codeHeader->setSpacing(6);
     codeHeader->addWidget(codeHint, 1);
+    applyCodeButton_ = new QToolButton(codePage);
+    applyCodeButton_->setText(QStringLiteral("Aplicar código"));
+    applyCodeButton_->setToolTip(
+        QStringLiteral("Recria o grafo a partir do texto acima, no subconjunto que a Aipo "
+                       "suporta (Ctrl+Enter); fora dele o diagnóstico aparece e o grafo não muda"));
+    applyCodeButton_->setAccessibleName(applyCodeButton_->text());
+    applyCodeButton_->setProperty("role", QStringLiteral("header"));
+    applyCodeButton_->setProperty("iconName", QStringLiteral("check"));
+    applyCodeButton_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    applyCodeButton_->setIcon(PetuniaIcons::get(QStringLiteral("check")));
+    codeHeader->addWidget(applyCodeButton_);
     asScriptButton_ = new QToolButton(codePage);
     asScriptButton_->setText(QStringLiteral("Transformar em script"));
     asScriptButton_->setToolTip(QStringLiteral("Copia o código gerado para um arquivo .aipo independente; o grafo não o atualiza depois"));
@@ -332,8 +343,10 @@ GraphPanel::GraphPanel(EngineBridge* bridge, QWidget* parent) : QWidget(parent),
     codeHeader->addWidget(asScriptButton_);
     codeLayout->addLayout(codeHeader);
     code_ = new QPlainTextEdit;
-    code_->setReadOnly(true);
+    code_->setReadOnly(false);
     code_->setAccessibleName(QStringLiteral("Código gerado pelo grafo"));
+    code_->setAccessibleDescription(
+        QStringLiteral("Editável: use Aplicar código para recriar o grafo a partir do texto"));
     code_->setLineWrapMode(QPlainTextEdit::NoWrap);
     codeLayout->addWidget(code_, 1);
     views_->addWidget(codePage);
@@ -433,6 +446,12 @@ GraphPanel::GraphPanel(EngineBridge* bridge, QWidget* parent) : QWidget(parent),
     connect(redoButton_, &QToolButton::clicked, this, &GraphPanel::redo);
     connect(attachButton_, &QToolButton::clicked, this, &GraphPanel::attach);
     connect(asScriptButton_, &QToolButton::clicked, this, &GraphPanel::asScript);
+    connect(applyCodeButton_, &QToolButton::clicked, this, &GraphPanel::applyCode);
+    connect(code_, &QPlainTextEdit::textChanged, this, [this] {
+        if (!writingCode_) {
+            codeEdited_ = true;
+        }
+    });
     connect(code_, &QPlainTextEdit::cursorPositionChanged, this, [this] {
         if (codeLines_.isEmpty()) {
             return;
@@ -538,6 +557,11 @@ GraphPanel::GraphPanel(EngineBridge* bridge, QWidget* parent) : QWidget(parent),
     shortcut(QKeySequence(Qt::CTRL | Qt::Key_Z), &GraphPanel::undo);
     shortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Z), &GraphPanel::redo);
     shortcut(QKeySequence(Qt::CTRL | Qt::Key_Y), &GraphPanel::redo);
+    // The toolbar button moves with the width of the script list, so the smoke test could not find
+    // it (2026-10-29). A shortcut makes the code view reachable without the mouse, which is also
+    // what the accessibility plan asks for (DR-30).
+    shortcut(QKeySequence(Qt::Key_F8), &GraphPanel::toggleCode);
+    shortcut(QKeySequence(Qt::CTRL | Qt::Key_Return), &GraphPanel::applyCode);
 
     onSnapshot();
 }
@@ -556,7 +580,7 @@ void GraphPanel::onSnapshot() {
         selectedKey_.clear();
         tree_->clear();
         diagnostics_->clear();
-        code_->clear();
+        writeCode(QString());
         status_->clear();
         if (!key.isEmpty()) {
             reloadList();
@@ -975,12 +999,40 @@ void GraphPanel::showDebug(const QJsonObject& debug) {
     debugRows_->show();
 }
 
+void GraphPanel::applyCode() {
+    if (openName_.isEmpty()) {
+        return;
+    }
+    const Reply reply = bridge_->call(
+        QStringLiteral("graph.from_code"),
+        QJsonObject{{QStringLiteral("text"), code_->toPlainText()}});
+    if (!reply.ok) {
+        emit message(QStringLiteral("Não foi possível aplicar o código: %1").arg(reply.explanation()));
+        return;
+    }
+    codeEdited_ = false;
+    refreshView();
+    emit message(QStringLiteral("Código aplicado ao grafo."));
+}
+
+// F8: the same switch the "Ver como código" button drives, reachable without the mouse.
+void GraphPanel::toggleCode() {
+    if (codeButton_->isEnabled()) {
+        codeButton_->setChecked(!codeButton_->isChecked());
+    }
+}
+
 void GraphPanel::showCode() {
+    // The text is editable (DR-34: continuous editing of both views), so a background refresh must
+    // never throw away what the user is typing. `applyCode` clears the flag and asks for a rewrite.
+    if (codeEdited_) {
+        return;
+    }
     const Reply reply = bridge_->call(QStringLiteral("graph.code"));
     const QJsonObject result = reply.result.toObject();
     if (result.value(QStringLiteral("ok")).toBool()) {
         codeLines_ = result.value(QStringLiteral("line_nodes")).toArray();
-        code_->setPlainText(textOf(result, "text"));
+        writeCode(textOf(result, "text"));
         return;
     }
     codeLines_ = QJsonArray();
@@ -988,7 +1040,15 @@ void GraphPanel::showCode() {
     for (const QJsonValue& value : result.value(QStringLiteral("problems")).toArray()) {
         lines << QStringLiteral("- %1").arg(textOf(value.toObject(), "message"));
     }
-    code_->setPlainText(lines.join(QLatin1Char('\n')));
+    writeCode(lines.join(QLatin1Char('\n')));
+}
+
+// Programmatic writes must not count as user edits, or the panel would stop refreshing itself.
+void GraphPanel::writeCode(const QString& text) {
+    writingCode_ = true;
+    code_->setPlainText(text);
+    writingCode_ = false;
+    codeEdited_ = false;
 }
 
 QJsonObject GraphPanel::currentRow() const {
@@ -1387,7 +1447,7 @@ void GraphPanel::deleteSelected() {
         selectedKind_.clear();
         tree_->clear();
         diagnostics_->clear();
-        code_->clear();
+        writeCode(QString());
         status_->clear();
         if (canvas_ != nullptr) {
             canvas_->setGraph(QJsonObject{});

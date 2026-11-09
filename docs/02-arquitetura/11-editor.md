@@ -1,6 +1,6 @@
 # Editor (fase 1): sessão, operações e interface Qt
 
-**Revisão:** 2026-10-24 · Estado: **primeira versão funcionando** (veja [o que foi verificado](../05-roadmap/03-estado-da-implementacao.md))
+**Revisão:** 2026-10-30 (cenas, salvamento automático e painel de assets) · Estado: **primeira versão funcionando** (veja [o que foi verificado](../05-roadmap/03-estado-da-implementacao.md))
 
 ## Resumo (TL;DR)
 
@@ -82,7 +82,14 @@ lógica entre métodos, então o arquivo do outro método simplesmente deixa de 
 |---|---|---|
 | `project.new_sample` | `path`, `name` | Cria a sala de exemplo na pasta e abre |
 | `project.open` | `path` | Abre um projeto (ou explica o que está errado) |
-| `project.save` | — | Grava a cena (atômico). Recusado com `EDITOR_BUSY` enquanto um arrasto altera o mundo; solte o mouse ou `Esc` antes |
+| `project.save` | — | Grava a cena (atômico) e apaga a cópia automática, porque o arquivo em disco passou a ser o mais novo. Recusado com `EDITOR_BUSY` enquanto um arrasto altera o mundo; solte o mouse ou `Esc` antes |
+| `project.scenes` | — | As cenas do projeto (`scenes/*.scene.json`), com nome, bytes, data e qual está aberta (`DR-47`) |
+| `project.open_scene` | `path`, `force`? | Troca a cena aberta sem fechar o projeto: o mundo, a seleção e o desfazer são trocados, o histórico de desfazer **não** atravessa cenas. Cena com erro é recusada e a aberta fica intacta. Com a cena **suja**, recusa (`SCENE_UNSAVED`) a menos que `force: true` diga que a pessoa confirmou descartar — a janela só manda `force` depois da pergunta |
+| `project.new_scene` | `name`, `force`? | Grava uma cena vazia em `scenes/` e abre; nome ocupado é recusado, nunca sobrescreve; mesma regra de `force` para cena suja |
+| `project.autosave` | — | Grava a cópia automática `scenes/<nome>.scene.autosave.json` (atômica) **sem** tocar na cena; só quando há mudança e fora de um arrasto |
+| `project.recovery` | — | Há cópia automática? Quando foi escrita, é mais nova que a cena, e qual é o caminho |
+| `project.recover` | — | Carrega a cópia automática no lugar do mundo e **mantém a sessão suja**: só o Ctrl+S leva o trabalho para o arquivo da cena. Recusa (`SCENE_UNSAVED`) se a cena aberta tiver mudanças não salvas |
+| `project.recovery_discard` | — | Descarta a cópia automática |
 | `editor.snapshot` | — | Resumo: objetos, seleção, desfazer/refazer, diagnósticos |
 | `entity.describe` | `entity` | Tabelas, tipos e valores de um objeto |
 | `diagnostics.get` · `history.get` · `schema.get` | — | Project Doctor, histórico, API |
@@ -129,7 +136,8 @@ lógica entre métodos, então o arquivo do outro método simplesmente deixa de 
 | `graph.undo` / `graph.redo` | — | Histórico **do grafo** (até 100 passos); a cena tem o dela |
 | `graph.search` | `query`, `want` (`chain`, `event`, `value`, `any`), `for`? | A paleta: nós que combinam (sem acento, qualquer ordem) |
 | `graph.sources` | `for` `{node,pin}` | O que uma entrada pode receber: valores que já existem quando o nó roda |
-| `graph.code` | — | **Ver como código**: o texto Aipo e o nó de cada linha, ou os problemas |
+| `graph.code` | — | **Ver como código** (`F8`): o texto Aipo e o nó de cada linha, ou os problemas |
+| `graph.from_code` | `text` | **Aplicar código** (`Ctrl+Enter`): recria o grafo a partir do texto no subconjunto do DR-34 e **grava o arquivo** na hora, como as demais edições. Fora do subconjunto, o diagnóstico volta e o `.graph.json` não muda |
 | `graph.set_layout` | `node`, `x`, `y` | Onde a caixa fica em `scripts/<nome>.layout.json` (DR-32). Não entra no desfazer: posição não é lógica |
 | `graph.set_layouts` | `nodes`: `[{node,x,y}]` | Move várias caixas numa gravação só (arrastar um grupo) |
 | `graph.group` / `graph.ungroup` | `label`, `nodes` / `group` | Agrupa caixas num quadro visual salvo no layout; desagrupar não move os nós |
@@ -160,8 +168,8 @@ No canvas (**Caixas e fios**): arraste uma caixa para mover; arraste de uma **sa
 | `mesh.dissolve` | `edges`? | Tira arestas e junta as duas faces de cada lado |
 | `mesh.merge` · `mesh.merge_by_distance` | `vertices`? / `distance` (0,001) | Funde vértices no centro; funde os que estão perto demais |
 | `mesh.delete_faces` · `mesh.flip` | `faces`? | Apaga faces (a malha fica aberta); vira faces do avesso (sem `faces`: todas) |
-| `mesh.knife` | `start`, `end`: `{ "edge": [a, b], "fraction": 0.5 }` | **Faca**: corta uma face em duas entre dois pontos das suas arestas |
-| `mesh.preview` | `operation` (`inset`, `extrude`, `bevel`, `loop_cut`) + os valores dela (`distance`, `width`, `slide`…) | **Valor ao vivo** enquanto o mouse arrasta: mostra o resultado sem gravar; cada passo parte da malha de antes do arrasto. Um valor que ainda não serve (inset de 0) mostra a malha como estava e responde `valid: false` com o motivo |
+| `mesh.knife` | `start`, `end`: `{ "edge": [a, b], "fraction": 0.5 }` | **Faca**: corta uma face em duas entre dois pontos das suas arestas. Na janela, `K` arma a faca e **dois cliques** escolhem os pontos (o `mesh.pick` do clique dá a aresta e a fração); **Malha ▸ Faca por números…** continua para digitar as arestas |
+| `mesh.preview` | `operation` (`inset`, `extrude`, `bevel`, `loop_cut`) + os valores dela (`distance`, `width`, `slide`…) | **Valor ao vivo** enquanto o mouse arrasta: mostra o resultado sem gravar; cada passo parte da malha de antes do arrasto. Um valor que ainda não serve (inset de 0) mostra a malha como estava e responde `valid: false` com o motivo. Na janela: **segure `I`, `Ctrl+E`, `Ctrl+B` ou `Ctrl+R`** e mova o mouse (1 cm por pixel; no corte em laço, um corte a cada 40 px); soltar a tecla, clicar ou `Enter` aplica; `Esc` cancela (`DR-48`) |
 | `mesh.preview_end` | `commit` (padrão `true`) | Solta o arrasto: **um** passo de desfazer, ou nada quando `commit: false`. Outra operação de malha também encerra o arrasto (mantendo-o) |
 | `floor.step` · `floor.height` | `delta` / `meters` | Sobe ou desce o **andar** (grade e criação); além do último, **cria** o andar (um desfazer) |
 | `floor.select` · `floor.above` | `entity` / `mode` (`ghost`, `hide`, `show`) | Vai a um andar da lista; como aparecem os objetos acima dele |
@@ -206,7 +214,7 @@ As regras de tamanho, cor e texto estão em [design da interface](15-design-da-i
 
 | Parte | O que tem |
 |---|---|
-| **Barra de cima** | `≡` com todos os menus (`F10`; `Alt+letra` abre um menu direto); o projeto (`•` = não salvo); os workspaces **Cena** (`F3`) e **Código** (`F4`); **Buscar comando** (`Ctrl+K`); desfazer, refazer, salvar |
+| **Barra de cima** | `≡` com todos os menus (`F10`; `Alt+letra` abre um menu direto); o projeto (`•` = não salvo; o título da janela mostra também a cena); os workspaces **Cena** (`F3`) e **Código** (`F4`); **Buscar comando** (`Ctrl+K`); desfazer, refazer, salvar |
 | **Faixa da cena** | Eixos Global/Local, pivô (menu), editar pivô, **snap** (o botão mostra o passo; `⌄` abre passos, alvo e inclinação) e o andar |
 | **Coluna de ferramentas** | No canto do viewport: transformar · faces · esculpir · primitivas (a lista abre ao lado) |
 | **Opções da ferramenta** | Só com Esculpir, Túnel, Terreno, Rio ou Estrada, sob a faixa; mostra apenas os controles da ferramenta ativa (não depende do canto `⋯`, que não alcança widgets) |
@@ -227,7 +235,7 @@ As regras de tamanho, cor e texto estão em [design da interface](15-design-da-i
 
 **Colisões** (DR-27): *Adicionar colisão* no inspetor ou em **Operações › Colisão** (e na paleta). Elas aparecem **sob o objeto** na Hierarquia e em **verde** no viewport (gatilhos em amarelo; a selecionada mais clara). Clique numa para editar centro, tamanho, raio, altura, gatilho, atrito e quique; `⋯` › *Ajustar ao objeto*. Duplicar e excluir o objeto levam as colisões junto. O corpo físico é a tabela **Corpo físico** (`RigidBody`): *Adicionar tabela*. **Redimensionar pelo viewport**: quando uma colisão em **caixa** está selecionada, quadrados brancos aparecem no centro de cada face; arraste um deles e o `size` e o `center` mudam juntos (um desfazer por arrasto; `Ctrl` inverte o snap). Esféricas, em cápsula e convexas continuam só pelo inspetor.
 
-**Não há botão Jogar**: o modo Jogar ainda não existe, e um botão sem efeito engana.
+**Cena e salvamento automático** (`DR-47`): o título da janela mostra o projeto **e** a cena abertos (`projeto · cena`, com `*` quando há mudança); a barra de cima mostra o projeto. **Arquivo ▸ Abrir outra cena…** troca de cena sem fechar o projeto; **Arquivo ▸ Nova cena…** cria uma vazia. A cada 90 s, com mudanças, o editor grava uma cópia automática ao lado da cena e escreve "Salvo automaticamente às HH:MM" no rodapé; ao abrir um projeto **ou trocar para uma cena** com uma cópia mais nova, ele pergunta **Recuperar / Descartar / Agora não** e nunca restaura sozinho. Salvar (Ctrl+S) apaga a cópia.
 
 ## Controles do viewport
 
@@ -282,15 +290,16 @@ Os atalhos de edição ficam em **Ajuda > Atalhos**: `Ctrl+Z`, `Ctrl+Shift+Z`, `
 | Abrir uma caverna enorme e desfazer nela recalculam o campo todo | Pausa de centenas de milissegundos com mais de mil traços; ver [cavernas](14-workspaces-e-prioridades.md) |
 | **Cavar** só funciona em caixas sem rotação | Recusa com mensagem; para outras formas e rotações, use `mesh.boolean` |
 | Edição de malha usa **menu e atalhos**, não um painel próprio | Menu **Malha**, `Tab`, `1`/`2`/`3`, `I`, `Ctrl+E`, `Ctrl+R`, `Ctrl+B`, `K`, `M`, `X`; a tabela está em [edição de malha](13-primitivas-e-edicao-de-malha.md#ganchos-da-interface) |
+| O arrasto de valor muda **só um número por operação** | `I`, `Ctrl+E`, `Ctrl+B` e `Ctrl+R` têm prévia ao vivo; apertar a tecla com `Shift` para mudar outro campo (segmentos do chanfro) ainda não existe ([ganchos](13-primitivas-e-edicao-de-malha.md#ganchos-da-interface)) |
 | Bevel recusa arestas que se encontram num canto | Limite herdado do Petunia3D: escolha arestas separadas, uma de cada vez |
 | Malhas editáveis **não têm UV** nem material por face | Cor única por objeto; UV ficou fora da cópia (DR-22) |
 | Tempo das operações no build do editor (dev, com `opt-level = 3` em `petunia_mesh` e `manifold-rust`) | Malha de 6,5 mil vértices: booleano 74 ms, inset em todas as faces 29 ms, subdividir 5 a 30 ms, checar sólido 3 ms (medido em 2026-10-25). Malhas maiores ainda não foram medidas |
 | Testar "acima do andar" monta a malha de cada objeto a cada quadro | Bom para centenas de objetos; cenas grandes pedem caixas guardadas |
 | Inteiros no inspetor vão só até 32 bits | O motor aceita até 2^53 |
 | Desfazer não restaura a seleção | A entidade recriada precisa ser selecionada de novo |
-| Sem salvamento automático | Falta; é um recurso de produto planejado |
+| Salvamento automático a cada 90 s, só com mudanças; a cópia fica ao lado da cena e a janela pergunta antes de usá-la | O intervalo não é configurável e a cópia não tem miniatura (`DR-47`) |
 | Picking testa todos os triângulos | Bom para centenas de objetos; precisa de estrutura espacial depois |
-| Só a cena padrão do projeto abre | Falta troca de cenas |
+| Trocar de cena zera o histórico de desfazer (por desenho) | Desfazer não atravessa cenas; duplicar/renomear cenas pela janela ainda não existe |
 
 ## OpenGL e plataformas gráficas
 

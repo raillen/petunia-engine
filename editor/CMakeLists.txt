@@ -39,6 +39,7 @@ add_executable(petunia-editor
     src/main_window.cpp
     src/panel_title_bar.cpp
     src/command_palette.cpp
+    src/pointer_diagnostics.cpp
     src/ui_kit/shell/petunia_segmented.cpp
     src/appearance.cpp
     src/ui_kit/petunia_theme.cpp

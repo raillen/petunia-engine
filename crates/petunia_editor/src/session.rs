@@ -928,6 +928,14 @@ impl EditorSession {
                     .strip_prefix(&project.root)
                     .map(|path| path.to_string_lossy().replace('\\', "/"))
                     .unwrap_or_else(|_| project.scene_path.display().to_string()),
+                "scene_name": petunia_project::scene_name(
+                    project
+                        .scene_path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("")
+                ),
+                "default_scene": project.manifest.default_scene,
                 "scripting_language": project.manifest.scripting_language(),
                 "programming_method": project.manifest.programming_method,
                 "dirty": self.dirty,
