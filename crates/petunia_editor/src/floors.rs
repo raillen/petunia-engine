@@ -7,7 +7,7 @@
 //! floor (or down past the lowest) creates the next one, as one undo step.
 
 use petunia_commands::CommandRecord;
-use petunia_render::DrawItem;
+use petunia_render::{DrawItem, SpriteItem};
 use petunia_world::{Value, World};
 use serde_json::{Value as Json, json};
 
@@ -342,6 +342,51 @@ impl EditorSession {
         }
         items
     }
+
+    /// Whether a sprite reaches down to (or below) the floor being built. The quad may be turned,
+    /// so its half diagonal is used: the test never hides a sprite that is still visible.
+    fn sprite_reaches_below(sprite: &SpriteItem, floor_top: f32) -> bool {
+        let scale = sprite.transform.scale;
+        let half_width = sprite.width * scale.x.abs() * 0.5;
+        let half_height = sprite.height * scale.y.abs() * 0.5;
+        let reach = (half_width * half_width + half_height * half_height).sqrt();
+        sprite.transform.position.y - reach < floor_top - ABOVE_TOLERANCE
+    }
+
+    /// The same rule as [`Self::apply_floor_visibility`], for the 2D sprites of the scene.
+    pub(crate) fn apply_sprite_visibility(&self, sprites: &mut Vec<SpriteItem>) {
+        if self.above_floor == AboveFloor::Show {
+            return;
+        }
+        let top = self.current_floor().top();
+        let selection = self.selection;
+        match self.above_floor {
+            AboveFloor::Hide => sprites.retain(|sprite| {
+                Some(sprite.entity) == selection || Self::sprite_reaches_below(sprite, top)
+            }),
+            _ => {
+                for sprite in sprites.iter_mut() {
+                    if Some(sprite.entity) != selection && !Self::sprite_reaches_below(sprite, top)
+                    {
+                        sprite.color.a = sprite.color.a.min(GHOST_OPACITY);
+                    }
+                }
+            }
+        }
+    }
+
+    /// What the mouse can hit among the sprites: those above the floor are out of reach unless
+    /// shown.
+    pub(crate) fn pickable_sprites(&self, mut sprites: Vec<SpriteItem>) -> Vec<SpriteItem> {
+        if self.above_floor != AboveFloor::Show {
+            let top = self.current_floor().top();
+            let selection = self.selection;
+            sprites.retain(|sprite| {
+                Some(sprite.entity) == selection || Self::sprite_reaches_below(sprite, top)
+            });
+        }
+        sprites
+    }
 }
 
 #[cfg(test)]
@@ -434,6 +479,66 @@ mod tests {
         let floor = call(&mut session, json!({ "op": "editor.snapshot" }))["floor"].clone();
         assert_eq!(floor["floors"].as_array().map(Vec::len), Some(0), "{floor}");
         assert_eq!(floor["elevation"], 0.0);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_sprite_above_the_floor_is_ghosted_hidden_and_out_of_reach() {
+        let root = std::env::temp_dir().join(format!(
+            "petunia_editor_test_sprite_floor_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let mut session = EditorSession::new().expect("session");
+        call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "Sprites" }),
+        );
+        call(&mut session, json!({ "op": "floor.step", "delta": 1 }));
+        let created = call(
+            &mut session,
+            json!({ "op": "command.execute", "command": "world.create", "payload": { "rows": {
+                "Name": { "text": "Balao" },
+                "Transform": { "position": { "x": 0.0, "y": 6.0, "z": 0.0 } },
+                "Sprite": { "size": { "x": 2.0, "y": 2.0, "z": 0.0 } }
+            } } }),
+        );
+        let sprite = created["entity"].as_u64().expect("sprite");
+        // Back on the ground floor the sprite stays drawn, ghosted, and out of reach.
+        call(&mut session, json!({ "op": "floor.step", "delta": -1 }));
+        let frame = session.frame().expect("frame");
+        let ghost = frame
+            .sprites
+            .iter()
+            .find(|sprite_item| sprite_item.entity == sprite)
+            .expect("drawn");
+        assert!(ghost.color.a < 0.5, "{}", ghost.color.a);
+        assert!(
+            session
+                .sprite_items()
+                .iter()
+                .all(|sprite_item| sprite_item.entity != sprite)
+        );
+        call(&mut session, json!({ "op": "floor.above", "mode": "hide" }));
+        let frame = session.frame().expect("frame");
+        assert!(
+            frame
+                .sprites
+                .iter()
+                .all(|sprite_item| sprite_item.entity != sprite)
+        );
+        // The selection is never hidden.
+        call(
+            &mut session,
+            json!({ "op": "selection.set", "entity": sprite }),
+        );
+        let frame = session.frame().expect("frame");
+        assert!(
+            frame
+                .sprites
+                .iter()
+                .any(|sprite_item| sprite_item.entity == sprite)
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

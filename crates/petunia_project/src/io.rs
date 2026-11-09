@@ -72,9 +72,64 @@ pub fn resolve_inside(root: &Path, relative: &str) -> Result<PathBuf, ProjectErr
     Ok(root.join(candidate))
 }
 
+/// Reads one asset of the project as a PNG: `assets/hero.png` becomes its size and RGBA pixels.
+///
+/// `None` when the path escapes the project, the file is missing, empty, over the importer's
+/// limit, or not a valid PNG. The rule lives here because both hosts (the editor and the player)
+/// must read an asset the same way; the decoding limits are the importer's.
+pub fn load_png_asset(root: &Path, relative: &str) -> Option<(u32, u32, Vec<u8>)> {
+    let path = resolve_inside(root, relative).ok()?;
+    let image = petunia_import::read_png_file(&path)?;
+    Some((image.width, image.height, image.rgba))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn scratch_dir(label: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "petunia_project_io_test_{label}_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(path.join("assets")).expect("a project folder");
+        path
+    }
+
+    fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut out, width, height);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().expect("a header");
+            writer.write_image_data(rgba).expect("the pixels");
+        }
+        out
+    }
+
+    #[test]
+    fn a_png_asset_of_the_project_is_read_and_an_outside_one_is_not() {
+        let root = scratch_dir("png");
+        let pixels = [1u8, 2, 3, 255, 4, 5, 6, 128];
+        fs::write(
+            root.join("assets").join("hero.png"),
+            encode_png(2, 1, &pixels),
+        )
+        .expect("the image file");
+        let loaded = load_png_asset(&root, "assets/hero.png").expect("a valid image");
+        assert_eq!((loaded.0, loaded.1), (2, 1));
+        assert_eq!(loaded.2, pixels);
+
+        // Missing, empty and escaping paths are answers, not errors.
+        assert!(load_png_asset(&root, "assets/none.png").is_none());
+        fs::write(root.join("assets").join("empty.png"), b"").expect("the empty file");
+        assert!(load_png_asset(&root, "assets/empty.png").is_none());
+        assert!(load_png_asset(&root, "../secret.png").is_none());
+        assert!(load_png_asset(&root, "/etc/passwd").is_none());
+        let _ = fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn resolve_inside_rejects_escapes() {

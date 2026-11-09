@@ -1,12 +1,12 @@
 # Registro de dependências
 
-**Revisão:** 2026-10-25 · Regra do `AGENTS.md`: toda dependência direta entra aqui **antes** de entrar no `Cargo.toml`. `cargo xtask check-dependencies` *(planejado)* vai exigir isso automaticamente.
+**Revisão:** 2026-10-29 · Regra do `AGENTS.md`: toda dependência direta entra aqui **antes** de entrar no `Cargo.toml`. `cargo xtask check-dependencies` *(planejado)* vai exigir isso automaticamente.
 
-Versões: as resolvidas pelo `Cargo.lock` em 2026-10-25. O `Cargo.lock` completo tem **245 pacotes** (o do Petunia3D tem 379). A edição de malha trouxe **12** deles (as 2 diretas e 10 indiretas, abaixo); o resto da diferença para os 212 de 2026-10-24 deve ter vindo do Script Host (DR-25; não conferi pacote a pacote).
+Versões: as resolvidas pelo `Cargo.lock` em 2026-10-29 (o `png` entrou nesta revisão). O `Cargo.lock` completo tem **299 pacotes** (o do Petunia3D tem 379). A edição de malha trouxe **12** deles (as 2 diretas e 10 indiretas, abaixo); o resto da diferença para os 212 de 2026-10-24 deve ter vindo do Script Host (DR-25) e das etapas seguintes (não conferi pacote a pacote).
 
 ## Resumo (TL;DR)
 
-10 dependências diretas do Cargo. Quatro fazem o trabalho de plataforma e ficam **atrás de adaptadores** (`petunia_render_gl` e `petunia_player`). Duas são geometria e ficam **só dentro** de `petunia_mesh` (`glam` e `manifold-rust`, desde 2026-10-25, DR-22). As outras quatro são utilitários (serialização e erros). O editor soma **dependências do sistema** (Qt, CMake), listadas mais abaixo.
+13 dependências diretas do Cargo. Quatro fazem o trabalho de plataforma e ficam **atrás de adaptadores** (`petunia_render_gl` e `petunia_player`). Duas são geometria e ficam **só dentro** de `petunia_mesh` (`glam` e `manifold-rust`, desde 2026-10-25, DR-22). `gltf` e `png` são leitores de arquivo e ficam **só dentro** de `petunia_import`. A física (`rapier3d`) fica só em `petunia_physics`. As outras são utilitários (serialização e erros). O editor soma **dependências do sistema** (Qt, CMake), listadas mais abaixo.
 
 ## Registro
 
@@ -24,12 +24,14 @@ Versões: as resolvidas pelo `Cargo.lock` em 2026-10-25. O `Cargo.lock` completo
 | `rapier3d` | 0.36.1 (com `enhanced-determinism`) | Corpos rígidos, colisões, raios, gatilhos. **Escolhida por você em 2026-10-25** (DR-27: "Já com corpos físicos", "Também malha convexa já"); já era a recomendação do DR-08. Traz `parry3d` (geometria), `glamx`/`glam` 0.33 e `nalgebra` | **`petunia_physics`** (único; tipos do Rapier nunca saem do crate) | Apache-2.0 | Jolt (C++), solver próprio | Médio: o adaptador tem ~900 linhas; a API pública e os arquivos não mudam |
 | `manifold-rust` | 0.13.1 | Booleanos de malha (fundir, cortar, interseção). **Aprovada por você em 2026-10-25** (DR-22) | **`petunia_mesh`** (único, `legacy/boolean.rs`) | Apache-2.0 | Escrever CSG robusto (meses) | Médio: só `boolean.rs` a troca |
 | `gltf` | 1.4.1 (`default-features = false`, `utils`, `names`) | Ler modelos `.glb`/`.gltf`. **Aprovada por você em 2026-10-26** (DR-29: "Fase 2: aprovado"). Sem as funções de imagem: texturas não são lidas | **`petunia_import`** (único; tipos da `gltf` nunca saem) | MIT/Apache-2.0 | Ler glTF à mão (JSON + buffers) | Baixo: o crate tem uma função de entrada e uma de saída; trocar só mexe nele |
+| `png` | =0.18.1 | Decodificar imagens `.png` para sprites 2D (DR-38). Só decodifica: os limites (32 MiB de arquivo, 4096 por lado, 8 Mi pixels) e o RGBA8 de saída são do nosso código | **`petunia_import`** (único; os pixels saem como `Vec<u8>` RGBA) | MIT/Apache-2.0 | Escrever um decodificador PNG (inflate, filtros, CRC) — semanas, com risco de segurança | Baixo: `decode_png` é a única porta; trocar só mexe nele |
 
 ## Observações
 
 - **`manifold-rust` traz 10 pacotes indiretos**, todos permissivos: `clipper2-rust` 1.1.0 (BSL-1.0, a licença Boost), `dashu-int`, `dashu-ratio` e `dashu-base` 0.5.1, `num-modular` 0.6.5, `num-traits` 0.2.19, `rustc-hash` 2.1.3, `static_assertions` 1.1.0, `rustversion` e `autocfg` (MIT ou Apache-2.0). Só o editor os usa: o runtime (`petunia_player`) e o `petunia_render` **não** dependem de `petunia_mesh` (desenhar uma malha só precisa de `petunia_math::PolygonMesh`). Conferido: o código do `manifold-rust` não tem `unsafe`; a opção `parallel` (Rayon) fica **desligada**, então os booleanos rodam numa thread só e dão o mesmo resultado sempre (teste de determinismo).
 
 - **`glutin` está há mais de um ano sem release** (0.32.3, 2025-04-30). Vigiar; plano B: binding de SDL3.
+- **`png` traz 5 pacotes indiretos**, todos permissivos e de puro Rust: `bitflags` 2.13.2, `crc32fast`, `fdeflate`, `flate2` e `miniz_oxide` 0.8.9 (o `flate2` está com o backend Rust, sem C). Nenhum código `unsafe` nosso: a decodificação fica atrás de `decode_png`, que valida tamanho e devolve cópia.
 - **Duplicações transitivas no `Cargo.lock`:** avisadas com `multiple-versions = "warn"` no `cargo deny check bans`:
   - `thiserror` e `thiserror-impl`: 2.0.21 direta nossa e 1.0.69 puxada transitivamente por `sctk-adwaita` / `calloop` (via `winit`).
   - `syn`: 3.0.9 direta via `serde_derive` / `thiserror 2` e 2.0.119 via `thiserror-impl 1.0.69`.

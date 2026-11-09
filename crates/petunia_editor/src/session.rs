@@ -8,8 +8,8 @@ use petunia_project::{
     ProjectManifest, Report, Severity, create_sample_project, load_project, save_scene,
 };
 use petunia_render::{
-    FlyCamera, MeshCache, RenderFrame, extract_frame_cached, pick_entity, ray_through,
-    start_camera, start_camera_at,
+    FlyCamera, MeshCache, RenderFrame, TextureLoader, extract_frame_cached, pick_entity,
+    pick_sprite, ray_through, start_camera, start_camera_at,
 };
 use petunia_world::{PersistentId, Value, World};
 use serde_json::{Map, Value as Json, json};
@@ -21,7 +21,7 @@ use crate::gizmo::{Drag, Handle, Orientation, Snap, Tool};
 use crate::mesh_tool::{ComponentSelection, MeshComponentMode};
 use crate::natural_tool::NaturalState;
 use crate::sculpt_tool::SculptState;
-use crate::tools::{DEFAULT_FLOOR_HEIGHT, FreeMode, PivotMode, SnapTarget};
+use crate::tools::{DEFAULT_FLOOR_HEIGHT, FreeMode, PivotMode, SnapTarget, nearer};
 
 /// The log keeps the most recent entries only.
 const MAX_LOG_ENTRIES: usize = 300;
@@ -119,6 +119,8 @@ pub struct EditorSession {
     /// Triangles of editable meshes, reused while they do not change (the tools extract the
     /// scene many times per mouse move).
     pub(crate) mesh_cache: RefCell<MeshCache>,
+    /// Pictures the scene names, decoded once from the project's `assets/` folder (DR-38).
+    pub(crate) textures: RefCell<TextureLoader>,
     /// The running game (`play.start`), on a copy of the world.
     pub(crate) play: Option<Box<crate::play::PlayState>>,
     /// The node graph being edited (`graph.open`).
@@ -205,6 +207,7 @@ impl EditorSession {
             mesh_edit_mode: false,
             mesh_component_mode: MeshComponentMode::Face,
             mesh_cache: RefCell::new(MeshCache::new()),
+            textures: RefCell::new(TextureLoader::new()),
             play: None,
             graph: None,
         })
@@ -269,6 +272,8 @@ impl EditorSession {
         self.camera = camera_at_start(&loaded.world);
         let name = loaded.manifest.name.clone();
         self.reset_live_edit();
+        // A different project has different pictures, and a file may have been fixed on disk.
+        self.textures.borrow_mut().clear();
         self.project = Some(OpenProject {
             root: loaded.root,
             manifest: loaded.manifest,
@@ -525,11 +530,17 @@ impl EditorSession {
     pub fn pick(&mut self, ndc_x: f32, ndc_y: f32, aspect_ratio: f32) -> Result<Json, Failure> {
         let frame = self.frame().ok_or_else(Failure::no_project)?;
         let ray = ray_through(&self.camera.camera, aspect_ratio, ndc_x, ndc_y);
-        let brush = ray.and_then(|ray| pick_entity(&self.pickable(frame.items), &ray));
+        // Objects, sprites and sculpted surfaces: the nearest of the three wins.
+        let object = ray.and_then(|ray| {
+            nearer(
+                pick_entity(&self.pickable(frame.items), &ray),
+                pick_sprite(&self.sprite_items(), &ray),
+            )
+        });
         let sculpt = ray.and_then(|ray| self.sculpt_hit(&ray, &[]));
-        let hit = match (brush, sculpt) {
-            (Some(brush), Some(sculpt)) if sculpt.distance < brush.1 => Some(sculpt.entity),
-            (Some(brush), _) => Some(brush.0),
+        let hit = match (object, sculpt) {
+            (Some(object), Some(sculpt)) if sculpt.distance < object.1 => Some(sculpt.entity),
+            (Some(object), _) => Some(object.0),
             (None, sculpt) => sculpt.map(|hit| hit.entity),
         };
         self.selection = hit;
@@ -750,6 +761,7 @@ impl EditorSession {
             frame
         };
         self.apply_floor_visibility(&mut frame.items);
+        self.apply_sprite_visibility(&mut frame.sprites);
         frame.sculpts = self.sculpt_items();
         frame.mark_selected(self.selection);
         frame.mark_hovered(self.hovered.filter(|id| Some(*id) != self.selection));
@@ -761,7 +773,26 @@ impl EditorSession {
         self.light_overlay(&mut frame.overlay);
         frame.show_grid = true;
         frame.grid_height = self.floor_elevation();
+        self.load_textures(&mut frame);
         Some(frame)
+    }
+
+    /// Loads the pictures the frame's sprites name, then points every sprite at its handle.
+    /// A sprite whose asset is missing or broken stays a plain colored quad.
+    pub(crate) fn load_textures(&self, frame: &mut RenderFrame) {
+        let Some(project) = self.project.as_ref() else {
+            return;
+        };
+        let root = project.root.as_path();
+        self.textures
+            .borrow_mut()
+            .resolve(frame, |asset| petunia_project::load_png_asset(root, asset));
+    }
+
+    /// How many pictures are loaded and how many assets failed, for the snapshot.
+    fn textures_json(&self) -> Json {
+        let loader = self.textures.borrow();
+        json!({ "loaded": loader.len(), "failed": loader.failed() })
     }
 
     /// Position and angles of the editor camera (cheap: the GUI asks for it while moving).
@@ -797,6 +828,7 @@ impl EditorSession {
                 "diagnostics": diagnostics,
                 "camera": camera_json,
                 "natural": self.natural_json(),
+                "textures": self.textures_json(),
             });
         };
         let world = &project.world;
@@ -876,6 +908,7 @@ impl EditorSession {
             "sculpt": self.sculpt_json(),
             "natural": self.natural_json(),
             "mesh_selection": self.components_json(),
+            "textures": self.textures_json(),
         })
     }
 

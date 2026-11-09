@@ -102,6 +102,14 @@ Em vez de uma árvore de objetos, há uma coluna `parent` e um sistema que propa
 
 Determinismo total entre plataformas é **meta**, não garantia (`HIPÓTESE`).
 
+## 2D é um modo, não um mundo separado
+
+Um jogo 2D usa a **mesma** cena, as **mesmas** entidades e os **mesmos** comandos: o que muda é a câmera (`ProjectionMode::Orthographic`) e o fato de a entidade ter a tabela **`Sprite`** (`asset`, `size`, `color`, `layer`, `flip_x`, `flip_y`) em vez de um `Brush`. Por isso o gizmo, o inspetor, o snap, os andares, o desfazer e a gravação valem igual; a imagem `.png` entra pelo projeto (`assets/…`) e vira pixels RGBA no quadro, sem tipo de biblioteca na cena.
+
+Um objeto pode ter `Brush` **e** `Sprite`: o quadro traz os dois (o sólido e o quad texturizado), então a mesma entidade serve de parede e de letreiro. Como o sprite não escreve profundidade, a camada (`layer`) — não a distância — decide quem fica na frente dos outros sprites (`LOCAL`, `DR-38`).
+
+**Animação é mais uma linha, não outro objeto.** Com `SpriteAnimation` (`frames`, `columns`, `fps`, `loop`, `playing`, `frame`) a mesma imagem vira uma **folha** cortada em quadros; sem a linha, o sprite continua estático. O quadro mostrado **não fica gravado na cena**: é `frame_at(relógio do anfitrião)`, uma função pura, então dois sprites podem tocar a mesma folha em tempos diferentes e a cena salva não muda a cada quadro. O editor congela o relógio em edição e o modo **Jogar** / `petunia run` o avançam; o renderizador só recebe o retângulo do quadro (`LOCAL`, `DR-39`).
+
 ## Decisões ligadas
 
-`DR-05` armazenamento · `DR-10` formatos · `DR-09` online.
+`DR-05` armazenamento · `DR-10` formatos · `DR-09` online · `DR-38` 2D por `Sprite` · `DR-39` folha de sprites.

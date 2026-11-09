@@ -177,12 +177,15 @@ fn empty_frame() -> petunia_render::RenderFrame {
     petunia_render::RenderFrame {
         camera: petunia_render::Camera::default(),
         items: Vec::new(),
+        sprites: Vec::new(),
+        textures: Vec::new(),
         sculpts: Vec::new(),
         overlay: Vec::new(),
         show_grid: false,
         grid_height: 0.0,
         clear_color: petunia_math::Color::rgb(0.16, 0.17, 0.20),
         lighting: petunia_render::Lighting::default(),
+        seconds: 0.0,
     }
 }
 

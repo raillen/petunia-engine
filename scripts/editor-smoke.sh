@@ -60,13 +60,19 @@ Xvfb "$display" -screen 0 1440x900x24 +extension GLX >/dev/null 2>&1 &
 xvfb_pid=$!
 sleep 1
 
-env -u WAYLAND_DISPLAY DISPLAY="$display" XDG_CONFIG_HOME="$workdir/config" XDG_CACHE_HOME="$workdir/cache" \
-    QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 QT_LOGGING_RULES='qt.qpa.*=false' \
-    # The delay is also the LENGTH of the run: the editor takes the pictures and quits when it
-    # fires. At 62000 the steps grew past the timer, the editor quit in the middle of the last
-    # ones and the run reported failures (and once a segfault) that the product did not have
-    # (2026-10-29). Keep it well above the slowest pass.
-    "$editor" --sample "$workdir/sala" --screenshot "$output" --screenshot-delay 120000 2>"$workdir/editor.log" &
+# The delay is also the LENGTH of the run: the editor takes the pictures and quits when it fires.
+# At 62000 the steps grew past the timer, the editor quit in the middle of the last ones and the
+# run reported failures (and once a segfault) that the product did not have (2026-10-29). Keep it
+# well above the slowest pass.
+#
+# The display and the scratch folders are EXPORTED, not prefixed to the editor command. A comment
+# inside a `\`-continued command ENDS the command: on 2026-10-29 a comment sat there, `env` ran
+# alone and the editor started on the real display (:1) and wrote the real settings folder. Every
+# virtual-display script exports them instead, so a comment cannot break it again.
+export DISPLAY="$display" XDG_CONFIG_HOME="$workdir/config" XDG_CACHE_HOME="$workdir/cache"
+export QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 QT_LOGGING_RULES='qt.qpa.*=false'
+unset WAYLAND_DISPLAY
+"$editor" --sample "$workdir/sala" --screenshot "$output" --screenshot-delay 120000 2>"$workdir/editor.log" &
 editor_pid=$!
 sleep 1
 watch_editor "$editor_pid" "$workdir/editor.log"
@@ -96,7 +102,7 @@ xdotool mousemove 700 300 mousedown 3 mousemove_relative 70 0 mouseup 3; sleep 0
 xdotool key ctrl+Prior;                          sleep 0.6   # up a floor: creates Térreo and Andar 1
 xdotool key ctrl+1;                              sleep 0.6   # a box on floor 1
 xdotool key ctrl+Next;                           sleep 0.6   # back down (the box turns into a ghost)
-xdotool key alt+c; sleep 0.6; xdotool key Up Up Up Up Up Return; sleep 1.0   # Alt+C opens Criar (the menus are behind ≡) > Caverna (5 from the end: Sol, Luz, Importar, aleatória, Caverna)
+xdotool key alt+c; sleep 0.6; xdotool key Up Up Up Up Up Up Return; sleep 1.0   # Alt+C opens Criar (the menus are behind ≡) > Caverna (6 from the end: Sol, Luz, Importar imagem, Importar modelo, aleatória, Caverna)
 xdotool mousemove 600 380; xdotool key b;        sleep 0.6   # sculpting tool
 xdotool mousedown 1                                          # drag across the cave: carve
 for x in 620 640 660 680 700 720; do xdotool mousemove "$x" 380; sleep 0.25; done

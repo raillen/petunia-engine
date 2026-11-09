@@ -7,7 +7,7 @@ use std::sync::Arc;
 use petunia_math::Vec3;
 
 use crate::camera::{Camera, Mat4, model_matrix};
-use crate::frame::{DrawItem, Shape};
+use crate::frame::{DrawItem, Shape, SpriteItem};
 use crate::mesh::{MeshData, item_mesh};
 
 /// A ray in world space. `direction` has length one.
@@ -223,6 +223,39 @@ pub fn pick_entity(items: &[DrawItem], ray: &Ray) -> Option<(u64, f32)> {
     best
 }
 
+/// The sprite whose quad the ray hits first, with the distance (DR-38). The quad lies on the
+/// sprite's own XY plane, so picking works the same under a perspective or an orthographic camera.
+pub fn pick_sprite(sprites: &[SpriteItem], ray: &Ray) -> Option<(u64, f32)> {
+    let mut best: Option<(u64, f32)> = None;
+    for sprite in sprites
+        .iter()
+        .filter(|sprite| sprite.entity != 0 && sprite.width > 0.0 && sprite.height > 0.0)
+    {
+        let model = model_matrix(&sprite.transform);
+        let half_width = sprite.width * 0.5;
+        let half_height = sprite.height * 0.5;
+        let corner =
+            |x: f32, y: f32| transform_point(&model, [x * half_width, y * half_height, 0.0]);
+        let top_left = corner(-1.0, 1.0);
+        let top_right = corner(1.0, 1.0);
+        let bottom_left = corner(-1.0, -1.0);
+        let bottom_right = corner(1.0, -1.0);
+        let distance = [
+            hit_triangle(ray, top_left, top_right, bottom_left),
+            hit_triangle(ray, top_right, bottom_right, bottom_left),
+        ]
+        .into_iter()
+        .flatten()
+        .min_by(f32::total_cmp);
+        if let Some(distance) = distance
+            && best.is_none_or(|(_, nearest)| distance < nearest)
+        {
+            best = Some((sprite.entity, distance));
+        }
+    }
+    best
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -276,6 +309,52 @@ mod tests {
         );
         let hit = pick_surface(&items, &down(5.0), &[]).expect("surface");
         assert!(hit.normal.y > 0.99 && (hit.distance - 5.0).abs() < 1.0e-4);
+    }
+
+    #[test]
+    fn a_sprite_is_picked_where_its_quad_is_and_not_outside_it() {
+        let sprite = |entity: u64, z: f32, width: f32, height: f32| SpriteItem {
+            entity,
+            selected: false,
+            hovered: false,
+            width,
+            height,
+            transform: Transform {
+                position: Vec3::new(0.0, 0.0, z),
+                ..Transform::IDENTITY
+            },
+            color: Color::WHITE,
+            asset: String::new(),
+            texture: None,
+            flip_x: false,
+            flip_y: false,
+            layer: 0,
+            animation: crate::frame::SpriteAnimation::single(),
+            frame: 0,
+        };
+        let forward = |x: f32, y: f32| Ray {
+            origin: Vec3::new(x, y, 5.0),
+            direction: Vec3::new(0.0, 0.0, -1.0),
+        };
+        // Small quad in front, larger one behind it.
+        let sprites = [sprite(4, 0.0, 2.0, 2.0), sprite(8, -3.0, 4.0, 4.0)];
+        let center = pick_sprite(&sprites, &forward(0.0, 0.0)).expect("the nearer quad");
+        assert_eq!(center.0, 4);
+        assert!((center.1 - 5.0).abs() < 1.0e-4, "{}", center.1);
+        assert_eq!(
+            pick_sprite(&sprites, &forward(1.5, 0.0)).map(|hit| hit.0),
+            Some(8),
+            "outside the small quad but inside the big one"
+        );
+        assert_eq!(pick_sprite(&sprites, &forward(3.5, 0.0)), None);
+        assert_eq!(
+            pick_sprite(
+                &[sprite(0, 0.0, 2.0, 2.0), sprite(5, 0.0, 0.0, 2.0)],
+                &forward(0.0, 0.0)
+            ),
+            None,
+            "entity 0 and a quad without size are not targets"
+        );
     }
 
     #[test]

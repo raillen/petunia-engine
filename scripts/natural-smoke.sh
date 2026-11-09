@@ -108,9 +108,13 @@ Xvfb "$display" -screen 0 1440x900x24 +extension GLX >/dev/null 2>&1 &
 xvfb_pid=$!
 sleep 1
 
-env -u WAYLAND_DISPLAY DISPLAY="$display" XDG_CONFIG_HOME="$workdir/config" XDG_CACHE_HOME="$workdir/cache" \
-    QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 QT_LOGGING_RULES='qt.qpa.*=false' \
-    "$editor" --sample "$workdir/mundo" 2>"$workdir/editor.log" &
+# Exported, never prefixed to a `\`-continued command: a comment inside a continuation ends the
+# command and the editor would start on the real display with the real settings folder (that
+# happened to editor-smoke.sh on 2026-10-29).
+export DISPLAY="$display" XDG_CONFIG_HOME="$workdir/config" XDG_CACHE_HOME="$workdir/cache"
+export QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 QT_LOGGING_RULES='qt.qpa.*=false'
+unset WAYLAND_DISPLAY
+"$editor" --sample "$workdir/mundo" 2>"$workdir/editor.log" &
 editor_pid=$!
 sleep 1
 watch_editor "$editor_pid" "$workdir/editor.log"

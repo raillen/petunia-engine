@@ -152,6 +152,7 @@ fn command_run(args: &[String]) -> Result<ExitCode, String> {
         width: 1280,
         height: 720,
         scripts: Some(folder.join(petunia_script::SCRIPTS_DIRECTORY)),
+        project_root: Some(folder),
     };
     petunia_player::run(project.world, config).map_err(|error| error.to_string())?;
     Ok(ExitCode::SUCCESS)

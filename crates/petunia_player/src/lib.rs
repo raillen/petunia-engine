@@ -22,8 +22,8 @@ use glutin::surface::{Surface, SwapInterval, WindowSurface};
 use glutin_winit::{DisplayBuilder, GlWindow};
 use petunia_input::{ActionMap, ActionState, actions};
 use petunia_render::{
-    FlyCamera, SculptCache, extract_frame, extract_sculpt_volumes, solid_shapes, start_camera,
-    start_camera_at,
+    FlyCamera, RenderFrame, SculptCache, TextureLoader, extract_frame, extract_sculpt_volumes,
+    solid_shapes, start_camera, start_camera_at,
 };
 use petunia_render_gl::GlRenderer;
 use petunia_script::{LoadReport, PhysicsSettings, PlayerInput, ScriptHost};
@@ -44,6 +44,9 @@ pub struct PlayerConfig {
     pub height: u32,
     /// The project's `scripts/` folder. When set, the scripts run every frame.
     pub scripts: Option<std::path::PathBuf>,
+    /// The project folder. When set, the sprites read their PNGs from it (`assets/hero.png`,
+    /// DR-38); without it a sprite is drawn as a plain colored quad.
+    pub project_root: Option<std::path::PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -113,6 +116,11 @@ struct App {
     failure: Option<PlayerError>,
     /// A character walks (W A S D, Space jumps) and the camera follows it, instead of flying.
     walking: bool,
+    /// Pictures the scene names, decoded once from the project folder (DR-38).
+    textures: TextureLoader,
+    /// The game's own clock, in seconds: sprite sheets play from it (DR-39). The player always
+    /// plays, so the clock only grows while the window is open.
+    clock_seconds: f32,
 }
 
 impl App {
@@ -174,7 +182,18 @@ impl App {
             cursor_grabbed: false,
             failure: None,
             walking,
+            textures: TextureLoader::new(),
+            clock_seconds: 0.0,
         }
+    }
+
+    /// Decodes whatever the frame's sprites name (once per asset) and points them at it.
+    fn load_textures(&mut self, frame: &mut RenderFrame) {
+        let Some(root) = self.config.project_root.as_deref() else {
+            return;
+        };
+        self.textures
+            .resolve(frame, |asset| petunia_project::load_png_asset(root, asset));
     }
 
     fn fail(&mut self, event_loop: &ActiveEventLoop, error: PlayerError) {
@@ -213,7 +232,7 @@ impl App {
         }
         self.input.begin_frame();
 
-        let frame = match &mut self.scene {
+        let mut frame = match &mut self.scene {
             Scene::Plain(world) => {
                 let mut frame = extract_frame(world, self.fly.camera);
                 frame.sculpts = self.sculpts.items(&extract_sculpt_volumes(world));
@@ -243,6 +262,11 @@ impl App {
                 frame
             }
         };
+        self.load_textures(&mut frame);
+        // A game runs: every sprite sheet advances with the same clock the scripts and the physics
+        // use (DR-39).
+        self.clock_seconds += elapsed_seconds;
+        frame.animate_sprites(self.clock_seconds);
         let Some(graphics) = self.graphics.as_mut() else {
             return;
         };

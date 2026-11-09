@@ -39,7 +39,7 @@ fi
 
 # Leftovers of tests that were interrupted before their own cleanup.
 shopt -s nullglob
-for leftover in /tmp/petunia-smoke.* /tmp/petunia-x.* /tmp/petunia_editor_test_*; do
+for leftover in /tmp/petunia-smoke.* /tmp/petunia-sprite.* /tmp/petunia-x.* /tmp/petunia_editor_test_*; do
     remove "$leftover"
 done
 

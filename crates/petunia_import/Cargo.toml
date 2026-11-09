@@ -9,6 +9,7 @@ description = "Adapter around the gltf crate: reads a GLB/glTF file into editabl
 [dependencies]
 petunia_math.workspace = true
 gltf.workspace = true
+png.workspace = true
 thiserror.workspace = true
 
 [lints]

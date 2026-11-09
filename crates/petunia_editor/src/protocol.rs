@@ -399,6 +399,7 @@ impl EditorSession {
             "collider.fit" => self.fit_collider(),
             "asset.list" => self.asset_list(),
             "asset.import" => self.asset_import(text(request, "path")?),
+            "asset.import_sprite" => self.asset_import_sprite(text(request, "path")?),
             "create.light" => self.create_light(
                 request
                     .get("kind")

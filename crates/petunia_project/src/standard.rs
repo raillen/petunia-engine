@@ -55,6 +55,18 @@ fn default_heights() -> Vec<f32> {
 ///   `order` decides the order among several scripts. A legacy row on the object has `owner` 0;
 ///   newer attachments are child entities with `owner` = the object's persistent id. The Script
 ///   Host calls `on_start`, `on_update`, `on_event` and the collision handlers of each attachment.
+/// - `Sprite` (DR-38): a flat textured quad, the building block of a 2D scene. `asset` is a PNG
+///   inside the project's `assets/` folder, written the way the asset list shows it
+///   (`assets/hero.png`); `size` is the width and the height in meters; `color` tints the picture
+///   (alpha fades the whole sprite); `layer` decides who is on top (a higher layer is drawn
+///   later); `flip_x` and `flip_y` mirror it. The object's `Transform` places, turns and scales
+///   it. A sprite with no `asset` is drawn as a plain colored rectangle.
+/// - `SpriteAnimation` (DR-39): plays a **sprite sheet** — one picture cut into a grid. `frames`
+///   is how many frames the sheet uses and `columns` how many fit in a row (the sheet has
+///   `ceil(frames / columns)` rows, the first one at the top). `fps` is frames per second, `loop`
+///   starts over at the end, `playing` switches the animation off, and `frame` is the frame shown
+///   **when it is not playing** (and while editing: Play mode and `petunia run` animate). A sprite
+///   without this row draws the whole picture.
 /// - `Floor`: a floor of a building ("andar") for the editor: `elevation` of its ground and
 ///   `height` to the next one, in meters. Saved with the scene like any other row.
 /// - `Sculpt`: a sculpted volume (caves, rocks). `base` is `solid` (a box of rock of `size`,
@@ -124,6 +136,28 @@ pub fn register_standard_tables(world: &mut World) -> Result<(), WorldError> {
                 ValueKind::Color,
                 Value::Color(Color::rgb(0.8, 0.8, 0.8)),
             ),
+    )?;
+    world.define_table(
+        TableSpec::new("Sprite")
+            .column("asset", ValueKind::Text, Value::Text(String::new()))
+            .column(
+                "size",
+                ValueKind::Vec3,
+                Value::Vec3(Vec3::new(1.0, 1.0, 0.0)),
+            )
+            .column("color", ValueKind::Color, Value::Color(Color::WHITE))
+            .column("layer", ValueKind::Int, Value::Int(0))
+            .column("flip_x", ValueKind::Bool, Value::Bool(false))
+            .column("flip_y", ValueKind::Bool, Value::Bool(false)),
+    )?;
+    world.define_table(
+        TableSpec::new("SpriteAnimation")
+            .column("frames", ValueKind::Int, Value::Int(1))
+            .column("columns", ValueKind::Int, Value::Int(1))
+            .column("fps", ValueKind::Float, Value::Float(8.0))
+            .column("loop", ValueKind::Bool, Value::Bool(true))
+            .column("playing", ValueKind::Bool, Value::Bool(true))
+            .column("frame", ValueKind::Int, Value::Int(0)),
     )?;
     world.define_table(
         TableSpec::new("Mesh")

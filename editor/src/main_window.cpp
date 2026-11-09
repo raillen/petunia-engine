@@ -410,6 +410,9 @@ void MainWindow::buildActions() {
     importModelAction_ = make(QStringLiteral("Importar modelo 3D…"), QStringLiteral("Traz um modelo .glb ou .gltf como objetos editáveis (uma cópia fica em assets/)"));
     importModelAction_->setProperty("iconName", QStringLiteral("cube"));
     connect(importModelAction_, &QAction::triggered, this, &MainWindow::chooseImportModel);
+    importImageAction_ = make(QStringLiteral("Importar imagem 2D…"), QStringLiteral("Traz um .png como sprite, de frente para a câmera; usa o mesmo gizmo, inspetor e desfazer dos objetos 3D (uma cópia fica em assets/)"));
+    importImageAction_->setProperty("iconName", QStringLiteral("texture"));
+    connect(importImageAction_, &QAction::triggered, this, &MainWindow::chooseImportImage);
     pointLightAction_ = make(QStringLiteral("Luz pontual"), QStringLiteral("Uma lâmpada na frente da câmera: ilumina até o alcance, em todas as direções"));
     pointLightAction_->setProperty("iconName", QStringLiteral("view_lit"));
     sunLightAction_ = make(QStringLiteral("Sol (luz direcional)"), QStringLiteral("Raios paralelos, como o sol: só a rotação do objeto importa"));
@@ -641,6 +644,7 @@ void MainWindow::buildMenus() {
     file->addAction(saveAction_);
     file->addSeparator();
     file->addAction(importModelAction_);
+    file->addAction(importImageAction_);
     file->addSeparator();
     file->addAction(quitAction_);
 
@@ -680,6 +684,7 @@ void MainWindow::buildMenus() {
     create->addAction(randomCaveAction_);
     create->addSeparator();
     create->addAction(importModelAction_);
+    create->addAction(importImageAction_);
     create->addAction(pointLightAction_);
     create->addAction(sunLightAction_);
 
@@ -973,6 +978,7 @@ void MainWindow::buildAppBar() {
     setActionIcon(caveAction_, QStringLiteral("generate_volume"));
     setActionIcon(terrainAction_, QStringLiteral("paint_3d"));
     setActionIcon(importModelAction_, QStringLiteral("cube"));
+    setActionIcon(importImageAction_, QStringLiteral("texture"));
     for (QAction* action : std::as_const(prefabActions_)) {
         setActionIcon(action, action->property("iconName").toString());
     }
@@ -1591,6 +1597,7 @@ void MainWindow::buildDocks() {
     createMenu->addAction(randomCaveAction_);
     createMenu->addSeparator();
     createMenu->addAction(importModelAction_);
+    createMenu->addAction(importImageAction_);
     createMenu->addAction(pointLightAction_);
     createMenu->addAction(sunLightAction_);
     hierarchy_->setCreateMenu(createMenu);
@@ -1720,6 +1727,24 @@ void MainWindow::chooseImportModel() {
     statusBar()->showMessage(message, 10000);
 }
 
+void MainWindow::chooseImportImage() {
+    const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Importar imagem 2D"), QString(),
+                                                      QStringLiteral("Imagens PNG (*.png)"));
+    if (path.isEmpty()) {
+        return;
+    }
+    const Reply reply = perform(QStringLiteral("asset.import_sprite"), QJsonObject{{"path", path}}, true);
+    if (!reply.ok) {
+        return;
+    }
+    const QJsonObject result = reply.result.toObject();
+    statusBar()->showMessage(QStringLiteral("Sprite criado: %1 × %2 pixels. Cópia em %3.")
+                                 .arg(result.value(QStringLiteral("width")).toInt())
+                                 .arg(result.value(QStringLiteral("height")).toInt())
+                                 .arg(result.value(QStringLiteral("asset")).toString()),
+                             10000);
+}
+
 void MainWindow::chooseOpen() {
     const QString path = QFileDialog::getExistingDirectory(this, QStringLiteral("Abrir pasta de projeto Petunia"));
     if (!path.isEmpty()) {
@@ -1748,7 +1773,7 @@ void MainWindow::onSnapshot() {
     for (QAction* action : shapeActions_) {
         action->setEnabled(project);
     }
-    for (QAction* action : {terrainAction_, caveAction_, randomCaveAction_, importModelAction_, pointLightAction_, sunLightAction_, sculptLargerAction_, sculptSmallerAction_}) {
+    for (QAction* action : {terrainAction_, caveAction_, randomCaveAction_, importModelAction_, importImageAction_, pointLightAction_, sunLightAction_, sculptLargerAction_, sculptSmallerAction_}) {
         action->setEnabled(project);
     }
     for (QAction* action : std::as_const(prefabActions_)) {
