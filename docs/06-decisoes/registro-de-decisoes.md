@@ -390,7 +390,7 @@ Pool e fade (herdados, `LOCAL`) valem em todas.
 
 **Proteções que vieram junto:** a cena pode ter até 64 MB, e salvar uma cena maior é recusado (antes, salvava e depois não abria); o histórico de desfazer tem teto de 256 MB.
 
-**Falta:** a interface Qt (menu Malha, modo de edição com `Tab`, atalhos). Lista em [ganchos da interface](../02-arquitetura/13-primitivas-e-edicao-de-malha.md#ganchos-da-interface-que-faltam).
+**Falta (à época):** a interface Qt (menu Malha, modo de edição com `Tab`, atalhos) — feita em 2026-10-27; valor ao vivo, faca por clique e contagens no inspetor chegaram em 2026-10-30 (`DR-39`). Lista em [o que a interface liga](../02-arquitetura/13-primitivas-e-edicao-de-malha.md#o-que-a-interface-liga-e-o-que-ainda-falta).
 
 **Reabrir se:** as malhas ficarem grandes demais para o arquivo de texto (aí, um arquivo binário por malha); se precisarmos de booleano "vivo" (mover o cortador e o buraco ir junto), que pediria guardar as operações; ou se o `manifold-rust` parar de ser mantido.
 
@@ -613,7 +613,7 @@ Se uma biblioteca for necessária mais tarde, passa no checklist de admissão an
 
 **Reabrir se:** a vista em contorno não bastar para quem usa leitor de tela (teste com uma pessoa real antes do N3), ou se a tela própria passar de 3 mil linhas.
 
-**Revisão (2026-10-27) — fluxo código ↔ nós:** o **grafo é a fonte** da lógica visual. **Ver como código** é somente leitura e mostra o texto gerado; **Transformar em script** copia esse texto para um `.aipo` independente. Um script `.aipo` editado **não** altera o grafo, e texto livre **não** vira grafo automaticamente. O workspace de programação lista os dois tipos e marca o que está ligado a cada objeto.
+**Revisão (2026-10-27) — fluxo código ↔ nós:** o **grafo é a fonte** da lógica visual. **Ver como código** mostra o texto gerado (e desde a auditoria de 2026-10-29 ele é **editável**, com **Aplicar código**/`Ctrl+Enter` devolvendo o texto ao grafo e gravando o arquivo); **Transformar em script** copia esse texto para um `.aipo` independente. Um script `.aipo` editado **não** altera o grafo, e texto livre **não** vira grafo automaticamente. O workspace de programação lista os dois tipos e marca o que está ligado a cada objeto.
 
 **Revisão (2026-10-28) — S5b aprovado como requisito:** o experimento de ida e volta deixou de ser opcional: o pedido foi “os nós não refletem 1:1 o código, então é impossível intercambiar”. A decisão [DR-34](#dr-34--intercâmbio-aipo--ir--em-implementação-2026-10-28) substitui a promessa de 1:1 total por um **IR com subconjunto explícito**, com recusa diagnosticada do que fica fora. A vista visual continua sendo uma vista do IR, não um espelho de toda a AST.
 
@@ -693,6 +693,8 @@ Se uma biblioteca for necessária mais tarde, passa no checklist de admissão an
 **Verificação de 2026-10-29:** os 6 testes de `source_ir`, os 15 testes de `ir_graph` (incluindo função auxiliar e global/local em execução), os 21 testes públicos de grafo (incluindo `flow.while`, `each` sem índice, `break` fora de laço e migração v1→v2), 4 testes de compilação de funções/globais/locais em `petunia_graph`, os 14 testes de modelo (incluindo a migração) e o teste de `script.to_graph` no editor, que agora converte função auxiliar e recusa lista como valor. A suíte total soma **446 testes**. O teste de ida e volta compara o texto canônico depois de Aipo → IR → grafo → Aipo → IR; ainda **não** cobre o corpo de conformidade inteiro da Aipo. O menu Qt **não** foi exercitado no smoke.
 
 **Fora desta etapa (declarado):** converter qualquer Aipo, IR neutro para Luau, e interface. A edição contínua existe no recorte suportado via `graph.from_code`; fora dele, diagnóstico. Não há promessa de que um script fora do subconjunto abra como nós.
+
+**Revisão de 2026-10-29 (auditoria):** a edição contínua **não estava utilizável pela janela**. O botão **Aplicar código** documentado nunca foi criado (o `connect` recebia um `applyCodeButton_` nulo, e o Qt avisava `invalid nullptr parameter` a cada abertura) e o campo de código era somente leitura. Além disso, `graph.from_code` trocava o grafo **em memória** e não gravava o `.graph.json`, então o Jogar rodava a lógica antiga enquanto o painel mostrava a nova. Correções: o botão existe (e `Ctrl+Enter` aplica, `F8` abre a vista de código, ambos por acessibilidade), o campo é editável e o `showCode` não sobrescreve o que foi digitado, e aplicar código **grava o arquivo** como as demais edições — convertendo antes, para que um texto fora do subconjunto o deixe intacto. Cobertura: teste `applied_code_reaches_the_file_and_a_refused_text_keeps_it` (falha sem a correção) e o teste de fumaça digita, aplica e lê o valor do arquivo.
 
 **Reabrir se:** o subconjunto não cobrir os projetos reais; nesse caso, ampliar com casos de teste, não com conversão silenciosa.
 
@@ -782,6 +784,133 @@ Se uma biblioteca for necessária mais tarde, passa no checklist de admissão an
 **Como ficou (LOCAL, verificado):** `StampShape::height_at_rotated` gira o deslocamento antes de avaliar a forma, então a borda continua zerando e a força continua em metros; `HeightChunk::stamp_region` recebe o ângulo e descarta um ângulo não finito. No comando, cada carimbo aceita `rotation` (padrão `0`, recusado se não for finito), então uma pincelada pode misturar ângulos. Na barra, o campo **Girar** aparece ao lado de **Forma**, só no modo Carimbo; `Ctrl`+seta dá 1° e a digitação é enviada ao soltar o campo ou apertar Enter. A frase do passo por teclado passa a dizer o ângulo — "Passo: Carimbo (Crista, 90°), raio 4,00 m…".
 
 **Verificação:** 2 testes novos em `petunia_world::stamp` (a crista vira 90° e troca os eixos; 0°/360° dão a mesma altura e um ângulo hostil não escreve nada), 1 no `heightfield` (a crista girada levanta ao longo de z e o pico não muda) e 1 de fluxo no `petunia_editor` (mesma forma, duas medidas, um desfazer entre elas). No teste de fumaça o mesmo carimbo de crista é aplicado reto e girado 90°: **16/16** (a medida ao longo de x cai e a ao longo de z cresce).
+
+---
+
+## DR-38 — Várias cenas, salvamento automático e recuperação · ACEITA (2026-10-30)
+
+**Pedido:** "continue… finalize todo o editor" depois da auditoria de 2026-10-29. Os dois limites
+declarados na tabela de [limites do editor](../02-arquitetura/11-editor.md#limites-conhecidos-para-não-esconder)
+eram exatamente estes: **"só a cena padrão do projeto abre"** e **"sem salvamento automático"**. A
+filosofia de engenharia já prometia `Autosave` no pilar 1 ("preservar o trabalho; não assumir Git").
+
+**Decisão**
+
+1. **Cena é arquivo, projeto é pasta.** Cada cena continua sendo `scenes/<nome>.scene.json` no
+   formato 1 que já existe; nada muda no arquivo. O manifesto continua nomeando a cena que abre
+   primeiro (`default_scene`). Três operações novas, e só elas, mudam o que se faz:
+   `project.scenes` (lista com nome, bytes e data), `project.open_scene` (troca a cena aberta sem
+   fechar o projeto) e `project.new_scene` (grava uma cena vazia e abre; nome ocupado é recusado,
+   nada é sobrescrito).
+2. **Trocar de cena troca só a cena.** Manifesto, scripts, `assets/` e a câmera ficam; o mundo, a
+   seleção e o **histórico de desfazer** são trocados. O desfazer nunca atravessa cenas: os ids das
+   entidades de duas cenas não têm relação entre si, e um passo antigo sobre um id novo seria um
+   defeito silencioso. Trocar de cena — e também criar outra ou recuperar — com trabalho **não
+   salvo** é recusado com `SCENE_UNSAVED`, a menos que `force: true` diga que a pessoa confirmou
+   descartar; a janela só manda `force` depois de perguntar. Um agente ou script não perde trabalho
+   por acidente.
+3. **Cena com erro não abre.** O carregamento passa pelo mesmo `read_scene`/`load_entities` do
+   projeto e o resultado vai para o Project Doctor. Cena com erro de dado é recusada; cena com
+   aviso (por exemplo, sem `PlayerStart`) abre. A cena aberta só é substituída no fim, então uma
+   recusa não toca no trabalho em memória.
+4. **O salvamento automático nunca escreve a cena.** Ele grava um arquivo ao lado,
+   `scenes/<nome>.scene.autosave.json`, com a mesma gravação atômica (`atomic_write`). O arquivo da
+   cena é do Ctrl+S; um travamento no meio do autosave não pode corromper o que a pessoa salvou.
+   O autosave só acontece quando há mudança (`dirty`), nunca no meio de um arrasto (`EDITOR_BUSY`),
+   e a janela o dispara a cada 90 s — sem diálogo, com uma frase discreta no rodapé.
+5. **Recuperar é escolha da pessoa.** Abrir o projeto **não** restaura sozinho, e trocar para uma
+   cena com cópia mais nova também não: a janela pergunta (Recuperar / Descartar / Agora não)
+   quando a cópia é mais nova que a cena. Recuperar carrega a
+   cópia no lugar do mundo e **mantém a sessão suja**, então o trabalho só vai para o arquivo da
+   cena quando a pessoa salva — nada é adotado em silêncio. Salvar a cena apaga a cópia automática,
+   porque o arquivo em disco passou a ser o mais novo. `project.recovery`,
+   `project.recover` e `project.recovery_discard` são as operações; a linha de comando e os testes
+   nunca abrem diálogo (a cópia fica para a próxima abertura interativa).
+6. **Empate de relógio conta como mais novo.** O sistema de arquivos informa segundos inteiros (às
+   vezes menos), e a cópia e a cena podem cair no mesmo segundo. Nesse empate a oferta aparece:
+   oferecer recuperação não custa nada, esconder pode perder trabalho. Uma cópia realmente velha
+   (cena salva depois) é ignorada e some no próximo salvamento.
+7. **O painel de assets não abre caminho novo no motor.** Ele só lista (`asset.list`), importa
+   (`asset.import`) e insere outra cópia de um modelo já copiado. Nenhuma leitura de disco na
+   janela: o painel mostra o que o motor devolve.
+
+**Fora desta decisão:** abrir uma cena de **outro** projeto (isso é `project.open`), duplicar ou
+renomear cenas pela janela, miniatura de cena no seletor, "salvar como…" para uma cena nova e
+miniaturas do autosave (`docs/04-acessibilidade/01-editor.md` pede "autosave com miniatura" — fica
+para quando houver captura de cena).
+
+**Verificação (LOCAL, nesta máquina):** testes de fluxo no `petunia_editor` (criar, listar, trocar,
+recusar cena inexistente e nome ocupado, cena suja recusada sem `force` e aceita com ele; autosave só
+quando sujo, recuperação em sessão nova,
+recusa quando não há cópia, salvamento apagando a cópia), testes de unidade do módulo novo
+(`scene_name`, `clean_scene_name`, caminho da cópia automática) e testes do `petunia_project`
+(lista só de `*.scene.json`, ordenada, sem seguir link; abrir cena com e sem entidades; caminho fora
+do projeto recusado). Os números medidos estão em
+[estado da implementação](../05-roadmap/03-estado-da-implementacao.md).
+
+---
+
+---
+
+## DR-39 — Valor ao vivo na tecla e faca por clique · ACEITA (2026-10-30)
+
+**Pedido:** fechar os dois ganchos de interface que a [edição de malha](../02-arquitetura/13-primitivas-e-edicao-de-malha.md#o-que-a-interface-liga-e-o-que-ainda-falta)
+declarava: o **valor ao vivo** (`mesh.preview` existia e não tinha gesto) e a **faca por clique**
+(a janela pedia números de aresta). Continuação do `DR-38` na mesma rodada.
+
+**Decisão**
+
+1. **O valor ao vivo é da tecla, não do botão.** Segurar `I` (inserir), `Ctrl+E` (extrudar),
+   `Ctrl+B` (chanfro) ou `Ctrl+R` (corte em laço) mostra a operação na hora e deixa o mouse mudar o
+   valor (1 cm por pixel, entre 0,01 e 10 m; no corte em laço o valor é inteiro, um corte a cada
+   40 px, de 1 a 32); soltar a tecla, clicar ou `Enter` aplica como **um** passo de desfazer, e
+   `Esc` cancela. Os botões, os menus e o resto das operações continuam aplicando na hora: só as
+   quatro que têm um número para arrastar ganharam o gesto.
+2. **Uma batida continua uma batida.** A prévia começa com o valor da barra; soltar a tecla sem
+   mover aplica esse valor — o mesmo resultado de antes, com a prévia aparecendo no caminho.
+3. **A liberação da tecla é a confirmação, com uma espera de 120 ms.** No X11 a repetição
+   automática chega como pares de pressionar/soltar e o Qt nem sempre marca o soltar como
+   repetição; um soltar que é seguido de outro pressionar em menos de 120 ms é repetição e não
+   confirma. Isso evita a sequência de "aplicar seis vezes" que a primeira versão produziu.
+   **Limite conhecido:** um teclado configurado para repetir mais devagar que 120 ms por repetição
+   aplica o valor a cada repetição, em vez de esperar o soltar. Não corrompe nada (cada aplicação
+   é um desfazer), mas o gesto fica aos pedaços; a correção definitiva pediria ler o estado físico
+   da tecla, que não é portátil.
+4. **A faca é de dois cliques.** `K` arma a faca; cada clique usa `mesh.pick` no pixel e guarda a
+   aresta e a fração daquele ponto; o segundo clique manda `mesh.knife`. O erro do motor (por
+   exemplo, arestas que não dividem a mesma face) aparece no rodapé e a malha não muda. `Esc`
+   cancela. **Malha ▸ Faca por números…** continua existindo: digitar as arestas é o caminho sem
+   mouse e o único que funciona com o ponteiro fora do viewport.
+5. **Foco no viewport ao entrar no modo de edição.** `Tab` agora leva o foco do teclado para o
+   viewport; sem isso, escolher um objeto na Hierarquia e apertar `K` não fazia nada, porque os
+   atalhos de malha valem só quando o viewport (ou um filho) tem o foco — e é assim que deve ser,
+   para não roubar letras da edição de código.
+
+6. **As contagens da malha aparecem no inspetor.** A seção `Mesh` diz `8 vértices · 12 arestas ·
+   6 faces` em vez de "malha editável". A conta é feita na janela, sobre o texto que a linha já
+   guarda: pedir `mesh.info` a cada mudança seria uma ida ao motor por tecla digitada, e os
+   números são os mesmos. **Malha ▸ Informações da malha** continua para os triângulos e para
+   saber se o sólido é fechado.
+
+**Fora desta decisão:** arrastar o valor da faca e prévia com o ponteiro fora do viewport (o
+`mesh.preview` aceita; a janela não tem gesto para isso).
+
+**Verificação (LOCAL, nesta máquina, display virtual):** na janela, a seção `Mesh` mostrou
+`8 vértices · 12 arestas · 6 faces` antes e mudou para `10 vértices · 15 arestas · 7 faces`
+depois de um corte com a faca (medido por diferença de pixels na região do inspetor: 1 273
+pixels mudaram); `K` + dois cliques numa face cortou a malha de **6 para 7 faces** e de **8 para
+10 vértices**, e o arquivo da cena guardou o corte; `I`, `Ctrl+E`, `Ctrl+B` e `Ctrl+R` segurados e
+arrastados deram, respectivamente, um inset de **1,20 m** (a barra tinha 0,20 m) e as malhas
+**10 faces/12 vértices**, **7 faces/10 vértices** e **14 faces/16 vértices**; `Esc` no meio da
+prévia deixou a malha **idêntica** (6 faces, 8 vértices) com o rodapé "Prévia cancelada; a malha
+não mudou."; e **um** `Ctrl+Z` no corte em laço voltou a malha para 6 faces e 8 vértices. O log do
+editor ficou vazio e os testes de fumaça continuaram passando (`editor-smoke` **12/12**,
+`natural-smoke` **16/16**).
+
+**Não verificado:** a janela na sessão real; leitor de tela; o gesto com uma mesa digitalizadora;
+a prévia de `loop_cut`.
+
+---
 
 ---
 

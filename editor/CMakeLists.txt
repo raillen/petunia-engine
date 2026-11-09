@@ -31,6 +31,7 @@ add_executable(petunia-editor
     src/hierarchy_panel.cpp
     src/inspector_panel.cpp
     src/info_panels.cpp
+    src/assets_panel.cpp
     src/code_editor.cpp
     src/code_panel.cpp
     src/graph_panel.cpp
@@ -38,6 +39,7 @@ add_executable(petunia-editor
     src/main_window.cpp
     src/panel_title_bar.cpp
     src/command_palette.cpp
+    src/pointer_diagnostics.cpp
     src/ui_kit/shell/petunia_segmented.cpp
     src/appearance.cpp
     src/ui_kit/petunia_theme.cpp

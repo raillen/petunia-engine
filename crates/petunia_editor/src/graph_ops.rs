@@ -272,6 +272,8 @@ impl EditorSession {
     /// subset (DR-34). The graph's old layout is dropped, because node ids change.
     pub fn graph_from_code(&mut self, text: &str) -> Result<Json, Failure> {
         let name = self.graph.as_ref().ok_or_else(no_graph)?.name.clone();
+        let path = self.graph_path(&name)?;
+        let layout_path = self.layout_path(&name)?;
         let code = if let Some(position) = text.find("\n\nfn ") {
             &text[position + 2..]
         } else {
@@ -281,13 +283,38 @@ impl EditorSession {
             .map_err(|diagnostics| first_conversion_failure(&diagnostics))?;
         let document =
             to_graph(&program).map_err(|diagnostics| first_conversion_failure(&diagnostics))?;
+        // Convert first, write second: a text outside the subset must leave the file untouched,
+        // exactly like every `graph.*` edit does (the old version changed only memory, so the
+        // graph looked updated in the panel and the `.graph.json` on disk kept the old logic).
         let graph = self.graph.as_mut().ok_or_else(no_graph)?;
+        if !graph.backed_up {
+            if path.exists()
+                && let Some(parent) = path.parent()
+            {
+                let backup_directory = parent.join(BACKUP_DIRECTORY);
+                if std::fs::create_dir_all(&backup_directory).is_ok() {
+                    let _ = std::fs::copy(
+                        &path,
+                        backup_directory.join(format!("{}{GRAPH_SUFFIX}", graph.name)),
+                    );
+                }
+            }
+            graph.backed_up = true;
+        }
+        atomic_write(&path, document.to_text().as_bytes())
+            .map_err(|error| io_failure("gravar o grafo", &error))?;
         graph.past.push(graph.document.clone());
+        if graph.past.len() > MAX_HISTORY {
+            graph.past.remove(0);
+        }
         graph.future.clear();
         graph.document = document;
         graph.layout = GraphLayout::new();
         graph.layout_problem = None;
-        graph.backed_up = true;
+        // Node ids changed, so the old places mean nothing; remove the stale layout file too.
+        if layout_path.exists() {
+            let _ = std::fs::remove_file(&layout_path);
+        }
         self.record("graph", &format!("aplicar código a {name}"), true, "");
         self.refresh_script_diagnostics();
         self.graph_view()
@@ -1084,6 +1111,61 @@ mod tests {
         assert_eq!(view["name"], "anda_grafo");
         let code_again = call(&mut session, json!({ "op": "graph.code" }));
         assert_eq!(code_again["ok"], true, "{code_again}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The panel showed the new text and the file on disk still had the old logic, so what played
+    /// was not what the person had just applied (2026-10-29). Applying code must save like every
+    /// other `graph.*` edit, and a text outside the subset must leave the file exactly as it was.
+    #[test]
+    fn applied_code_reaches_the_file_and_a_refused_text_keeps_it() {
+        let (mut session, root) = project("from_code_saved");
+        call(
+            &mut session,
+            json!({
+                "op": "script.write",
+                "name": "anda",
+                "text": "fn on_update(entity, dt) {\n    transform.move_x(entity, dt)\n}\n"
+            }),
+        );
+        call(
+            &mut session,
+            json!({ "op": "script.to_graph", "name": "anda", "graph": "anda_grafo" }),
+        );
+        let path = root.join("scripts/anda_grafo.graph.json");
+        let first = std::fs::read_to_string(&path).expect("the graph was written");
+        assert!(first.contains("transform.move_x"), "{first}");
+
+        // A new body, still inside the subset: it must reach the file, not only the open graph.
+        call(
+            &mut session,
+            json!({
+                "op": "graph.from_code",
+                "text": "fn on_update(entity, dt) {\n    transform.rotate_y(entity, dt)\n}\n"
+            }),
+        );
+        let saved = std::fs::read_to_string(&path).expect("file");
+        assert!(saved.contains("transform.rotate_y"), "{saved}");
+        assert!(!saved.contains("transform.move_x"), "{saved}");
+        let reopened = call(&mut session, json!({ "op": "graph.code" }));
+        assert_eq!(reopened["ok"], true, "{reopened}");
+        assert!(
+            reopened["text"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("rotate_y"),
+            "{reopened}"
+        );
+
+        // Outside the subset: a diagnostic, and the file is byte for byte what it was.
+        let before = std::fs::read(&path).expect("read");
+        let refused = session.handle(&json!({
+            "op": "graph.from_code",
+            "text": "struct Ponto {\n    x: Float\n}\n"
+        }));
+        assert!(!refused["ok"].as_bool().unwrap_or(true), "{refused}");
+        let after = std::fs::read(&path).expect("read");
+        assert_eq!(before, after, "a refused text must not touch the file");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

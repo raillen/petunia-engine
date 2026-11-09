@@ -114,6 +114,7 @@ env -u WAYLAND_DISPLAY DISPLAY="$display" XDG_CONFIG_HOME="$workdir/config" XDG_
 editor_pid=$!
 sleep 1
 watch_editor "$editor_pid" "$workdir/editor.log"
+require_virtual_display "$editor_pid" "$display"
 wait_for_window "Petunia Editor" "$display" "$editor_pid" "$workdir/editor.log"
 
 export DISPLAY="$display"

@@ -60,16 +60,22 @@ Xvfb "$display" -screen 0 1440x900x24 +extension GLX >/dev/null 2>&1 &
 xvfb_pid=$!
 sleep 1
 
+# The delay is also the LENGTH of the run: the editor takes the pictures and quits when it fires.
+# At 62000 the steps grew past the timer, the editor quit in the middle of the last ones and the
+# run reported failures (and once a segfault) that the product did not have (2026-10-29). Keep it
+# well above the slowest pass.
+#
+# A comment must never sit INSIDE the continuation below: bash ends the logical line at the
+# comment, so `env` runs on its own (printing the environment) and the editor starts as a
+# separate command that inherits the real session — it opened on the user's own display and
+# rewrote the user's real `~/.config/Petunia` settings instead of the scratch ones (2026-10-29).
 env -u WAYLAND_DISPLAY DISPLAY="$display" XDG_CONFIG_HOME="$workdir/config" XDG_CACHE_HOME="$workdir/cache" \
     QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 QT_LOGGING_RULES='qt.qpa.*=false' \
-    # The delay is also the LENGTH of the run: the editor takes the pictures and quits when it
-    # fires. At 62000 the steps grew past the timer, the editor quit in the middle of the last
-    # ones and the run reported failures (and once a segfault) that the product did not have
-    # (2026-10-29). Keep it well above the slowest pass.
     "$editor" --sample "$workdir/sala" --screenshot "$output" --screenshot-delay 120000 2>"$workdir/editor.log" &
 editor_pid=$!
 sleep 1
 watch_editor "$editor_pid" "$workdir/editor.log"
+require_virtual_display "$editor_pid" "$display"
 wait_for_window "Petunia Editor" "$display" "$editor_pid" "$workdir/editor.log"
 
 export DISPLAY="$display"
@@ -140,7 +146,16 @@ xdotool mousemove 360 146 click 1;               sleep 0.5   # the "Graus" input
 xdotool key Return;                              sleep 0.6   # its menu
 xdotool key Down Down Return;                    sleep 0.6   # "Usar o valor de…"
 xdotool key Return;                              sleep 1.0   # the first source: dt of the event
-xdotool mousemove 1153 51 click 1;               sleep 0.8   # Ver como código
+xdotool key F8;                                  sleep 0.8   # Ver como código (the toolbar button moves with the script list, so use the shortcut)
+# Snapshot of the graph the PALETTE built, before the text below replaces it: the two checks read
+# the same file otherwise and the second one would hide a broken palette.
+cp "$workdir/sala/scripts/gira.graph.json" "$output.palette.json"
+# Editing the text and applying it must reach scripts/<name>.graph.json (the panel looked updated
+# while the file kept the old logic, 2026-10-29). Type a constant in place of the dt wire.
+xdotool mousemove 500 200 click 1;               sleep 0.4
+xdotool key ctrl+a;                              sleep 0.2
+xdotool type --delay 12 'fn on_update(entity, dt) { transform.rotate_y(entity, 45.0) }'; sleep 0.6
+xdotool key ctrl+Return;                         sleep 1.5   # Aplicar código (o botão fica no cabeçalho do código)
 xdotool mousemove 925 51 click 1;                sleep 0.8   # Caixas e fios: the same graph as boxes
 import -window root "$output.canvas.png"                     # one picture of the canvas
 xdotool mousemove 600 390 mousedown 1;                       # drag the event box
@@ -162,6 +177,24 @@ cp "$workdir/sala/scenes/room.scene.json" "$output.scene.json"
 cp "$workdir/sala/scripts/smoke.aipo" "$output.script.aipo" 2>/dev/null || true
 cp "$workdir/sala/scripts/gira.graph.json" "$output.graph.json" 2>/dev/null || true
 cp "$workdir/sala/scripts/gira.layout.json" "$output.layout.json" 2>/dev/null || true
+
+# `--pointer-info` is the diagnostic used when a click "does not work": it must print the scale state
+# without blocking anything. A short run of its own, on the same virtual display, checks the line
+# exists; the crosshair over a click needs eyes and is checked in a real run.
+pointer_log="$workdir/pointer.log"
+if ! env -u WAYLAND_DISPLAY DISPLAY="$display" XDG_CONFIG_HOME="$workdir/config" XDG_CACHE_HOME="$workdir/cache" \
+        QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 QT_LOGGING_RULES='qt.qpa.*=false' \
+        "$editor" --pointer-info --sample "$workdir/sonda" --screenshot "$output.pointer.png" \
+        --screenshot-delay 2500 2>"$pointer_log"; then
+    echo "verificação: --pointer-info abriu e fechou -> FALHOU"
+    exit 1
+fi
+if grep -q '^\[escala\] abriu: plataforma=xcb' "$pointer_log" && grep -q '^\[escala\] 1,5 s depois' "$pointer_log"; then
+    echo "verificação: --pointer-info imprimiu a escala e a segunda amostra da janela -> ok"
+else
+    echo "verificação: --pointer-info imprimiu a escala e a segunda amostra da janela -> FALHOU"
+    exit 1
+fi
 
 # The gizmo drag must have moved crate #9 along X only, onto the 0.5 m grid.
 python3 -I - "$output.scene.json" <<'PY'
@@ -193,12 +226,32 @@ scripted = os.path.exists(script_path) and "fn on_update(entity, dt) {\n    log.
 print("verificação: script escrito no editor de código e salvo em scripts/ ->", "ok" if scripted else "FALHOU")
 graph_path = sys.argv[1].replace(".scene.json", ".graph.json")
 graph_ok = False
+applied_ok = False
 if os.path.exists(graph_path):
     graph = json.load(open(graph_path))
     kinds = sorted(node["kind"] for node in graph["nodes"])
-    wired = any(edge["from"]["pin"] == "dt" and edge["to"]["pin"] == "degrees" for edge in graph["edges"])
-    graph_ok = kinds == ["api.transform.rotate_y", "event.on_update"] and wired
-print("verificação: grafo de nós criado, com evento, ação e o dt ligado em Graus (arquivo .graph.json) ->", "ok" if graph_ok else "FALHOU")
+    # The text typed into "Ver como código" and applied with "Aplicar código" must be in the FILE:
+    # the panel used to change while the graph on disk kept the old logic (2026-10-29). Applying it
+    # replaces the dt wire with a constant, which is why the palette's own chain was captured
+    # before (gira.palette.json) instead of being read from this final file.
+    rotate = [n for n in graph["nodes"] if n["kind"] == "api.transform.rotate_y"]
+    applied_ok = (
+        kinds == ["api.transform.rotate_y", "event.on_update"]
+        and len(rotate) == 1
+        and rotate[0].get("params", {}).get("degrees") == 45.0
+        and not any(edge["from"]["pin"] == "dt" for edge in graph["edges"])
+    )
+    graph_ok = applied_ok
+print("verificação: grafo de nós criado, com evento, ação e o Graus ligado pelo texto aplicado ->", "ok" if graph_ok else "FALHOU")
+# What the palette built, captured before the text was applied: the two views must agree on it.
+palette_path = sys.argv[1].replace(".scene.json", ".palette.json")
+palette_ok = False
+if os.path.exists(palette_path):
+    built = json.load(open(palette_path))
+    palette_ok = sorted(n["kind"] for n in built["nodes"]) == ["api.transform.rotate_y", "event.on_update"] and any(
+        edge["from"]["pin"] == "dt" and edge["to"]["pin"] == "degrees" for edge in built["edges"]
+    )
+print("verificação: a paleta montou a cadeia e ligou dt em Graus ->", "ok" if palette_ok else "FALHOU")
 # The canvas drags boxes without touching the logic: positions live in their own file.
 layout_path = sys.argv[1].replace(".scene.json", ".layout.json")
 moved_box = False
@@ -223,6 +276,6 @@ converted_to_mesh = any(
 print("verificação: modo de edição converteu caixa para malha editável ->", "ok" if converted_to_mesh else "FALHOU")
 hero_free = not any(e["rows"].get("Name", {}).get("text") == "Jogador" for e in scene["entities"]) and not any("Character" in e["rows"] for e in scene["entities"])
 print("verificação: Jogar (F6) e parar (Esc) não deixaram o herói de reserva na cena salva ->", "ok" if hero_free else "FALHOU")
-sys.exit(0 if (moved and added and on_cursor and built_up and carved and dug and scripted and graph_ok and moved_box and converted_to_mesh and hero_free) else 1)
+sys.exit(0 if (moved and added and on_cursor and built_up and carved and dug and scripted and graph_ok and applied_ok and palette_ok and moved_box and converted_to_mesh and hero_free) else 1)
 PY
 echo "imagem: $output (e $output.viewport.png, $output.canvas.png, $output.playing.png); cena salva: $output.scene.json"

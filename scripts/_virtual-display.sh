@@ -73,3 +73,31 @@ wait_for_window() {
     fi
     return 1
 }
+
+# The editor must never be started in the user's own session from automation (AGENTS.md section 4).
+# A bash comment placed inside a `\` continuation silently ends the logical line, so `env` runs
+# alone and the editor starts as a separate command that inherits the real DISPLAY and the real
+# XDG_CONFIG_HOME — it opened on the user's desktop and rewrote `~/.config/Petunia` (2026-10-29).
+# Call this right after starting it: a run in the user's session stops before touching the window.
+require_virtual_display() {
+    local pid="$1" display="$2"
+    local environment
+    environment="$(tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null || true)"
+    if [[ -z "$environment" ]]; then
+        echo "erro: não consegui ler o ambiente do editor (pid $pid)" >&2
+        return 1
+    fi
+    local found_display found_config
+    found_display="$(sed -n 's/^DISPLAY=//p' <<<"$environment")"
+    found_config="$(sed -n 's/^XDG_CONFIG_HOME=//p' <<<"$environment")"
+    if [[ "$found_display" != "$display" ]]; then
+        echo "erro: o editor abriu em DISPLAY=[${found_display:-<vazio>}] e não em [$display]" >&2
+        echo "  provável causa: um comentário dentro da continuação com \\, que parte o comando" >&2
+        return 1
+    fi
+    if [[ -z "$found_config" || "$found_config" == "$HOME/.config" ]]; then
+        echo "erro: o editor está usando as configurações reais (XDG_CONFIG_HOME=[${found_config:-<vazio>}])" >&2
+        return 1
+    fi
+    return 0
+}

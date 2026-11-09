@@ -14,6 +14,7 @@
 #include <QMenu>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QSet>
 #include <QSignalBlocker>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -166,6 +167,40 @@ InspectorPanel::~InspectorPanel() {
 
 void InspectorPanel::setEngineAvailable(bool available) {
     engineAvailable_ = available;
+}
+
+// The `Mesh` row stores the whole geometry as text ("positions": ["x y z", …], "faces":
+// ["a b c", …]). Counting here beats one more round trip to the engine: the inspector refreshes
+// on every change, and the same numbers are what `mesh.info` reports (vertices, faces, edges).
+QString meshSummary(const QJsonValue& geometry) {
+    const QJsonObject object = geometry.toObject();
+    const int vertices = object.value(QStringLiteral("positions")).toArray().size();
+    const QJsonArray faces = object.value(QStringLiteral("faces")).toArray();
+    if (vertices == 0 || faces.isEmpty()) {
+        return QStringLiteral("malha vazia");
+    }
+    QSet<QPair<int, int>> edges;
+    for (const QJsonValue& faceValue : faces) {
+        const QStringList corners = faceValue.toString().split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        QList<int> numbers;
+        numbers.reserve(corners.size());
+        for (const QString& corner : corners) {
+            bool ok = false;
+            const int vertex = corner.toInt(&ok);
+            if (ok) {
+                numbers.append(vertex);
+            }
+        }
+        for (int corner = 0; corner < numbers.size(); ++corner) {
+            const int first = numbers.at(corner);
+            const int second = numbers.at((corner + 1) % numbers.size());
+            edges.insert(qMakePair(qMin(first, second), qMax(first, second)));
+        }
+    }
+    return QStringLiteral("%1 vértices · %2 arestas · %3 faces")
+        .arg(vertices)
+        .arg(edges.size())
+        .arg(faces.size());
 }
 
 // Removes every widget from the panel. They are hidden and deleted LATER: this runs while a
@@ -502,6 +537,10 @@ QWidget* InspectorPanel::makeEditor(const QString& table, const QJsonObject& col
         auto* summary = new QLabel;
         summary->setAccessibleName(accessible);
         summary->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        summary->setToolTip(kind == "mesh"
+                                ? QStringLiteral("Contagens da malha guardada; Malha ▸ Informações da malha "
+                                                 "mostra os triângulos e se o sólido é fechado")
+                                : QString());
         field->show = [summary, kind](const QJsonValue& value) {
             if (kind == "floats") {
                 summary->setText(QStringLiteral("%1 números").arg(value.toArray().size()));
@@ -512,7 +551,7 @@ QWidget* InspectorPanel::makeEditor(const QString& table, const QJsonObject& col
                                               ? QStringLiteral(", fechada")
                                               : QStringLiteral(", aberta")));
             } else {
-                summary->setText(QStringLiteral("malha editável"));
+                summary->setText(meshSummary(value));
             }
         };
         return summary;

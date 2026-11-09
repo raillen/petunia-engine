@@ -53,7 +53,9 @@ private:
     void refreshView();
     void renderView(const QJsonObject& view);
     void showCode();
+    void writeCode(const QString& text);
     void applyCode();
+    void toggleCode();
 
     void addEvent();
     void addAfter();
@@ -103,6 +105,10 @@ private:
     QToolButton* codeButton_;
     QToolButton* asScriptButton_;
     QToolButton* applyCodeButton_ = nullptr;
+    // The code view is editable (DR-34). These two flags keep a background refresh from wiping
+    // what the user typed: `codeEdited_` is set by a real keystroke, `writingCode_` marks our own.
+    bool codeEdited_ = false;
+    bool writingCode_ = false;
     QToolButton* attachButton_;
     QToolButton* zoomOutButton_ = nullptr;
     QToolButton* zoomInButton_ = nullptr;

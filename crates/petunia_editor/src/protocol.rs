@@ -141,6 +141,25 @@ impl EditorSession {
             }
             "project.open" => self.open_project(Path::new(text(request, "path")?)),
             "project.save" => self.save(),
+            "project.scenes" => self.scene_list(),
+            "project.open_scene" => self.open_scene(
+                text(request, "path")?,
+                request
+                    .get("force")
+                    .and_then(Json::as_bool)
+                    .unwrap_or(false),
+            ),
+            "project.new_scene" => self.new_scene(
+                text(request, "name")?,
+                request
+                    .get("force")
+                    .and_then(Json::as_bool)
+                    .unwrap_or(false),
+            ),
+            "project.autosave" => self.autosave(),
+            "project.recovery" => self.recovery_info(),
+            "project.recover" => self.recover(),
+            "project.recovery_discard" => self.recovery_discard(),
 
             "script.list" => self.script_list(),
             "programming.list" => self.programming_list(),

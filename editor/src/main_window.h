@@ -18,6 +18,7 @@ class HistoryPanel;
 class CodePanel;
 class GraphPanel;
 class ApiPanel;
+class AssetPanel;
 class QAction;
 class QLabel;
 class QToolButton;
@@ -32,6 +33,7 @@ class QMenu;
 class QMenuBar;
 class QShortcut;
 class QStackedWidget;
+class QTimer;
 class QVBoxLayout;
 class PetuniaSegmented;
 class CommandPalette;
@@ -72,12 +74,32 @@ private:
     void buildMeshActions();
     void buildMeshBar();
     void applyMesh(const QString& operation);
+    void meshBoolean();
+    void meshKnife();
+    // The knife by clicking: two clicks on the mesh, each naming a point on an edge.
+    void startKnifeByClick();
+    bool handleKnifeClick(const QPoint& position);
+    void cancelKnife();
+    // A mesh operation shown live while the key is held: press shows it, moving the mouse changes
+    // the value, releasing the key (or clicking/Enter) applies it as ONE undo step, Esc cancels.
+    void startMeshPreview(const QString& operation);
+    void updateMeshPreview();
+    void endMeshPreview(bool commit);
+    void showMeshInfo();
     void buildNaturalBar();
     void syncNaturalBar(const QJsonObject& snapshot);
     void buildDocks();
+    // Several scenes per project, the automatic save and its recovery (DR-38).
+    void buildSceneActions();
+    void chooseOpenScene();
+    void chooseNewScene();
+    void autosaveNow();
+    void checkRecovery(bool interactive);
+    void openRecoveryDialog();
 
     Reply perform(const QString& operation, const QJsonObject& fields, bool interactive = true);
     void showFailure(const Reply& reply, bool interactive);
+    bool eventFilter(QObject* watched, QEvent* event) override;
     void onSnapshot();
     void updateCameraLabel();
     bool confirmDiscardChanges();
@@ -106,6 +128,9 @@ private:
     DiagnosticsPanel* diagnostics_ = nullptr;
     HistoryPanel* history_ = nullptr;
     ApiPanel* api_ = nullptr;
+    AssetPanel* assets_ = nullptr;
+    QDockWidget* assetsDock_ = nullptr;
+    QString assetsRoot_;
     QLabel* cameraLabel_ = nullptr;
     QLabel* countLabel_ = nullptr;
     QList<QDockWidget*> docks_;
@@ -130,6 +155,10 @@ private:
     QAction* newAction_ = nullptr;
     QAction* openAction_ = nullptr;
     QAction* saveAction_ = nullptr;
+    QAction* openSceneAction_ = nullptr;
+    QAction* newSceneAction_ = nullptr;
+    QAction* recoverAction_ = nullptr;
+    QTimer* autosaveTimer_ = nullptr;
     QAction* quitAction_ = nullptr;
     QAction* undoAction_ = nullptr;
     QAction* redoAction_ = nullptr;
@@ -168,6 +197,18 @@ private:
     QDoubleSpinBox* meshDistance_ = nullptr;
     QSpinBox* meshCuts_ = nullptr;
     QSpinBox* meshSegments_ = nullptr;
+    QAction* knifeAction_ = nullptr;
+    QAction* knifeNumbersAction_ = nullptr;
+    bool meshPreviewing_ = false;
+    QTimer* meshPreviewCommitTimer_ = nullptr;
+    QString meshPreviewOperation_;
+    double meshPreviewBase_ = 0.2;
+    double meshPreviewValue_ = 0.2;
+    QPoint meshPreviewOrigin_;
+    bool knifeClick_ = false;
+    bool knifeHasStart_ = false;
+    QJsonObject knifeStart_;
+    QAction* meshInfoAction_ = nullptr;
     // Options bar of the sculpting tools; only visible while one of them is active.
     QToolBar* sculptBar_ = nullptr;
     QToolBar* naturalBar_ = nullptr;

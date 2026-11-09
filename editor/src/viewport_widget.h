@@ -43,6 +43,9 @@ public:
     bool isPlaying() const { return playing_; }
     void setPlaying(bool on);
     void setComponentMode(ComponentMode mode);
+    // The mesh part (face, edge, vertex and point) under a viewport pixel, as `mesh.pick` answers.
+    // Empty when nothing is under it. Used by the knife: two clicks name two points on edges.
+    QJsonObject pickMeshPartAt(const QPoint& position);
 
 signals:
     void selectionChanged();
@@ -56,6 +59,8 @@ signals:
     void editModeChanged(bool on);
     void editModeToggleRequested();
     void componentModeChanged(ComponentMode mode);
+    // The key of a live mesh value (I, E, B) was released: the window commits the drag.
+    void meshValueKeyReleased();
     // Esc while playing.
     void playStopRequested();
     // What the scripts wrote and which handlers failed in the last frame.

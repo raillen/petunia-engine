@@ -4,7 +4,8 @@
 
 ## Resumo (TL;DR)
 
-Há **três níveis** de edição para construir mapas. **Os três já existem no motor.** O nível 3 (booleanos, inset, loop cut, bevel e o resto) chegou em 2026-10-25 e tem teste; a **interface** chegou em 2026-10-27 (barra **Malha**, vértices visíveis e atalhos). Ainda faltam booleanos, faca e valor ao vivo pela janela: veja os [ganchos](#ganchos-da-interface-que-faltam).
+Há **três níveis** de edição para construir mapas. **Os três já existem no motor.** O nível 3 (booleanos, inset, loop cut, bevel e o resto) chegou em 2026-10-25 e tem teste; a **interface** chegou em 2026-10-27 (barra **Malha**, vértices visíveis e atalhos). O **valor ao vivo** (segure `I`, `Ctrl+E` ou `Ctrl+B` e arraste) e a **faca clicando arestas** (`K`) chegaram em **2026-10-30**, junto com as contagens no inspetor: **nenhum gancho de interface
+falta**. Veja [o que a interface liga](#o-que-a-interface-liga-e-o-que-ainda-falta).
 
 | Nível | O que é | Estado | Custo |
 |---|---|---|---|
@@ -162,23 +163,20 @@ Módulo `petunia_editor/src/mesh_tool.rs`, operações `mesh.*` (lista no [edito
 | Booleano com faces exatamente no mesmo plano | O `manifold-rust` resolve na maioria dos casos; quando falha, a mensagem pede para mover um pouco a ferramenta |
 | Código copiado ainda usa nomes curtos (`n`, `f`, `idx`) e índices diretos | É legado (regra do `AGENTS.md`): migra quando for tocado. A API nova segue as regras |
 
-### Ganchos da interface que faltam
+### O que a interface liga (e o que ainda falta)
 
-> **Atualização (2026-10-27):** a barra **Malha** liga as operações de faces, arestas e vértices; o modo vértice mostra um ponto em cada vértice. A tabela abaixo continua sendo a lista do que falta (booleanos, faca, valor ao vivo, painel de números e inspetor de malha).
+> **Atualização (2026-10-30):** a barra **Malha** liga as operações de faces, arestas e vértices, com os campos **Distância**, **Cortes** e **Segmentos** ao lado; o modo vértice mostra um ponto em cada vértice. Entre **2026-10-29 e 2026-10-30** entraram o menu **Malha ▸ Booleano…**, **Malha ▸ Informações da malha**, os atalhos de modelagem, o **valor ao vivo** e a **faca clicando arestas**.
 
-A interface Qt (`editor/src/`) agora liga a barra **Malha**; o que ainda falta ligar:
+| Gancho | Como ficou |
+|---|---|
+| **Valor ao vivo** | Segure `I` (inserir), `Ctrl+E` (extrudar), `Ctrl+B` (chanfro) ou `Ctrl+R` (corte em laço): o resultado aparece na hora; mover o mouse muda o valor (1 cm por pixel, de 0,01 a 10 m; no corte em laço, 40 px por corte, de 1 a 32); **soltar a tecla, clicar ou `Enter` aplica** como **um** passo de desfazer; `Esc` cancela. Uma batida rápida aplica o valor da barra, como antes |
+| **Faca por clique** | `K` (ou **Malha ▸ Faca…**) arma a faca; cada clique escolhe o ponto na aresta mais próxima (o `mesh.pick` dá a aresta e a fração); o segundo clique corta. `Esc` cancela. **Malha ▸ Faca por números…** continua para quem digita as arestas |
+| **Booleano e informações** | **Malha ▸ Booleano…** escolhe a ferramenta, a operação e "manter a ferramenta"; **Malha ▸ Informações da malha** mostra vértices, arestas, faces, triângulos e se o sólido é fechado |
+| **Contagens no inspetor** | a seção `Mesh` mostra `8 vértices · 12 arestas · 6 faces` em vez de "malha editável": a conta é feita sobre o texto guardado, sem ida ao motor, e acompanha toda edição |
 
-| Gancho | Sugestão | Operação |
-|---|---|---|
-| Menu **Malha** atrás do botão `≡` | uma entrada por operação; a paleta `Ctrl+K` lê os menus, então as entradas aparecem nela sem trabalho a mais | todas as `mesh.*` |
-| Ferramenta **Editar malha** na coluna de ferramentas do viewport | ativa o modo de edição; aparece com uma malha selecionada | `mesh.pick`, `mesh.select` |
-| **Tornar editável** | menu do objeto e inspetor de Brush | `mesh.convert` |
-| **Booleano** | com dois objetos: o ativo é o alvo, o outro é a ferramenta; opção "manter ferramenta" | `mesh.boolean` |
-| **Modo de edição de malha** (`Tab`) e modos face, aresta, vértice (`1`, `2`, `3`) | clique escolhe, `Shift` soma, `Ctrl` alterna | `mesh.pick` → `mesh.select` |
-| Atalhos de modelagem (os do Petunia3D) | `I` inset, `E` extrudar, `Ctrl+R` loop cut, `Ctrl+B` bevel, `K` faca, `M` fundir, `X` apagar faces | `mesh.*` |
-| Valor ao vivo (arrastar o mouse muda a distância) | ao arrastar, mandar `mesh.preview` com o valor; ao soltar, `mesh.preview_end`; `Esc` manda `commit: false`; mostrar `reason` quando `valid` for `false` | `mesh.preview`, `mesh.preview_end` (**existem**, com teste) |
-| Painel com números | distância, cortes, deslize, segmentos | os campos de cada operação |
-| Inspetor da tabela `Mesh` | mostrar contagens (`mesh.info`), não o texto da malha | `mesh.info` |
+**Nenhum gancho de interface falta nesta versão.** O que continua fora é de outra ordem:
+**atributos por face e coordenadas de textura** exigem guardar mais por face do que o texto atual
+(`positions` + `faces`) e precisam de decisão própria.
 
 ## Riscos
 
@@ -190,4 +188,7 @@ A interface Qt (`editor/src/`) agora liga a barra **Malha**; o que ainda falta l
 
 ## Próximo passo sugerido
 
-Ligar os [ganchos da interface](#ganchos-da-interface-que-faltam), começando pelo **modo de edição de malha** (`Tab`, clique para escolher face ou aresta). Sem ele, as operações existem mas não são alcançáveis pela janela.
+Os ganchos de interface estão fechados ([o que a interface liga](#o-que-a-interface-liga-e-o-que-ainda-falta)).
+O próximo passo é de **formato**, não de janela: **material por face e coordenadas de textura**
+exigem guardar mais por face do que o texto atual (`positions` + `faces`) e precisam de decisão
+própria; depois disso, o arrasto de valor do `loop_cut` (hoje a tecla aplica na hora).
