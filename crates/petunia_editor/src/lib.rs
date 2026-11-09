@@ -18,6 +18,7 @@ mod lights;
 mod mesh_tool;
 mod natural_ops;
 mod natural_tool;
+mod object_state;
 mod play;
 mod prefabs;
 mod protocol;

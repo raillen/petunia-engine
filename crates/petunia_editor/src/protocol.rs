@@ -542,6 +542,22 @@ impl EditorSession {
             }
 
             "selection.set" => self.select(request.get("entity").and_then(Json::as_u64)),
+            "object.hide" => self.set_hidden(
+                request.get("entity").and_then(Json::as_u64),
+                request
+                    .get("hidden")
+                    .and_then(Json::as_bool)
+                    .unwrap_or(true),
+                request.get("all").and_then(Json::as_bool).unwrap_or(false),
+            ),
+            "object.lock" => self.set_locked(
+                entity(request)?,
+                request
+                    .get("locked")
+                    .and_then(Json::as_bool)
+                    .unwrap_or(true),
+            ),
+            "object.solo" => self.solo(entity(request)?),
             "selection.pick" => self.pick(
                 number(request, "x")?,
                 number(request, "y")?,

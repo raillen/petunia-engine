@@ -10,6 +10,7 @@
 //!   never another entity.
 
 mod buffer;
+mod editor_state;
 mod error;
 mod heightfield;
 mod ids;
@@ -22,6 +23,7 @@ mod value;
 mod world;
 
 pub use buffer::{CommandBuffer, DeferredOp};
+pub use editor_state::{EDITOR_STATE_TABLE, ObjectState, hidden_objects, locked_objects, state_of};
 pub use error::WorldError;
 pub use heightfield::{HEIGHT_CHUNK_SIZE, HeightChunk, Heightfield};
 pub use ids::{EntityHandle, PersistentId};

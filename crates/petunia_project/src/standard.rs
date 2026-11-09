@@ -138,6 +138,14 @@ pub fn register_standard_tables(world: &mut World) -> Result<(), WorldError> {
                 Value::Color(Color::rgb(0.8, 0.8, 0.8)),
             ),
     )?;
+    // Visibility and locking from the outliner (QT-12): an object without a row is visible and
+    // unlocked, so a scene written before this feature still opens and behaves as it did.
+    world.define_table(
+        TableSpec::new("EditorState")
+            .column("owner", ValueKind::Int, Value::Int(0))
+            .column("hidden", ValueKind::Bool, Value::Bool(false))
+            .column("locked", ValueKind::Bool, Value::Bool(false)),
+    )?;
     world.define_table(
         TableSpec::new("Script")
             .column("owner", ValueKind::Int, Value::Int(0))

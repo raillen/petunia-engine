@@ -20,6 +20,9 @@
 namespace {
 constexpr int kEntityRole = Qt::UserRole + 1;
 constexpr int kIconRole = Qt::UserRole + 2;
+/// Engine-reported visibility and locking, kept on the name column of every row (QT-12).
+constexpr int kHiddenRole = Qt::UserRole + 3;
+constexpr int kLockedRole = Qt::UserRole + 4;
 }
 
 HierarchyPanel::HierarchyPanel(EngineBridge* bridge, QWidget* parent)
@@ -49,14 +52,82 @@ HierarchyPanel::HierarchyPanel(EngineBridge* bridge, QWidget* parent)
     tree_->setAccessibleName(QStringLiteral("Objetos da cena"));
     tree_->setSelectionMode(QAbstractItemView::SingleSelection);
     tree_->setUniformRowHeights(true);
-    tree_->setColumnCount(2);
+    tree_->setColumnCount(3);
     tree_->setHeaderHidden(true);
-    tree_->setIndentation(12);
+    tree_->setIndentation(8);
     tree_->setFrameShape(QFrame::NoFrame);
     tree_->setIconSize(QSize(16, 16));
     tree_->header()->setStretchLastSection(false);
     tree_->header()->setSectionResizeMode(0, QHeaderView::Stretch);
-    tree_->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    // Visibility and locking (QT-12): an eye and a padlock at a fixed narrow width, so the name
+    // keeps the rest of the row.
+    tree_->header()->setSectionResizeMode(1, QHeaderView::Fixed);
+    tree_->header()->setSectionResizeMode(2, QHeaderView::Fixed);
+    tree_->setColumnWidth(1, 14);
+    tree_->setColumnWidth(2, 14);
+    // Re-asserted after the fixed widths: setting them first left column 0 at its initial size and
+    // the names were cut with empty space at the right.
+    tree_->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+    // A click on the eye or the padlock acts on that row without selecting it, the way a file
+    // manager's check boxes do.
+    connect(tree_, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem* item, int column) {
+        if (item == nullptr || (column != 1 && column != 2)) {
+            return;
+        }
+        const quint64 id = item->data(0, kEntityRole).toULongLong();
+        if (id == 0) {
+            return;
+        }
+        if (column == 1) {
+            bridge_->call(QStringLiteral("object.hide"),
+                          QJsonObject{{QStringLiteral("entity"), static_cast<double>(id)},
+                                      {QStringLiteral("hidden"),
+                                       !item->data(0, kHiddenRole).toBool()}});
+        } else {
+            bridge_->call(QStringLiteral("object.lock"),
+                          QJsonObject{{QStringLiteral("entity"), static_cast<double>(id)},
+                                      {QStringLiteral("locked"),
+                                       !item->data(0, kLockedRole).toBool()}});
+        }
+        reload();
+    });
+    tree_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(tree_, &QTreeWidget::customContextMenuRequested, this, [this](const QPoint& point) {
+        QTreeWidgetItem* item = tree_->itemAt(point);
+        if (item == nullptr) {
+            return;
+        }
+        const quint64 id = item->data(0, kEntityRole).toULongLong();
+        if (id == 0) {
+            return;
+        }
+        const bool hidden = item->data(0, kHiddenRole).toBool();
+        const bool locked = item->data(0, kLockedRole).toBool();
+        QMenu menu(this);
+        QAction* hide = menu.addAction(hidden ? QStringLiteral("Mostrar") : QStringLiteral("Ocultar"));
+        QAction* lock = menu.addAction(locked ? QStringLiteral("Destravar") : QStringLiteral("Travar"));
+        menu.addSeparator();
+        QAction* solo = menu.addAction(QStringLiteral("Ver só este"));
+        QAction* showAll = menu.addAction(QStringLiteral("Mostrar todos"));
+        QAction* chosen = menu.exec(tree_->viewport()->mapToGlobal(point));
+        if (chosen == hide) {
+            bridge_->call(QStringLiteral("object.hide"),
+                          QJsonObject{{QStringLiteral("entity"), static_cast<double>(id)},
+                                      {QStringLiteral("hidden"), !hidden}});
+        } else if (chosen == lock) {
+            bridge_->call(QStringLiteral("object.lock"),
+                          QJsonObject{{QStringLiteral("entity"), static_cast<double>(id)},
+                                      {QStringLiteral("locked"), !locked}});
+        } else if (chosen == solo) {
+            bridge_->call(QStringLiteral("object.solo"),
+                          QJsonObject{{QStringLiteral("entity"), static_cast<double>(id)}});
+        } else if (chosen == showAll) {
+            bridge_->call(QStringLiteral("object.hide"),
+                          QJsonObject{{QStringLiteral("all"), true},
+                                      {QStringLiteral("hidden"), false}});
+        }
+        reload();
+    });
 
     summary_ = new QLabel(this);
     summary_->setWordWrap(true);
@@ -125,13 +196,27 @@ void HierarchyPanel::reload() {
                 auto* item = new QTreeWidgetItem(parent);
                 items.insert(id, item);
                 item->setText(0, entity.value(QStringLiteral("name")).toString());
-                item->setText(1, QStringLiteral("#%1").arg(id));
-                item->setTextAlignment(1, Qt::AlignRight | Qt::AlignVCenter);
                 item->setData(0, kEntityRole, id);
                 item->setData(0, kIconRole, TableIcons::forEntity(tables));
                 const QString ownedTip = tables.contains(QStringLiteral("Script"))
                     ? QStringLiteral("Script #%1 ligado a este objeto").arg(id)
                     : QStringLiteral("Parte do objeto #%1").arg(id);
+                // The id moves to the tooltip: a third column left the name unreadable at 240 px.
+                const bool hidden = entity.value(QStringLiteral("hidden")).toBool();
+                const bool locked = entity.value(QStringLiteral("locked")).toBool();
+                item->setData(0, kHiddenRole, hidden);
+                item->setData(0, kLockedRole, locked);
+                item->setIcon(1, PetuniaIcons::get(hidden ? QStringLiteral("eye_hidden")
+                                                          : QStringLiteral("eye")));
+                item->setIcon(2, PetuniaIcons::get(locked ? QStringLiteral("lock")
+                                                          : QStringLiteral("unlock")));
+                item->setToolTip(1, hidden ? QStringLiteral("Oculto (não aparece no viewport)")
+                                           : QStringLiteral("Visível"));
+                item->setToolTip(2, locked ? QStringLiteral("Travado (não pode ser escolhido)")
+                                           : QStringLiteral("Destravado"));
+                if (hidden) {
+                    item->setForeground(0, QBrush(PetuniaTheme::instance().textMuted()));
+                }
                 item->setToolTip(0, owned ? ownedTip
                                           : QStringLiteral("#%1 · %2").arg(id).arg(tables.join(QStringLiteral(", "))));
                 if (owned) {

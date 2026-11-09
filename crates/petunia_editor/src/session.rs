@@ -85,6 +85,8 @@ pub struct EditorSession {
     pub(crate) drag: Option<Drag>,
     /// Object under the mouse (pre-selection highlight).
     pub(crate) hovered: Option<u64>,
+    /// The only object the viewport shows while the outliner is in "see only this" (`object.solo`).
+    pub(crate) solo_object: Option<u64>,
     pub(crate) orientation: Orientation,
     pub(crate) pivot_mode: PivotMode,
     /// Moving the gizmo moves the object's pivot instead of the object.
@@ -187,6 +189,7 @@ impl EditorSession {
             hover: None,
             drag: None,
             hovered: None,
+            solo_object: None,
             orientation: Orientation::Global,
             pivot_mode: PivotMode::Object,
             edit_pivot: false,
@@ -520,6 +523,16 @@ impl EditorSession {
     pub fn select(&mut self, entity: Option<u64>) -> Result<Json, Failure> {
         if let Some(id) = entity {
             self.world()?.handle_of(PersistentId(id))?;
+            // A locked object stays drawn but cannot be chosen: it is a background reference.
+            if let Some(world) = self.world().ok()
+                && petunia_world::state_of(world, id).locked
+            {
+                return Err(Failure::new(
+                    "EDITOR_OBJECT_LOCKED",
+                    &format!("o objeto {id} está travado"),
+                    "Destrave-o na Hierarquia para escolhê-lo.",
+                ));
+            }
         }
         self.selection = entity;
         Ok(json!({ "selection": entity }))
@@ -755,6 +768,7 @@ impl EditorSession {
             frame
         };
         self.apply_floor_visibility(&mut frame.items);
+        self.apply_object_visibility(&mut frame.items);
         frame.sculpts = self.sculpt_items();
         frame.mark_selected(self.selection);
         frame.mark_hovered(self.hovered.filter(|id| Some(*id) != self.selection));
@@ -844,10 +858,13 @@ impl EditorSession {
                 }));
                 continue;
             }
+            let state = petunia_world::state_of(world, identity.0);
             entities.push(json!({
                 "id": identity.0,
                 "name": display_name(world, identity.0),
                 "tables": tables,
+                "hidden": state.hidden,
+                "locked": state.locked,
             }));
         }
         json!({
