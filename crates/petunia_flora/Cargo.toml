@@ -1,0 +1,16 @@
+[package]
+name = "petunia_flora"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Vegetation placed by rules, with impostors: where plants go, how big, and which way they face. Deterministic and pure; the renderer only draws what this decides."
+
+[dependencies]
+petunia_math.workspace = true
+petunia_world.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

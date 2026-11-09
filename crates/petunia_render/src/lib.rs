@@ -13,6 +13,10 @@ mod natural;
 mod pick;
 mod sculpt;
 
+pub mod particles;
+pub mod vegetation;
+pub mod weather;
+
 pub use camera::{Camera, Mat4, ProjectionMode, model_matrix, multiply};
 pub use fly::FlyCamera;
 pub use frame::{

@@ -1,0 +1,15 @@
+[package]
+name = "petunia_anim"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Skeletal animation playback: skeletons, clips, keyframe sampling and skinning matrices. Pure domain, deterministic, our own."
+
+[dependencies]
+petunia_math.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

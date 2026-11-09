@@ -1517,6 +1517,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
+name = "petunia_anim"
+version = "0.1.0"
+dependencies = [
+ "petunia_math",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "petunia_cli"
 version = "0.1.0"
 dependencies = [
@@ -1568,6 +1577,16 @@ dependencies = [
  "petunia_math",
  "petunia_render",
  "petunia_render_gl",
+ "serde_json",
+]
+
+[[package]]
+name = "petunia_flora"
+version = "0.1.0"
+dependencies = [
+ "petunia_math",
+ "petunia_world",
+ "serde",
  "serde_json",
 ]
 
@@ -1667,9 +1686,11 @@ dependencies = [
 name = "petunia_render"
 version = "0.1.0"
 dependencies = [
+ "petunia_flora",
  "petunia_math",
  "petunia_sculpt",
  "petunia_world",
+ "serde",
 ]
 
 [[package]]
