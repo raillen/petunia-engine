@@ -32,7 +32,7 @@ const CREATE_DISTANCE: f32 = 6.0;
 /// New brushes snap to this grid (meters).
 const CREATE_SNAP: f32 = 0.5;
 
-fn live_edit_busy(verb: &str) -> Failure {
+pub(crate) fn live_edit_busy(verb: &str) -> Failure {
     Failure::new(
         "EDITOR_BUSY",
         "há um arrasto em andamento",
@@ -72,7 +72,7 @@ pub struct EditorSession {
     pub(crate) selection: Option<u64>,
     pub(crate) camera: FlyCamera,
     log: VecDeque<LogEntry>,
-    report: Report,
+    pub(crate) report: Report,
     /// Findings about the project's scripts, kept apart from `report` so a broken script never
     /// blocks opening the project.
     pub(crate) script_diagnostics: Vec<petunia_project::Diagnostic>,
@@ -163,7 +163,7 @@ pub(crate) fn display_name(world: &World, id: u64) -> String {
     }
 }
 
-fn new_dispatcher() -> Result<Dispatcher, Failure> {
+pub(crate) fn new_dispatcher() -> Result<Dispatcher, Failure> {
     let mut dispatcher = Dispatcher::with_builtin()?;
     for (spec, apply) in crate::natural_ops::commands() {
         dispatcher.register(spec, apply)?;
@@ -307,12 +307,13 @@ impl EditorSession {
         save_scene(&project.scene_path, &project.world)?;
         let path = project.scene_path.display().to_string();
         self.dirty = false;
+        self.forget_autosave();
         self.record("project", "salvar", true, &path);
         Ok(json!({ "path": path }))
     }
 
     /// True while a drag is changing the world outside the command history.
-    fn has_live_edit(&self) -> bool {
+    pub(crate) fn has_live_edit(&self) -> bool {
         self.gesture.is_some()
             || self.drag.is_some()
             || self.face_drag.is_some()
@@ -328,7 +329,7 @@ impl EditorSession {
 
     /// Forgets every drag bound to the old world. The world is being replaced, so there is
     /// nothing to restore; keeping the state would let the next commit hit a new entity.
-    fn reset_live_edit(&mut self) {
+    pub(crate) fn reset_live_edit(&mut self) {
         self.gesture = None;
         self.drag = None;
         self.face_drag = None;
@@ -871,7 +872,11 @@ impl EditorSession {
             "project": {
                 "name": project.manifest.name,
                 "root": project.root.display().to_string(),
-                "scene": project.manifest.default_scene,
+                "scene": project
+                    .scene_path
+                    .strip_prefix(&project.root)
+                    .map(|path| path.to_string_lossy().replace('\\', "/"))
+                    .unwrap_or_else(|_| project.scene_path.display().to_string()),
                 "scripting_language": project.manifest.scripting_language,
                 "dirty": self.dirty,
             },

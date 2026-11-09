@@ -138,7 +138,7 @@ fn read_manifest(root: &Path) -> Result<ProjectManifest, Diagnostic> {
     })
 }
 
-fn read_scene(path: &Path, label: &str) -> Result<SceneFile, Diagnostic> {
+pub(crate) fn read_scene(path: &Path, label: &str) -> Result<SceneFile, Diagnostic> {
     if !path.is_file() {
         return Err(Diagnostic::error(
             "scene.file.missing",
@@ -341,7 +341,7 @@ fn check_paths(world: &World, report: &mut Report) {
     }
 }
 
-fn check_world(world: &World, report: &mut Report) {
+pub(crate) fn check_world(world: &World, report: &mut Report) {
     for handle in world.entities_with_table("Brush").unwrap_or_default() {
         let id = world.persistent_id(handle).map_or(0, |id| id.0);
         let target = format!("entidade #{id}");

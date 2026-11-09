@@ -84,6 +84,12 @@ private:
     void buildNaturalBar();
     void syncNaturalBar(const QJsonObject& snapshot);
     void buildDocks();
+    // Several scenes per project, the automatic save and its recovery.
+    void chooseOpenScene();
+    void chooseNewScene();
+    void autosaveNow();
+    void checkRecovery(bool interactive);
+    void openRecoveryDialog();
 
     Reply perform(const QString& operation, const QJsonObject& fields, bool interactive = true);
     void showFailure(const Reply& reply, bool interactive);
@@ -142,6 +148,10 @@ private:
     QAction* newAction_ = nullptr;
     QAction* openAction_ = nullptr;
     QAction* saveAction_ = nullptr;
+    QAction* openSceneAction_ = nullptr;
+    QAction* newSceneAction_ = nullptr;
+    QAction* recoverAction_ = nullptr;
+    QTimer* autosaveTimer_ = nullptr;
     QAction* quitAction_ = nullptr;
     QAction* undoAction_ = nullptr;
     QAction* redoAction_ = nullptr;

@@ -21,6 +21,7 @@ mod play;
 mod sample;
 mod save;
 mod scene;
+mod scenes;
 mod standard;
 
 pub use check::{LoadOutcome, LoadedProject, check_project, load_project};
@@ -32,6 +33,10 @@ pub use play::{EYE_HEIGHT, PlayerStart, ensure_player, has_player, player_start}
 pub use sample::create_sample_project;
 pub use save::save_scene;
 pub use scene::{SceneEntity, SceneFile, scene_from_world};
+pub use scenes::{
+    SCENE_SUFFIX, SCENES_DIRECTORY, SceneLoadOutcome, SceneSummary, list_scenes, load_scene,
+    scene_name,
+};
 pub use standard::{
     BODY_KINDS, BRUSH_SHAPES, COLLIDER_SHAPES, LIGHT_KINDS, register_standard_tables,
 };

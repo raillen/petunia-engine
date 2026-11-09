@@ -316,6 +316,21 @@ void MainWindow::buildActions() {
     openAction_->setShortcut(QKeySequence::Open);
     saveAction_ = make(QStringLiteral("Salvar"), QStringLiteral("Grava a cena no projeto"));
     saveAction_->setShortcut(QKeySequence::Save);
+    openSceneAction_ = make(QStringLiteral("Abrir outra cena…"),
+                            QStringLiteral("Troca a cena aberta sem fechar o projeto (as outras ficam em scenes/)"));
+    newSceneAction_ = make(QStringLiteral("Nova cena…"),
+                           QStringLiteral("Cria uma cena vazia em scenes/ e abre"));
+    recoverAction_ = make(QStringLiteral("Recuperar trabalho automático…"),
+                          QStringLiteral("Abre a cópia automática desta cena, se o editor guardou trabalho não salvo"));
+    connect(openSceneAction_, &QAction::triggered, this, &MainWindow::chooseOpenScene);
+    connect(newSceneAction_, &QAction::triggered, this, &MainWindow::chooseNewScene);
+    connect(recoverAction_, &QAction::triggered, this, &MainWindow::openRecoveryDialog);
+    // One automatic copy every 90 s: the engine decides whether there is work to save, and it waits
+    // while a drag is live so the copy never holds a preview.
+    autosaveTimer_ = new QTimer(this);
+    autosaveTimer_->setInterval(90 * 1000);
+    connect(autosaveTimer_, &QTimer::timeout, this, &MainWindow::autosaveNow);
+    autosaveTimer_->start();
     quitAction_ = make(QStringLiteral("Sair"), QStringLiteral("Fecha o editor"));
     quitAction_->setShortcut(QKeySequence::Quit);
 
@@ -721,6 +736,10 @@ void MainWindow::buildMenus() {
     file->addAction(newAction_);
     file->addAction(openAction_);
     file->addAction(saveAction_);
+    file->addSeparator();
+    file->addAction(openSceneAction_);
+    file->addAction(newSceneAction_);
+    file->addAction(recoverAction_);
     file->addSeparator();
     file->addAction(importModelAction_);
     file->addSeparator();
@@ -1921,6 +1940,162 @@ void MainWindow::chooseOpen() {
     }
 }
 
+// ---- scenes, automatic save and recovery ------------------------------------------------
+
+void MainWindow::chooseOpenScene() {
+    if (!bridge_->hasProject()) {
+        return;
+    }
+    const Reply listed = bridge_->call(QStringLiteral("project.scenes"));
+    if (!listed.ok) {
+        showFailure(listed, true);
+        return;
+    }
+    const QJsonArray scenes = listed.result.toObject().value(QStringLiteral("scenes")).toArray();
+    QStringList names;
+    QHash<QString, QString> path_of;
+    for (const QJsonValue& value : scenes) {
+        const QJsonObject scene = value.toObject();
+        if (scene.value(QStringLiteral("current")).toBool()) {
+            continue;
+        }
+        const QString name = scene.value(QStringLiteral("name")).toString();
+        names.append(name);
+        path_of.insert(name, scene.value(QStringLiteral("path")).toString());
+    }
+    if (names.isEmpty()) {
+        statusBar()->showMessage(QStringLiteral("Este projeto tem uma cena só. Use Arquivo > Nova cena… para criar outra."), 8000);
+        return;
+    }
+    bool accepted = false;
+    const QString picked = QInputDialog::getItem(this, QStringLiteral("Abrir outra cena"),
+                                                 QStringLiteral("Cena do projeto:"), names, 0, false, &accepted);
+    if (!accepted || picked.isEmpty()) {
+        return;
+    }
+    if (!confirmDiscardChanges()) {
+        return;
+    }
+    // The confirmation above is what authorizes throwing away unsaved work.
+    const Reply opened = perform(QStringLiteral("project.open_scene"),
+                                 QJsonObject{{QStringLiteral("path"), path_of.value(picked)}, {QStringLiteral("force"), true}}, true);
+    if (opened.ok) {
+        statusBar()->showMessage(QStringLiteral("Cena %1 aberta. Ctrl+Z não atravessa cenas: cada uma tem o seu histórico.").arg(picked), 8000);
+        // The other scene may have an automatic copy newer than its file: offer it here too, and
+        // keep the menu entry in step with this scene (it was built for the previous one).
+        checkRecovery(true);
+    }
+}
+
+void MainWindow::chooseNewScene() {
+    if (!bridge_->hasProject()) {
+        return;
+    }
+    bool accepted = false;
+    const QString name = QInputDialog::getText(this, QStringLiteral("Nova cena"),
+                                                QStringLiteral("Nome da cena (vira o nome do arquivo):"),
+                                                QLineEdit::Normal, QStringLiteral("Cena 2"), &accepted)
+                             .trimmed();
+    if (!accepted || name.isEmpty()) {
+        return;
+    }
+    // Creating a scene opens it, so unsaved work in the open scene would be left behind.
+    if (!confirmDiscardChanges()) {
+        return;
+    }
+    const Reply created = perform(QStringLiteral("project.new_scene"),
+                                  QJsonObject{{QStringLiteral("name"), name}, {QStringLiteral("force"), true}}, true);
+    if (created.ok) {
+        const QJsonObject result = created.result.toObject();
+        statusBar()->showMessage(QStringLiteral("Cena %1 criada em %2.")
+                                     .arg(result.value(QStringLiteral("name")).toString(),
+                                          result.value(QStringLiteral("path")).toString()),
+                                 8000);
+        // A brand-new scene has no automatic copy; this disables the recovery entry for it.
+        checkRecovery(true);
+    }
+}
+
+void MainWindow::autosaveNow() {
+    if (closing_ || !bridge_ || !bridge_->hasProject() || !isWindowModified()) {
+        return;
+    }
+    // Silent: a failed automatic save is reported by the next Ctrl+S. A dialog every 90 s would be
+    // worse than the problem, and the scene file is untouched either way.
+    const Reply reply = bridge_->call(QStringLiteral("project.autosave"));
+    if (!reply.ok) {
+        return;
+    }
+    if (reply.result.toObject().value(QStringLiteral("saved")).toBool()) {
+        statusBar()->showMessage(QStringLiteral("Salvo automaticamente às %1 — o trabalho está protegido.")
+                                     .arg(QTime::currentTime().toString(QStringLiteral("HH:mm"))),
+                                 4000);
+    }
+}
+
+void MainWindow::openRecoveryDialog() {
+    if (!bridge_->hasProject()) {
+        return;
+    }
+    const Reply reply = bridge_->call(QStringLiteral("project.recovery"));
+    if (!reply.ok) {
+        showFailure(reply, true);
+        return;
+    }
+    const QJsonObject info = reply.result.toObject();
+    if (!info.value(QStringLiteral("exists")).toBool()) {
+        statusBar()->showMessage(QStringLiteral("Não há trabalho automático para esta cena."), 5000);
+        return;
+    }
+    QString when = QStringLiteral("em data desconhecida");
+    if (info.value(QStringLiteral("saved_at")).isDouble()) {
+        const qint64 seconds = static_cast<qint64>(info.value(QStringLiteral("saved_at")).toDouble());
+        when = QStringLiteral("em %1").arg(QDateTime::fromSecsSinceEpoch(seconds).toString(QStringLiteral("dd/MM/yyyy 'às' HH:mm")));
+    }
+    QMessageBox box(QMessageBox::Question, QStringLiteral("Trabalho automático"),
+                    QStringLiteral("O editor guardou trabalho não salvo desta cena %1.\n\n"
+                                   "Recuperar abre essa cópia; a cena no disco só muda quando você salvar.")
+                        .arg(when),
+                    QMessageBox::NoButton, this);
+    QPushButton* recover = box.addButton(QStringLiteral("Recuperar"), QMessageBox::AcceptRole);
+    QPushButton* discard = box.addButton(QStringLiteral("Descartar"), QMessageBox::DestructiveRole);
+    box.addButton(QStringLiteral("Agora não"), QMessageBox::RejectRole);
+    box.exec();
+    if (box.clickedButton() == recover) {
+        const Reply recovered = perform(QStringLiteral("project.recover"), {}, true);
+        if (recovered.ok) {
+            statusBar()->showMessage(QStringLiteral("Trabalho recuperado. Salve (Ctrl+S) para manter no arquivo da cena."), 10000);
+        }
+    } else if (box.clickedButton() == discard) {
+        perform(QStringLiteral("project.recovery_discard"), {}, true);
+        recoverAction_->setEnabled(false);
+        statusBar()->showMessage(QStringLiteral("Cópia automática descartada; a cena salva ficou como estava."), 6000);
+    }
+}
+
+void MainWindow::checkRecovery(bool interactive) {
+    if (!bridge_->hasProject()) {
+        return;
+    }
+    const Reply reply = bridge_->call(QStringLiteral("project.recovery"));
+    if (!reply.ok) {
+        return;
+    }
+    const QJsonObject info = reply.result.toObject();
+    const bool exists = info.value(QStringLiteral("exists")).toBool();
+    recoverAction_->setEnabled(exists);
+    if (!exists || !info.value(QStringLiteral("newer")).toBool()) {
+        return;
+    }
+    if (!interactive) {
+        // Automation and the command line never wait on a dialog: say it and keep the copy for
+        // the next interactive opening (or for the menu).
+        statusBar()->showMessage(QStringLiteral("Há trabalho automático não salvo nesta cena. Use Arquivo > Recuperar trabalho automático…"), 10000);
+        return;
+    }
+    openRecoveryDialog();
+}
+
 // ---- following the engine -----------------------------------------------------------------
 
 void MainWindow::onSnapshot() {
@@ -1937,6 +2112,9 @@ void MainWindow::onSnapshot() {
     projectLabel_->setToolTip(project && info.value("dirty").toBool() ? QStringLiteral("Alterações não salvas (Ctrl+S salva)") : QString());
 
     saveAction_->setEnabled(project);
+    openSceneAction_->setEnabled(project);
+    newSceneAction_->setEnabled(project);
+    recoverAction_->setEnabled(project);
     undoAction_->setEnabled(snapshot.value("can_undo").toBool());
     redoAction_->setEnabled(snapshot.value("can_redo").toBool());
     for (QAction* action : shapeActions_) {

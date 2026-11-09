@@ -22,6 +22,7 @@ mod object_state;
 mod play;
 mod prefabs;
 mod protocol;
+mod scenes;
 mod scripts;
 mod sculpt_tool;
 mod session;
@@ -916,6 +917,197 @@ mod tests {
                 .contains("\"Bridge\""),
             "{after}"
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn scenes_can_be_created_listed_and_switched_without_reopening_the_project() {
+        let root = scratch_dir("scenes_switch");
+        let mut session = EditorSession::new().expect("session");
+        let opened = call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "Cenas" }),
+        );
+        assert_eq!(opened["ok"], true, "{opened}");
+        let original = count(&mut session);
+        assert!(original > 0);
+
+        let created = call(
+            &mut session,
+            json!({ "op": "project.new_scene", "name": "Anexo do fundo" }),
+        );
+        assert_eq!(created["ok"], true, "{created}");
+        assert_eq!(
+            created["result"]["path"],
+            "scenes/Anexo-do-fundo.scene.json"
+        );
+        // The new scene is empty and is the open one.
+        assert_eq!(count(&mut session), 0);
+        let snapshot = call(&mut session, json!({ "op": "editor.snapshot" }));
+        assert_eq!(
+            snapshot["result"]["project"]["scene"],
+            "scenes/Anexo-do-fundo.scene.json"
+        );
+        assert_eq!(snapshot["result"]["project"]["dirty"], false);
+
+        // Editing the new scene touches only its own file.
+        assert_eq!(
+            call(
+                &mut session,
+                json!({ "op": "create.brush", "shape": "box" })
+            )["ok"],
+            true
+        );
+        assert_eq!(
+            call(&mut session, json!({ "op": "project.save" }))["ok"],
+            true
+        );
+
+        let listed = call(&mut session, json!({ "op": "project.scenes" }));
+        assert_eq!(listed["ok"], true, "{listed}");
+        let names: Vec<String> = listed["result"]["scenes"]
+            .as_array()
+            .expect("scenes")
+            .iter()
+            .map(|scene| scene["name"].as_str().unwrap_or("").to_string())
+            .collect();
+        assert_eq!(names, vec!["Anexo-do-fundo", "room"]);
+
+        let back = call(
+            &mut session,
+            json!({ "op": "project.open_scene", "path": "scenes/room.scene.json" }),
+        );
+        assert_eq!(back["ok"], true, "{back}");
+        assert_eq!(count(&mut session), original);
+        // The undo history belongs to the scene: switching starts a new one.
+        assert_eq!(
+            call(&mut session, json!({ "op": "edit.undo" }))["ok"],
+            false
+        );
+
+        // A scene that does not exist is refused and the open one keeps its entities.
+        let refused = call(
+            &mut session,
+            json!({ "op": "project.open_scene", "path": "scenes/nao_existe.scene.json" }),
+        );
+        assert_eq!(refused["ok"], false, "{refused}");
+        assert_eq!(refused["error"]["code"], "scene.file.missing");
+        assert_eq!(count(&mut session), original);
+
+        // A name already taken is refused instead of overwriting the scene.
+        let taken = call(
+            &mut session,
+            json!({ "op": "project.new_scene", "name": "Anexo do fundo" }),
+        );
+        assert_eq!(taken["ok"], false, "{taken}");
+        assert_eq!(taken["error"]["code"], "SCENE_ALREADY_EXISTS");
+
+        // Unsaved work is not thrown away by a scene switch without `force` (an agent must not
+        // lose work by accident); the window passes `force` only after the person confirms.
+        assert_eq!(
+            call(
+                &mut session,
+                json!({ "op": "create.brush", "shape": "box" })
+            )["ok"],
+            true
+        );
+        let unsaved = call(
+            &mut session,
+            json!({ "op": "project.open_scene", "path": "scenes/Anexo-do-fundo.scene.json" }),
+        );
+        assert_eq!(unsaved["ok"], false, "{unsaved}");
+        assert_eq!(unsaved["error"]["code"], "SCENE_UNSAVED");
+        assert_eq!(count(&mut session), original + 1, "a cena aberta não mudou");
+        let forced = call(
+            &mut session,
+            json!({
+                "op": "project.open_scene",
+                "path": "scenes/Anexo-do-fundo.scene.json",
+                "force": true
+            }),
+        );
+        assert_eq!(forced["ok"], true, "{forced}");
+        assert_eq!(count(&mut session), 1);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_automatic_save_is_offered_back_and_a_real_save_discards_it() {
+        let root = scratch_dir("scenes_autosave");
+        let mut session = EditorSession::new().expect("session");
+        let opened = call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "Recuperar" }),
+        );
+        assert_eq!(opened["ok"], true, "{opened}");
+        let scene = root.join("scenes/room.scene.json");
+        assert!(scene.is_file());
+
+        // Nothing changed: no file is written.
+        let untouched = call(&mut session, json!({ "op": "project.autosave" }));
+        assert_eq!(untouched["ok"], true, "{untouched}");
+        assert_eq!(untouched["result"]["saved"], false);
+        let automatic = root.join("scenes/room.scene.autosave.json");
+        assert!(!automatic.exists());
+
+        assert_eq!(
+            call(
+                &mut session,
+                json!({ "op": "create.brush", "shape": "box" })
+            )["ok"],
+            true
+        );
+        let saved = call(&mut session, json!({ "op": "project.autosave" }));
+        assert_eq!(saved["ok"], true, "{saved}");
+        assert_eq!(saved["result"]["saved"], true);
+        assert!(automatic.is_file());
+        let scene_before = std::fs::read_to_string(&scene).expect("scene");
+        assert!(
+            !scene_before.contains("\"Caixa\""),
+            "a cena no disco não mudou"
+        );
+
+        let recovery = call(&mut session, json!({ "op": "project.recovery" }));
+        assert_eq!(recovery["ok"], true, "{recovery}");
+        assert_eq!(recovery["result"]["exists"], true);
+        assert_eq!(recovery["result"]["newer"], true);
+
+        // A fresh session opens the scene on disk (without the box) and recovers on request.
+        let mut fresh = EditorSession::new().expect("session");
+        let reopened = call(
+            &mut fresh,
+            json!({ "op": "project.open", "path": root.display().to_string() }),
+        );
+        assert_eq!(reopened["ok"], true, "{reopened}");
+        let without_box = count(&mut fresh);
+        let offered = call(&mut fresh, json!({ "op": "project.recovery" }));
+        assert_eq!(offered["result"]["exists"], true, "{offered}");
+        assert_eq!(offered["result"]["newer"], true);
+
+        let recovered = call(&mut fresh, json!({ "op": "project.recover" }));
+        assert_eq!(recovered["ok"], true, "{recovered}");
+        assert_eq!(count(&mut fresh), without_box + 1);
+        // Recovered work is not saved work: the session stays dirty until Ctrl+S.
+        let dirty = call(&mut fresh, json!({ "op": "editor.snapshot" }));
+        assert_eq!(dirty["result"]["project"]["dirty"], true);
+
+        assert_eq!(
+            call(&mut fresh, json!({ "op": "project.save" }))["ok"],
+            true
+        );
+        assert!(
+            !automatic.exists(),
+            "gravar a cena descarta a cópia automática"
+        );
+        assert!(
+            std::fs::read_to_string(&scene)
+                .expect("scene")
+                .contains("\"Caixa\"")
+        );
+
+        let nothing = call(&mut fresh, json!({ "op": "project.recovery_discard" }));
+        assert_eq!(nothing["ok"], true, "{nothing}");
+        assert_eq!(nothing["result"]["removed"], false);
         let _ = std::fs::remove_dir_all(&root);
     }
 }
