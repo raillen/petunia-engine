@@ -75,8 +75,21 @@ impl MeshData {
             normal = -normal;
         }
         let base = self.positions.len() as u32;
-        for corner in corners {
-            self.push_vertex(*corner, normal);
+        let quad_uvs = if corners.len() == 4 {
+            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
+        } else {
+            [[0.0, 0.0]; 4]
+        };
+        for (slot, corner) in corners.iter().enumerate() {
+            let index = self.push_vertex(*corner, normal);
+            let maybe_quad_uv = if corners.len() == 4 {
+                quad_uvs.get(slot).copied()
+            } else {
+                None
+            };
+            if let (Some(uv), Some(slot_uv)) = (maybe_quad_uv, self.uvs.get_mut(index as usize)) {
+                *slot_uv = uv;
+            }
         }
         for step in 1..(corners.len() as u32 - 1) {
             if flipped {

@@ -1045,6 +1045,10 @@ impl EditorSession {
                         ("Camera", "mode") => {
                             Some(&["fixed", "third", "first", "isometric", "custom"])
                         }
+                        ("Material", "kind") => {
+                            Some(&["standard", "flat", "masked", "blended", "post"])
+                        }
+                        ("Material", "effect") => Some(&["grade", "fog"]),
                         _ => None,
                     };
                     if let Some(choices) = choices {

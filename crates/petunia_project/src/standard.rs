@@ -224,7 +224,29 @@ pub fn register_standard_tables(world: &mut World) -> Result<(), WorldError> {
                 "color",
                 ValueKind::Color,
                 Value::Color(Color::rgb(0.8, 0.8, 0.8)),
-            ),
+            )
+            .column("material", ValueKind::Int, Value::Int(0)),
+    )?;
+    // Materials (DR-53): 5 kinds (flat, standard, masked, blended, post), without a node graph.
+    world.define_table(
+        TableSpec::new("Material")
+            .column("kind", ValueKind::Text, Value::Text("standard".to_string()))
+            .column(
+                "color",
+                ValueKind::Color,
+                Value::Color(Color::rgb(0.8, 0.8, 0.8)),
+            )
+            .column("alpha", ValueKind::Float, Value::Float(1.0))
+            .column("metallic", ValueKind::Float, Value::Float(0.0))
+            .column("roughness", ValueKind::Float, Value::Float(0.5))
+            .column("cutoff", ValueKind::Float, Value::Float(0.5))
+            .column("base_texture", ValueKind::Text, Value::Text(String::new()))
+            .column(
+                "normal_texture",
+                ValueKind::Text,
+                Value::Text(String::new()),
+            )
+            .column("effect", ValueKind::Text, Value::Text(String::new())),
     )?;
     world.define_table(
         TableSpec::new("Script")

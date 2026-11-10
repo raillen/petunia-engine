@@ -127,6 +127,14 @@ QString propertyLabel(const QString& table, const QString& column) {
         {QStringLiteral("loop"), QStringLiteral("Repetir")},
         {QStringLiteral("playing"), QStringLiteral("Tocando")},
         {QStringLiteral("frame"), QStringLiteral("Quadro")},
+        // Materials (DR-53).
+        {QStringLiteral("metallic"), QStringLiteral("Metálico")},
+        {QStringLiteral("roughness"), QStringLiteral("Rugosidade")},
+        {QStringLiteral("cutoff"), QStringLiteral("Corte alfa")},
+        {QStringLiteral("base_texture"), QStringLiteral("Textura base")},
+        {QStringLiteral("normal_texture"), QStringLiteral("Mapa normal")},
+        {QStringLiteral("effect"), QStringLiteral("Efeito")},
+        {QStringLiteral("alpha"), QStringLiteral("Opacidade")},
     };
     if (table == QLatin1String("Collider") && column == QLatin1String("height")) {
         return QStringLiteral("Altura");

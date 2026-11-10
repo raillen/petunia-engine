@@ -40,6 +40,8 @@ impl Shape {
     }
 }
 
+pub use petunia_world::MaterialKind;
+
 /// One thing to draw.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DrawItem {
@@ -70,6 +72,46 @@ pub struct DrawItem {
     pub wireframe: bool,
     /// Draw through other geometry (`QT-09`, raio-X): the depth test is off for this item.
     pub xray: bool,
+    /// Material kind (DR-53: flat, standard, masked, blended, post).
+    pub material_kind: MaterialKind,
+    pub metallic: f32,
+    pub roughness: f32,
+    pub cutoff: f32,
+    pub base_texture_asset: String,
+    pub base_texture: Option<TextureId>,
+    pub normal_texture_asset: String,
+    pub normal_texture: Option<TextureId>,
+    pub effect: String,
+}
+
+impl Default for DrawItem {
+    fn default() -> Self {
+        Self {
+            entity: 0,
+            selected: false,
+            hovered: false,
+            shape: Shape::Box,
+            size: Vec3::ONE,
+            detail: 0,
+            transform: Transform::IDENTITY,
+            color: Color::rgb(0.8, 0.8, 0.8),
+            mesh: None,
+            mesh_fingerprint: 0,
+            skin: Vec::new(),
+            skin_matrices: Vec::new(),
+            wireframe: false,
+            xray: false,
+            material_kind: MaterialKind::Standard,
+            metallic: 0.0,
+            roughness: 0.5,
+            cutoff: 0.5,
+            base_texture_asset: String::new(),
+            base_texture: None,
+            normal_texture_asset: String::new(),
+            normal_texture: None,
+            effect: String::new(),
+        }
+    }
 }
 
 /// The four joint weights of one vertex, as the import keeps them. A local copy so the renderer
@@ -407,14 +449,28 @@ impl RenderFrame {
         }
     }
 
-    /// Points every sprite at the texture its asset names, and collects the pixels the renderer
-    /// has to upload. Sprites whose asset is not loaded stay as plain colored quads.
+    /// Points every sprite and material at the texture its asset names, and collects the pixels the
+    /// renderer has to upload. Objects whose asset is not loaded stay with plain colour.
     pub fn resolve_textures(&mut self, store: &TextureStore) {
         let mut used = std::collections::BTreeSet::new();
         for sprite in &mut self.sprites {
             sprite.texture = store.id_of(&sprite.asset);
             if let Some(id) = sprite.texture {
                 used.insert(id);
+            }
+        }
+        for item in &mut self.items {
+            if !item.base_texture_asset.is_empty() {
+                item.base_texture = store.id_of(&item.base_texture_asset);
+                if let Some(id) = item.base_texture {
+                    used.insert(id);
+                }
+            }
+            if !item.normal_texture_asset.is_empty() {
+                item.normal_texture = store.id_of(&item.normal_texture_asset);
+                if let Some(id) = item.normal_texture {
+                    used.insert(id);
+                }
             }
         }
         self.textures = used.into_iter().filter_map(|id| store.pixels(id)).collect();
@@ -472,12 +528,50 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
             Ok(Value::Int(value)) => u32::try_from(*value).unwrap_or(0),
             _ => 0,
         };
-        let color = match world.get(handle, "Brush", "color") {
+        let brush_color = match world.get(handle, "Brush", "color") {
             Ok(Value::Color(color)) => *color,
             _ => Color::WHITE,
         };
         let transform = transform_of(world, handle);
         let entity = world.persistent_id(handle).map_or(0, |id| id.0);
+        let (
+            material_kind,
+            color,
+            metallic,
+            roughness,
+            cutoff,
+            base_texture_asset,
+            normal_texture_asset,
+            effect,
+        ) = if let Some(spec) = petunia_world::material_of(world, handle) {
+            let mut c = spec.color;
+            if spec.kind == petunia_world::MaterialKind::Blended
+                || spec.kind == petunia_world::MaterialKind::Flat
+            {
+                c.a *= spec.alpha;
+            }
+            (
+                spec.kind,
+                c,
+                spec.metallic,
+                spec.roughness,
+                spec.cutoff,
+                spec.base_texture,
+                spec.normal_texture,
+                spec.effect,
+            )
+        } else {
+            (
+                petunia_world::MaterialKind::Standard,
+                brush_color,
+                0.0,
+                0.5,
+                0.5,
+                String::new(),
+                String::new(),
+                String::new(),
+            )
+        };
         items.push(DrawItem {
             entity,
             selected: false,
@@ -493,17 +587,26 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
             skin_matrices: Vec::new(),
             wireframe: false,
             xray: false,
+            material_kind,
+            metallic,
+            roughness,
+            cutoff,
+            base_texture_asset,
+            base_texture: None,
+            normal_texture_asset,
+            normal_texture: None,
+            effect,
         });
         // The box stays the first item, so collision keeps the solid box. Painted faces are extra.
         if shape == Shape::Box && size.x > 0.0 && size.y > 0.0 && size.z > 0.0 && size.is_finite() {
-            let paints = petunia_world::face_colors(world, entity, 6);
-            for (face, paint) in paints.into_iter().enumerate() {
-                let Some(paint) = paint else {
+            for face in 0..6 {
+                let Some(spec) = petunia_world::face_material_of(world, entity, face) else {
                     continue;
                 };
                 let Some(shell) = crate::mesh::box_face_shell(size * 0.5, face) else {
                     continue;
                 };
+                let paint = spec.color;
                 let fingerprint = paint_fingerprint(entity, face, paint, size);
                 items.push(DrawItem {
                     entity,
@@ -520,6 +623,15 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
                     skin_matrices: Vec::new(),
                     wireframe: false,
                     xray: false,
+                    material_kind: spec.kind,
+                    metallic: spec.metallic,
+                    roughness: spec.roughness,
+                    cutoff: spec.cutoff,
+                    base_texture_asset: spec.base_texture,
+                    base_texture: None,
+                    normal_texture_asset: spec.normal_texture,
+                    normal_texture: None,
+                    effect: spec.effect,
                 });
             }
         }
@@ -531,9 +643,47 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
         let Some((low, high)) = geometry.bounds() else {
             continue;
         };
-        let color = match world.get(handle, "Mesh", "color") {
+        let mesh_color = match world.get(handle, "Mesh", "color") {
             Ok(Value::Color(color)) => *color,
             _ => Color::WHITE,
+        };
+        let (
+            material_kind,
+            color,
+            metallic,
+            roughness,
+            cutoff,
+            base_texture_asset,
+            normal_texture_asset,
+            effect,
+        ) = if let Some(spec) = petunia_world::material_of(world, handle) {
+            let mut c = spec.color;
+            if spec.kind == petunia_world::MaterialKind::Blended
+                || spec.kind == petunia_world::MaterialKind::Flat
+            {
+                c.a *= spec.alpha;
+            }
+            (
+                spec.kind,
+                c,
+                spec.metallic,
+                spec.roughness,
+                spec.cutoff,
+                spec.base_texture,
+                spec.normal_texture,
+                spec.effect,
+            )
+        } else {
+            (
+                petunia_world::MaterialKind::Standard,
+                mesh_color,
+                0.0,
+                0.5,
+                0.5,
+                String::new(),
+                String::new(),
+                String::new(),
+            )
         };
         let fingerprint = geometry.fingerprint();
         items.push(DrawItem {
@@ -551,6 +701,15 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
             skin_matrices: Vec::new(),
             wireframe: false,
             xray: false,
+            material_kind,
+            metallic,
+            roughness,
+            cutoff,
+            base_texture_asset,
+            base_texture: None,
+            normal_texture_asset,
+            normal_texture: None,
+            effect,
         });
     }
     // Terrain chunks: one draw item per chunk, in world coordinates.
@@ -637,6 +796,7 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
             skin_matrices: Vec::new(),
             wireframe: false,
             xray: false,
+            ..DrawItem::default()
         });
     }
 
@@ -663,6 +823,7 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
             skin_matrices: Vec::new(),
             wireframe: false,
             xray: false,
+            ..DrawItem::default()
         });
     }
 
@@ -697,6 +858,7 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
             skin_matrices: Vec::new(),
             wireframe: false,
             xray: false,
+            ..DrawItem::default()
         });
     }
 
@@ -730,6 +892,7 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
             skin_matrices: Vec::new(),
             wireframe: false,
             xray: false,
+            ..DrawItem::default()
         });
     }
 
@@ -782,6 +945,7 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
             skin_matrices: Vec::new(),
             wireframe: false,
             xray: false,
+            ..DrawItem::default()
         });
     }
 
@@ -1082,6 +1246,7 @@ mod skin_tests {
             skin_matrices: vec![petunia_anim::Mat4::translation(Vec3::new(2.0, 0.0, 0.0))],
             wireframe: false,
             xray: false,
+            ..DrawItem::default()
         }
     }
 
@@ -1435,5 +1600,95 @@ mod tests {
             frame.seconds, 0.6,
             "the frame carries the clock it was built from"
         );
+    }
+
+    #[test]
+    fn material_properties_reach_the_frame_and_textures_resolve() {
+        let mut world = empty_world();
+        world
+            .define_table(
+                TableSpec::new("Brush")
+                    .column("shape", ValueKind::Text, Value::Text("box".to_string()))
+                    .column("size", ValueKind::Vec3, Value::Vec3(Vec3::ONE))
+                    .column("detail", ValueKind::Int, Value::Int(16))
+                    .column("color", ValueKind::Color, Value::Color(Color::WHITE)),
+            )
+            .expect("Brush");
+        world
+            .define_table(
+                TableSpec::new(petunia_world::MATERIAL_TABLE)
+                    .column("kind", ValueKind::Text, Value::Text("standard".to_string()))
+                    .column(
+                        "color",
+                        ValueKind::Color,
+                        Value::Color(Color::rgb(0.5, 0.2, 0.8)),
+                    )
+                    .column("alpha", ValueKind::Float, Value::Float(0.75))
+                    .column("metallic", ValueKind::Float, Value::Float(0.9))
+                    .column("roughness", ValueKind::Float, Value::Float(0.2))
+                    .column("cutoff", ValueKind::Float, Value::Float(0.3))
+                    .column(
+                        "base_texture",
+                        ValueKind::Text,
+                        Value::Text("assets/brick.png".to_string()),
+                    )
+                    .column(
+                        "normal_texture",
+                        ValueKind::Text,
+                        Value::Text("assets/brick_norm.png".to_string()),
+                    )
+                    .column("effect", ValueKind::Text, Value::Text(String::new())),
+            )
+            .expect("Material");
+
+        let handle = world.spawn().expect("entity");
+        world
+            .insert_row_values(
+                handle,
+                "Brush",
+                vec![
+                    Value::Text("box".to_string()),
+                    Value::Vec3(Vec3::ONE),
+                    Value::Int(16),
+                    Value::Color(Color::WHITE),
+                ],
+            )
+            .expect("brush");
+        world
+            .insert_row_values(
+                handle,
+                petunia_world::MATERIAL_TABLE,
+                vec![
+                    Value::Text("masked".to_string()),
+                    Value::Color(Color::rgb(0.5, 0.2, 0.8)),
+                    Value::Float(0.75),
+                    Value::Float(0.9),
+                    Value::Float(0.2),
+                    Value::Float(0.3),
+                    Value::Text("assets/brick.png".to_string()),
+                    Value::Text("assets/brick_norm.png".to_string()),
+                    Value::Text(String::new()),
+                ],
+            )
+            .expect("material");
+
+        let mut frame = extract_frame(&world, Camera::default());
+        assert_eq!(frame.items.len(), 1);
+        let item = &frame.items[0];
+        assert_eq!(item.material_kind, MaterialKind::Masked);
+        assert_eq!(item.metallic, 0.9);
+        assert_eq!(item.roughness, 0.2);
+        assert_eq!(item.cutoff, 0.3);
+        assert_eq!(item.base_texture_asset, "assets/brick.png");
+        assert_eq!(item.normal_texture_asset, "assets/brick_norm.png");
+        assert_eq!(item.base_texture, None);
+
+        let mut store = TextureStore::new();
+        let brick_id = store
+            .insert("assets/brick.png", 2, 2, vec![255; 16])
+            .expect("brick texture");
+        frame.resolve_textures(&store);
+        assert_eq!(frame.items[0].base_texture, Some(brick_id));
+        assert_eq!(frame.textures.len(), 1);
     }
 }

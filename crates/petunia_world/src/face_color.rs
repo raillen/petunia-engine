@@ -48,6 +48,57 @@ pub fn face_colors(world: &World, owner: u64, face_count: usize) -> Vec<Option<C
     colors
 }
 
+/// The material of a painted face on the object with persistent id `owner`.
+///
+/// If the row has a `material` column pointing to an entity with a `Material` table, returns that
+/// material. If it only has `color`, returns a default material with that color.
+pub fn face_material_of(
+    world: &World,
+    owner: u64,
+    face: usize,
+) -> Option<crate::material::MaterialSpec> {
+    let Ok(handles) = world.entities_with_table(FACE_COLOR_TABLE) else {
+        return None;
+    };
+    for handle in handles {
+        let Ok(row_owner) = world.get(handle, FACE_COLOR_TABLE, "owner") else {
+            continue;
+        };
+        let Value::Int(row_owner) = row_owner else {
+            continue;
+        };
+        if *row_owner < 0 || *row_owner as u64 != owner {
+            continue;
+        }
+        let Ok(Value::Int(row_face)) = world.get(handle, FACE_COLOR_TABLE, "face") else {
+            continue;
+        };
+        if *row_face < 0 || *row_face as usize != face {
+            continue;
+        }
+        let material_spec = world
+            .get(handle, FACE_COLOR_TABLE, "material")
+            .ok()
+            .and_then(|val| match val {
+                Value::Int(id) if *id > 0 => {
+                    world.handle_of(crate::ids::PersistentId(*id as u64)).ok()
+                }
+                _ => None,
+            })
+            .and_then(|target_handle| crate::material::material_of(world, target_handle));
+        if let Some(spec) = material_spec {
+            return Some(spec);
+        }
+        if let Ok(Value::Color(color)) = world.get(handle, FACE_COLOR_TABLE, "color") {
+            return Some(crate::material::MaterialSpec {
+                color: *color,
+                ..Default::default()
+            });
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

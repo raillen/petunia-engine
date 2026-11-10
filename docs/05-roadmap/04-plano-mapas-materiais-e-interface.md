@@ -104,6 +104,8 @@ Portal, neste corte, é o vão: um volume que a física não bloqueia. Não é t
 
 ## 5. Materiais, sem grafo de nós
 
+**Estado:** feito (2026-11-10, `petunia_world::material`, tabela `Material`, `face_material_of`, shaders OpenGL com amostragem de textura, corte alfa e ordenação de blended, testes `material_properties_reach_the_frame_and_textures_resolve` e smoke test passando).
+
 **Julgamento:** grafo de nós não é necessário. Cinco tipos cobrem o pedido, com campos no inspetor. Um nó a mais seria outro editor para a mesma tabela. Bibliotecas de shader graph ficam de fora. PNG já entra por `petunia_import`. Nenhuma dependência nova.
 
 **Hoje (`LOCAL`).** Uma cor por objeto. `FaceColor` cobre uma face de caixa com um quadrado deslocado 2 mm. O GLB guarda a cor base e **avisa** que a textura foi ignorada. O sprite já amostra PNG com alfa. O sombreador 3D tem um `u_color` só.

@@ -280,6 +280,7 @@ mod tests {
             skin_matrices: Vec::new(),
             wireframe: false,
             xray: false,
+            ..DrawItem::default()
         }
     }
 

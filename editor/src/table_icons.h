@@ -23,6 +23,7 @@ inline QString forTable(const QString& table) {
     if (table == QLatin1String("Sprite")) return QStringLiteral("texture");
     if (table == QLatin1String("SpriteAnimation")) return QStringLiteral("play");
     if (table == QLatin1String("Light")) return QStringLiteral("view_lit");
+    if (table == QLatin1String("Material")) return QStringLiteral("palette");
     return QStringLiteral("parts");
 }
 
@@ -43,6 +44,7 @@ inline QString displayName(const QString& table) {
     if (table == QLatin1String("Sprite")) return QStringLiteral("Imagem 2D");
     if (table == QLatin1String("SpriteAnimation")) return QStringLiteral("Animação");
     if (table == QLatin1String("Light")) return QStringLiteral("Luz");
+    if (table == QLatin1String("Material")) return QStringLiteral("Material");
     return table;
 }
 
