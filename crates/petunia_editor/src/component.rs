@@ -5,11 +5,14 @@
 
 use petunia_math::{Color, PolygonMesh, Transform, Vec3};
 use petunia_render::{DrawItem, OverlayItem, Shape};
+use petunia_world::Value;
 use serde_json::{Value as Json, json};
 
 use crate::brush_ops::box_face_index;
 use crate::failure::Failure;
-use crate::gizmo::{inverse_rotate, rotate_vector, rotation_from_euler};
+use crate::gizmo::{
+    Drag, DragResult, Handle, Pose, inverse_rotate, rotate_vector, rotation_from_euler,
+};
 use crate::session::EditorSession;
 use crate::tools::Pointer;
 
@@ -202,6 +205,289 @@ impl EditorSession {
         let local = to_local(&transform, point)?;
         mesh_component(&mesh, local, self.component_kind)
     }
+
+    pub(crate) fn component_pivot(&self, entity: u64) -> Option<Vec3> {
+        if self.components.is_empty() {
+            return None;
+        }
+        let item = self.item_of(entity)?;
+        let mesh = self.mesh_of(entity);
+        let mesh_ref = mesh.as_ref().map(|(m, _)| m);
+        let mut total = Vec3::ZERO;
+        let mut count = 0usize;
+        for &index in &self.components {
+            match self.component_kind {
+                ComponentKind::Face => {
+                    let edges = face_edges(&item, mesh_ref, index);
+                    for (from, to) in edges {
+                        total = total + (from + to) * 0.5;
+                        count += 1;
+                    }
+                }
+                ComponentKind::Edge => {
+                    if let Some((from, to)) = edge_segment(&item, mesh_ref, index) {
+                        total = total + (from + to) * 0.5;
+                        count += 1;
+                    }
+                }
+                ComponentKind::Vertex => {
+                    if let Some(point) = vertex_point(&item, mesh_ref, index) {
+                        total = total + point;
+                        count += 1;
+                    }
+                }
+            }
+        }
+        if count > 0 {
+            Some(total * (1.0 / count as f32))
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn component_drag(
+        &mut self,
+        entity: u64,
+        drag: &Drag,
+        start: &Pose,
+        result: &DragResult,
+        snap: f32,
+    ) -> Result<Json, Failure> {
+        let is_box = self
+            .item_of(entity)
+            .is_some_and(|item| item.shape == Shape::Box);
+
+        if is_box {
+            let (start_position, rotation_degrees, scale, start_size) = {
+                let (pos, rot, sc, size) = match self.box_parts(entity) {
+                    Some((p, r, s, sz, _)) => (p, r, s, sz),
+                    None => (
+                        start.position,
+                        start.rotation_degrees,
+                        start.scale,
+                        Vec3::ONE,
+                    ),
+                };
+                let gesture = self.gesture.as_ref();
+                (
+                    find_vec3(gesture, "Transform", "position").unwrap_or(pos),
+                    find_vec3(gesture, "Transform", "rotation_degrees").unwrap_or(rot),
+                    find_vec3(gesture, "Transform", "scale").unwrap_or(sc),
+                    find_vec3(gesture, "Brush", "size").unwrap_or(size),
+                )
+            };
+
+            let moving = matches!(
+                drag.handle,
+                Handle::MoveAxis(_) | Handle::MovePlane(_) | Handle::MoveScreen
+            );
+
+            if moving {
+                let signs = match self.component_kind {
+                    ComponentKind::Face => {
+                        let face_index = self.components.first().copied().unwrap_or(0);
+                        match face_index {
+                            0 => [1, 0, 0],
+                            1 => [-1, 0, 0],
+                            2 => [0, 1, 0],
+                            3 => [0, -1, 0],
+                            4 => [0, 0, 1],
+                            5 => [0, 0, -1],
+                            _ => [0, 0, 0],
+                        }
+                    }
+                    ComponentKind::Edge => {
+                        let edge_index = self.components.first().copied().unwrap_or(0) as usize;
+                        let edges = box_edges();
+                        if let Some(edge) = edges.get(edge_index) {
+                            let (c1, c2) = (edge[0], edge[1]);
+                            [
+                                if (c1 & 1) == (c2 & 1) {
+                                    if c1 & 1 != 0 { 1 } else { -1 }
+                                } else {
+                                    0
+                                },
+                                if (c1 & 2) == (c2 & 2) {
+                                    if c1 & 2 != 0 { 1 } else { -1 }
+                                } else {
+                                    0
+                                },
+                                if (c1 & 4) == (c2 & 4) {
+                                    if c1 & 4 != 0 { 1 } else { -1 }
+                                } else {
+                                    0
+                                },
+                            ]
+                        } else {
+                            [0, 0, 0]
+                        }
+                    }
+                    ComponentKind::Vertex => {
+                        let corner = self.components.first().copied().unwrap_or(0) as usize;
+                        [
+                            if corner & 1 != 0 { 1 } else { -1 },
+                            if corner & 2 != 0 { 1 } else { -1 },
+                            if corner & 4 != 0 { 1 } else { -1 },
+                        ]
+                    }
+                };
+
+                let delta = result.position - start.position;
+                let rotation = rotation_from_euler(rotation_degrees);
+                let local_delta = inverse_rotate(&rotation, delta);
+                let snap_step = (snap > 0.0).then_some(snap);
+                let (new_pos, new_size) = crate::brush_ops::resized_box(
+                    start_position,
+                    rotation_degrees,
+                    scale,
+                    start_size,
+                    signs,
+                    local_delta,
+                    snap_step,
+                );
+                self.gesture_preview(
+                    entity,
+                    "Brush",
+                    "size",
+                    &crate::session::vector_json(new_size),
+                )?;
+                self.gesture_preview(
+                    entity,
+                    "Transform",
+                    "position",
+                    &crate::session::vector_json(new_pos),
+                )?;
+                let summary = format!(
+                    "{:.2} × {:.2} × {:.2} m",
+                    new_size.x, new_size.y, new_size.z
+                )
+                .replace('.', ",");
+                self.hud = Some(summary.clone());
+                return Ok(json!({ "summary": summary }));
+            }
+
+            for (column, value, before) in [
+                ("position", result.position, start.position),
+                (
+                    "rotation_degrees",
+                    result.rotation_degrees,
+                    start.rotation_degrees,
+                ),
+                ("scale", result.scale, start.scale),
+            ] {
+                if value != before {
+                    self.gesture_preview(
+                        entity,
+                        "Transform",
+                        column,
+                        &crate::session::vector_json(value),
+                    )?;
+                }
+            }
+            self.hud = Some(result.summary.clone());
+            return Ok(json!({ "summary": result.summary }));
+        }
+
+        let (original_mesh, transform) = {
+            let from_gesture = self.gesture.as_ref().and_then(|g| {
+                g.originals.iter().find_map(|(t, c, val)| {
+                    if t == "Mesh" && c == "geometry" {
+                        match val {
+                            Value::Mesh(mesh) => {
+                                Some((mesh.clone(), self.transform_of_entity(entity)))
+                            }
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    }
+                })
+            });
+            match from_gesture.or_else(|| self.mesh_of(entity)) {
+                Some(pair) => pair,
+                None => return Ok(Json::Null),
+            }
+        };
+
+        let mut affected: Vec<usize> = Vec::new();
+        for &index in &self.components {
+            match self.component_kind {
+                ComponentKind::Vertex => {
+                    affected.push(index as usize);
+                }
+                ComponentKind::Edge => {
+                    let edges = mesh_edges(&original_mesh);
+                    if let Some(edge) = edges.get(index as usize) {
+                        affected.push(edge[0]);
+                        affected.push(edge[1]);
+                    }
+                }
+                ComponentKind::Face => {
+                    if let Some(corners) = original_mesh.faces.get(index as usize) {
+                        for &corner in corners {
+                            affected.push(corner as usize);
+                        }
+                    }
+                }
+            }
+        }
+        affected.sort_unstable();
+        affected.dedup();
+
+        let mut new_mesh = original_mesh.clone();
+        let local_pivot = to_local(&transform, start.pivot).unwrap_or(Vec3::ZERO);
+        let rotation = rotation_from_euler(transform.rotation_degrees);
+
+        let moving = matches!(
+            drag.handle,
+            Handle::MoveAxis(_) | Handle::MovePlane(_) | Handle::MoveScreen
+        );
+
+        if moving {
+            let delta = result.position - start.position;
+            let local_delta = inverse_rotate(&rotation, delta);
+            let local_scaled = Vec3::new(
+                local_delta.x / transform.scale.x.max(1.0e-6),
+                local_delta.y / transform.scale.y.max(1.0e-6),
+                local_delta.z / transform.scale.z.max(1.0e-6),
+            );
+            for &v in &affected {
+                if let Some(pos) = new_mesh.positions.get_mut(v) {
+                    *pos = *pos + local_scaled;
+                }
+            }
+        } else if matches!(drag.handle, Handle::RotateAxis(_)) {
+            let rot_delta = result.rotation_degrees - start.rotation_degrees;
+            let q = rotation_from_euler(rot_delta);
+            for &v in &affected {
+                if let Some(pos) = new_mesh.positions.get_mut(v) {
+                    let rel = *pos - local_pivot;
+                    *pos = local_pivot + rotate_vector(&q, rel);
+                }
+            }
+        } else {
+            let scale_factor = Vec3::new(
+                result.scale.x / start.scale.x.max(1.0e-6),
+                result.scale.y / start.scale.y.max(1.0e-6),
+                result.scale.z / start.scale.z.max(1.0e-6),
+            );
+            for &v in &affected {
+                if let Some(pos) = new_mesh.positions.get_mut(v) {
+                    let rel = *pos - local_pivot;
+                    *pos = local_pivot
+                        + Vec3::new(
+                            rel.x * scale_factor.x,
+                            rel.y * scale_factor.y,
+                            rel.z * scale_factor.z,
+                        );
+                }
+            }
+        }
+
+        self.gesture_preview(entity, "Mesh", "geometry", &new_mesh.to_text_json())?;
+        self.hud = Some(result.summary.clone());
+        Ok(json!({ "summary": result.summary }))
+    }
 }
 
 fn box_component(item: &DrawItem, point: Vec3, kind: ComponentKind) -> Option<u32> {
@@ -321,6 +607,19 @@ fn mesh_component(mesh: &PolygonMesh, local: Vec3, kind: ComponentKind) -> Optio
     }
 }
 
+fn find_vec3(gesture: Option<&crate::session::Gesture>, table: &str, column: &str) -> Option<Vec3> {
+    gesture?.originals.iter().find_map(|(t, c, val)| {
+        if t == table && c == column {
+            match val {
+                Value::Vec3(v) => Some(Vec3::new(v.x, v.y, v.z)),
+                _ => None,
+            }
+        } else {
+            None
+        }
+    })
+}
+
 fn face_edges(item: &DrawItem, mesh: Option<&PolygonMesh>, index: u32) -> Vec<(Vec3, Vec3)> {
     if item.shape == Shape::Box {
         let Some(corners) = BOX_FACES.get(index as usize) else {
@@ -413,7 +712,7 @@ fn box_edges() -> Vec<[usize; 2]> {
     edges
 }
 
-fn mesh_edges(mesh: &PolygonMesh) -> Vec<[usize; 2]> {
+pub(crate) fn mesh_edges(mesh: &PolygonMesh) -> Vec<[usize; 2]> {
     let mut edges = Vec::new();
     for face in &mesh.faces {
         for slot in 0..face.len() {
@@ -596,6 +895,207 @@ mod tests {
         );
         assert_eq!(session.selection, Some(entity));
         assert!(session.components.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn moving_a_box_face_with_the_gizmo_grows_that_face_and_undo_reverts() {
+        let root = std::env::temp_dir().join(format!(
+            "petunia_editor_test_component_move_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let mut session = EditorSession::new().expect("session");
+        call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "component_move" }),
+        );
+        let created = call(
+            &mut session,
+            json!({ "op": "create.brush", "shape": "box" }),
+        );
+        let entity = created
+            .get("entity")
+            .and_then(serde_json::Value::as_u64)
+            .expect("box");
+        call(
+            &mut session,
+            json!({ "op": "command.execute", "command": "row.set", "payload": {
+                "entity": entity, "table": "Transform",
+                "values": { "position": { "x": 0.0, "y": 1.0, "z": 0.0 } }
+            }}),
+        );
+        call(
+            &mut session,
+            json!({ "op": "command.execute", "command": "row.set", "payload": {
+                "entity": entity, "table": "Brush",
+                "values": { "size": { "x": 2.0, "y": 2.0, "z": 2.0 }, "detail": 16, "shape": "box" }
+            }}),
+        );
+        session.select(Some(entity)).expect("select");
+        session.set_tool(Tool::Move);
+        session.camera.camera.position = Vec3::new(0.0, 5.0, 5.0);
+        session.camera.camera.yaw_degrees = 0.0;
+        session.camera.camera.pitch_degrees = -45.0;
+        session.components = vec![2]; // face +Y
+        session.component_kind = super::ComponentKind::Face;
+        let pointer = Pointer {
+            x: 400.0,
+            y: 300.0,
+            width: 800.0,
+            height: 600.0,
+        };
+        let pivot = session.component_pivot(entity).expect("pivot");
+        assert!((pivot.y - 2.0).abs() < 1e-4, "pivot y={}", pivot.y);
+
+        // Start drag on the gizmo
+        let pose = session.selection_pose().expect("pose").1;
+        let view = session.view_for(pointer);
+        let model = crate::gizmo::screen_gizmo(
+            Tool::Move,
+            &pose,
+            &view,
+            crate::gizmo::Orientation::Global,
+            1.0,
+        )
+        .expect("model");
+        let drag = crate::gizmo::begin_drag(
+            crate::gizmo::Handle::MoveAxis(1),
+            &model,
+            &pose,
+            &view,
+            crate::gizmo::Orientation::Global,
+            [400.0, 300.0],
+        )
+        .expect("drag");
+        session.drag = Some(drag);
+
+        let drag_result = crate::gizmo::DragResult {
+            position: Vec3::new(0.0, 2.0, 0.0), // moved up by 1.0 m (start pos was 0.0, 1.0, 0.0)
+            rotation_degrees: Vec3::ZERO,
+            scale: Vec3::ONE,
+            summary: "Y +1,00 m".to_string(),
+        };
+        session
+            .component_drag(entity, &drag, &drag.start_pose(), &drag_result, 0.0)
+            .expect("drag");
+        session.gizmo_end().expect("commit");
+
+        let (_, _, _, size, _) = session.box_parts(entity).expect("parts");
+        assert!((size.y - 3.0).abs() < 1e-4, "new size.y = {}", size.y);
+
+        // One undo restores the previous size
+        session.undo().expect("undo");
+        let (_, _, _, size_reverted, _) = session.box_parts(entity).expect("parts");
+        assert!(
+            (size_reverted.y - 2.0).abs() < 1e-4,
+            "reverted size.y = {}",
+            size_reverted.y
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn moving_a_mesh_vertex_moves_that_vertex_and_undo_reverts() {
+        let root = std::env::temp_dir().join(format!(
+            "petunia_editor_test_component_mesh_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let mut session = EditorSession::new().expect("session");
+        call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "component_mesh" }),
+        );
+        let created = call(
+            &mut session,
+            json!({ "op": "create.brush", "shape": "box" }),
+        );
+        let entity = created
+            .get("entity")
+            .and_then(serde_json::Value::as_u64)
+            .expect("box");
+        call(
+            &mut session,
+            json!({ "op": "command.execute", "command": "row.set", "payload": {
+                "entity": entity, "table": "Transform",
+                "values": { "position": { "x": 0.0, "y": 1.0, "z": 0.0 } }
+            }}),
+        );
+        call(
+            &mut session,
+            json!({ "op": "mesh.convert", "entity": entity }),
+        );
+
+        session.select(Some(entity)).expect("select");
+        session.set_tool(Tool::Move);
+        session.camera.camera.position = Vec3::new(0.0, 4.0, 6.0);
+        session.camera.camera.yaw_degrees = 0.0;
+        session.camera.camera.pitch_degrees = -30.0;
+        let pointer = Pointer {
+            x: 400.0,
+            y: 300.0,
+            width: 800.0,
+            height: 600.0,
+        };
+        session
+            .component_set_kind("vertex", Some(pointer))
+            .expect("vertex");
+        assert!(!session.components.is_empty());
+
+        let (mesh_before, _) = session.mesh_of(entity).expect("mesh");
+        let v_idx = session.components[0] as usize;
+        let initial_v_pos = mesh_before.positions[v_idx];
+
+        let pose = session.selection_pose().expect("pose").1;
+        let view = session.view_for(pointer);
+        let model = crate::gizmo::screen_gizmo(
+            Tool::Move,
+            &pose,
+            &view,
+            crate::gizmo::Orientation::Global,
+            1.0,
+        )
+        .expect("model");
+        let drag = crate::gizmo::begin_drag(
+            crate::gizmo::Handle::MoveAxis(1),
+            &model,
+            &pose,
+            &view,
+            crate::gizmo::Orientation::Global,
+            [400.0, 300.0],
+        )
+        .expect("drag");
+        session.drag = Some(drag);
+
+        let drag_result = crate::gizmo::DragResult {
+            position: Vec3::new(0.0, 2.5, 0.0),
+            rotation_degrees: Vec3::ZERO,
+            scale: Vec3::ONE,
+            summary: "Y +1,50 m".to_string(),
+        };
+        session
+            .component_drag(entity, &drag, &drag.start_pose(), &drag_result, 0.0)
+            .expect("drag");
+        session.gizmo_end().expect("commit");
+
+        let (mesh_after, _) = session.mesh_of(entity).expect("mesh");
+        assert!(
+            (mesh_after.positions[v_idx].y - (initial_v_pos.y + 1.5)).abs() < 1e-4,
+            "moved vertex y = {}",
+            mesh_after.positions[v_idx].y
+        );
+
+        // One undo restores the vertex position
+        session.undo().expect("undo");
+        let (mesh_reverted, _) = session.mesh_of(entity).expect("mesh");
+        assert!(
+            (mesh_reverted.positions[v_idx].y - initial_v_pos.y).abs() < 1e-4,
+            "reverted vertex y = {}",
+            mesh_reverted.positions[v_idx].y
+        );
+
         let _ = std::fs::remove_dir_all(&root);
     }
 }

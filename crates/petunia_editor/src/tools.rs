@@ -479,7 +479,13 @@ impl EditorSession {
                 }
             }
             _ if self.edit_pivot => self.object_pivot(id, position, rotation, scale),
-            _ => self.pivot_for(id, position, rotation, scale),
+            _ => {
+                if let Some(comp_pivot) = self.component_pivot(id) {
+                    comp_pivot
+                } else {
+                    self.pivot_for(id, position, rotation, scale)
+                }
+            }
         };
         Some((
             id,
@@ -689,6 +695,9 @@ impl EditorSession {
             self.gesture_preview(entity, "Transform", "pivot", &vector_json(offset))?;
             self.hud = Some(format!("Pivô {}", result.summary));
             return Ok(json!({ "summary": self.hud }));
+        }
+        if !self.components.is_empty() {
+            return self.component_drag(entity, &drag, &start, &result, snap.translate);
         }
         for (column, value, before) in [
             ("position", result.position, start.position),

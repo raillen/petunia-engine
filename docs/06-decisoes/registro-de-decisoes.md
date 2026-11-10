@@ -1222,6 +1222,8 @@ a prévia de `loop_cut`.
 
 O DR-51 continua valendo para faca, inset, bevel, dissolver, fundir vértices e para o modo `Tab`.
 
+**Progresso (2026-11-10):** Corte A (geometria e mapas: frentes 4, 1, 3 e 2) concluído e verificado. Booleano com vão andável; seleção de componentes sem modo novo; transformação via gizmo por face/aresta/vértice; e loop cut em malhas gravadas com menu/diálogo no Qt.
+
 **Reabrir se:** um mapa precisar de pintura em UV, ou a UI de jogo fechar as três perguntas da seção 13 do plano.
 
 ---

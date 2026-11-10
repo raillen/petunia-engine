@@ -311,7 +311,7 @@ impl EditorSession {
         Ok(())
     }
 
-    fn box_parts(&self, entity: u64) -> Option<(Vec3, Vec3, Vec3, Vec3, Json)> {
+    pub(crate) fn box_parts(&self, entity: u64) -> Option<(Vec3, Vec3, Vec3, Vec3, Json)> {
         let item = self.item_of(entity)?;
         let world = &self.project.as_ref()?.world;
         let handle = world.handle_of(petunia_world::PersistentId(entity)).ok()?;

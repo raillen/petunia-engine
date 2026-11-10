@@ -295,5 +295,55 @@ pub fn boolean(
     Ok(result)
 }
 
+/// Inserts quad loop cuts along the quad ring or planar section containing `edge`.
+pub fn loop_cut(mesh: &PolygonMesh, edge: [u32; 2], cuts: u32, slide: f32) -> MeshResult {
+    check_mesh(mesh)?;
+    if cuts == 0 || cuts > 32 {
+        return Err(MeshEditError::new(
+            "MESH_BAD_PARAMETER",
+            "`cuts` precisa ficar entre 1 e 32",
+            "Escolha um número de cortes de 1 a 32.",
+        ));
+    }
+    if !slide.is_finite() || !(-1.0..=1.0).contains(&slide) {
+        return Err(MeshEditError::new(
+            "MESH_BAD_PARAMETER",
+            "`slide` precisa ficar entre -1 e 1",
+            "Use 0 para cortar no meio.",
+        ));
+    }
+    let mut working = to_legacy(mesh);
+    working
+        .loop_cut((edge[0], edge[1]), cuts as usize, slide)
+        .map_err(|error| {
+            let (code, message, suggestion) = match error {
+                legacy::loop_cut::LoopCutError::NonQuad => (
+                    "MESH_LOOP_NOT_QUADS",
+                    "o anel passa por um triângulo ou por um polígono de mais de 4 lados",
+                    "O corte em laço só atravessa quadriláteros; escolha uma aresta de outro anel.",
+                ),
+                legacy::loop_cut::LoopCutError::NonManifold => (
+                    "MESH_LOOP_NON_MANIFOLD",
+                    "o anel passa por uma aresta compartilhada por mais de duas faces",
+                    "Escolha outra aresta.",
+                ),
+                legacy::loop_cut::LoopCutError::InvalidEdge => (
+                    "MESH_EDGE_INVALID",
+                    "a aresta escolhida não existe na malha",
+                    "Escolha uma aresta de uma face existente.",
+                ),
+                _ => (
+                    "MESH_LOOP_FAILED",
+                    "não foi possível realizar o corte em laço nesta aresta",
+                    "Escolha outra aresta.",
+                ),
+            };
+            MeshEditError::new(code, message, suggestion)
+        })?;
+    let result = from_legacy(&working)?;
+    check_mesh(&result)?;
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests;

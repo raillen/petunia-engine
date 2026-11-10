@@ -40,6 +40,8 @@ A numeração é a do pedido. A ordem de código respeita dependência.
 
 **Hoje (`LOCAL`).** Não há modo de edição. Empurrar (`P`) e extrudar (`E`) acertam a face sob o mouse. A caixa tem alças de canto e de aresta. O clique escolhe o objeto.
 
+**Feito (2026-11-10).** Comandos `component.select`, `component.clear`, `component.cycle` e `component.list`. O clique sobre o objeto já selecionado escolhe face, aresta ou vértice. Teclas `Alt+1`, `Alt+2`, `Alt+3` e `Alt+4` alternam o tipo; `Esc` limpa componentes e mantém o objeto selecionado. Teste `a_click_on_the_selected_box_picks_its_top_face_and_escape_keeps_the_box` verificado.
+
 **Corte.** Com a ferramenta Mover, Girar ou Escalar ativa, o clique escolhe o componente sob o mouse **do objeto já selecionado**. Um segundo clique no vazio volta a escolher objetos. Não existe tecla de modo, nem botões Vértice/Aresta/Face. A barra de status diz o que está escolhido ("face +X", "aresta 3", "vértice 2"). `1` `2` `3` trocam o tipo de componente sob o mouse, como atalho, sem mudar de modo.
 
 A seleção é dado da sessão (não entra no arquivo da cena): entidade, tipo, índices. Vários componentes com `Shift`. `Esc` limpa a seleção de componente e deixa o objeto selecionado.
@@ -48,7 +50,9 @@ A seleção é dado da sessão (não entra no arquivo da cena): entidade, tipo, 
 
 ## 2. Loop cut com opções
 
-**Hoje (`LOCAL`).** O código de loop cut foi apagado com o DR-51. O booleano ainda produz uma malha gravada (`Mesh`).
+**Hoje (`LOCAL`).** O código de loop cut foi restaurado em `petunia_mesh` e integrado ao editor.
+
+**Feito (2026-11-10).** Função pura `petunia_mesh::loop_cut` para anéis de quads e coplanares em malhas gravadas. Comando `mesh.loop_cut` com `cuts` (1..32) e `slide` (-1..1). Diálogo Qt `Loop Cut…` no menu Malha (`Ctrl+R`). Suporta aresta selecionada ou primeira aresta da malha, e auto-converte Brush para malha. Teste `a_converted_box_supports_loop_cut_remains_solid_and_one_undo_restores_it` e smoke test passando 100%.
 
 **Corte.** `mesh.loop_cut` volta para **malha gravada**, não para a caixa paramétrica. Caixa continua sendo brush: para cortar em laço, o booleano ou `mesh.convert` grava a malha antes. Opções no diálogo e no comando:
 
@@ -64,7 +68,9 @@ O teste que volta com a função: uma caixa convertida, um corte, a malha contin
 
 ## 3. Mover, girar e escalar por face, aresta e vértice
 
-**Hoje (`LOCAL`).** O gizmo move o objeto inteiro. A caixa redimensiona por canto e aresta, com o lado oposto parado.
+**Hoje (`LOCAL`).** O gizmo move o objeto inteiro se não houver componente selecionado, ou o componente selecionado se houver.
+
+**Feito (2026-11-10).** `tools::gizmo_drag` e `component::component_drag`: arrasto de face em caixa cresce a face ao longo da normal mantendo o lado oposto; arrasto de aresta e vértice redimensiona a caixa; girar e escalar agem em torno do pivô do componente (`component_pivot`). Em malha gravada, translada, gira e escala os vértices do componente em espaço local. Um único passo de desfazer via `gesture_commit`. Testes `moving_a_box_face_with_the_gizmo_grows_that_face_and_undo_reverts` e `moving_a_mesh_vertex_moves_that_vertex_and_undo_reverts` verificados.
 
 **Corte.** Com um componente escolhido (frente 1), o mesmo gizmo age nele:
 

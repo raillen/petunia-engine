@@ -79,6 +79,7 @@ private:
     void syncSculptBar(const QJsonObject& snapshot);
     void buildMeshActions();
     void showBooleanDialog();
+    void showLoopCutDialog();
     void showCutPlaneDialog();
     void showPaintFaceDialog();
     void showArrangeLineDialog();
@@ -199,6 +200,7 @@ private:
     QToolBar* meshValuesBar_ = nullptr;
     QList<QAction*> meshActions_;
     QAction* booleanAction_ = nullptr;
+    QAction* loopCutAction_ = nullptr;
     QAction* convertMeshAction_ = nullptr;
     QComboBox* meshPreviewBox_ = nullptr;
     // Push/pull and extrude belong to edit mode. Hidden while the viewport is in object mode.

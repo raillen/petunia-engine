@@ -786,6 +786,7 @@ void MainWindow::buildMenus() {
 
     QMenu* mesh = menus_->addMenu(QStringLiteral("&Malha"));
     mesh->addAction(booleanAction_);
+    mesh->addAction(loopCutAction_);
 
     QMenu* create = menus_->addMenu(QStringLiteral("&Criar"));
     create->addAction(primitivesMenuAction_);
@@ -1294,6 +1295,13 @@ void MainWindow::buildMeshActions() {
     booleanAction_->setStatusTip(booleanAction_->toolTip());
     setActionIcon(booleanAction_, QStringLiteral("boolean_fuse"));
     connect(booleanAction_, &QAction::triggered, this, &MainWindow::showBooleanDialog);
+
+    loopCutAction_ = new QAction(QStringLiteral("Loop Cut…"), this);
+    loopCutAction_->setToolTip(QStringLiteral("Subdivide uma malha inserindo cortes contínuos em anéis de quads (Ctrl+R)"));
+    loopCutAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_R));
+    loopCutAction_->setStatusTip(loopCutAction_->toolTip());
+    setActionIcon(loopCutAction_, QStringLiteral("tool_loop_cut"));
+    connect(loopCutAction_, &QAction::triggered, this, &MainWindow::showLoopCutDialog);
 }
 
 
@@ -2666,6 +2674,82 @@ void MainWindow::showBooleanDialog() {
     }
 }
 
+void MainWindow::showLoopCutDialog() {
+    if (!bridge_->hasSelection()) {
+        statusBar()->showMessage(QStringLiteral("Selecione a malha que vai receber o corte."), 5000);
+        return;
+    }
+    const quint64 target = bridge_->selection();
+
+    bool isMesh = false;
+    bool isBrush = false;
+    for (const QJsonValue& value : bridge_->snapshot().value(QStringLiteral("entities")).toArray()) {
+        const QJsonObject entity = value.toObject();
+        if (static_cast<quint64>(entity.value(QStringLiteral("id")).toDouble()) == target) {
+            const QJsonArray tables = entity.value(QStringLiteral("tables")).toArray();
+            for (const QJsonValue& table : tables) {
+                if (table.toString() == QLatin1String("Mesh")) {
+                    isMesh = true;
+                } else if (table.toString() == QLatin1String("Brush")) {
+                    isBrush = true;
+                }
+            }
+            break;
+        }
+    }
+
+    if (!isMesh && isBrush) {
+        perform(QStringLiteral("mesh.convert"), QJsonObject{{QStringLiteral("entity"), static_cast<double>(target)}}, true);
+        isMesh = true;
+    }
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(QStringLiteral("Loop Cut"));
+    auto* layout = new QFormLayout(&dialog);
+
+    auto* cutsSpin = new QSpinBox(&dialog);
+    cutsSpin->setRange(1, 32);
+    cutsSpin->setValue(1);
+    cutsSpin->setAccessibleName(QStringLiteral("Número de cortes"));
+    layout->addRow(QStringLiteral("Número de cortes"), cutsSpin);
+
+    auto* slideSpin = new QDoubleSpinBox(&dialog);
+    slideSpin->setRange(-1.0, 1.0);
+    slideSpin->setSingleStep(0.05);
+    slideSpin->setValue(0.0);
+    slideSpin->setAccessibleName(QStringLiteral("Deslizamento"));
+    layout->addRow(QStringLiteral("Deslizamento (slide)"), slideSpin);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    layout->addRow(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    const Reply reply = perform(
+        QStringLiteral("mesh.loop_cut"),
+        QJsonObject{
+            {QStringLiteral("entity"), static_cast<double>(target)},
+            {QStringLiteral("cuts"), cutsSpin->value()},
+            {QStringLiteral("slide"), slideSpin->value()},
+        },
+        true);
+    if (reply.ok) {
+        const QJsonObject result = reply.result.toObject();
+        statusBar()->showMessage(
+            QStringLiteral("Loop Cut: %1 cortes aplicados (%2 vértices, %3 faces). Ctrl+Z desfaz.")
+                .arg(result.value(QStringLiteral("cuts")).toInt())
+                .arg(result.value(QStringLiteral("vertices")).toInt())
+                .arg(result.value(QStringLiteral("faces")).toInt()),
+            5000);
+    } else {
+        statusBar()->showMessage(reply.error, 5000);
+    }
+}
+
 void MainWindow::showPaintFaceDialog() {
     const QColor chosen = QColorDialog::getColor(Qt::white, this, QStringLiteral("Cor da face"));
     if (!chosen.isValid()) {
@@ -2934,6 +3018,9 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
 void MainWindow::syncEditMode() {
     if (booleanAction_ != nullptr) {
         booleanAction_->setEnabled(bridge_->hasSelection());
+    }
+    if (loopCutAction_ != nullptr) {
+        loopCutAction_->setEnabled(bridge_->hasSelection());
     }
 }
 

@@ -71,7 +71,7 @@ impl EditorSession {
         Some((mesh.clone(), self.transform_of_entity(entity)))
     }
 
-    fn transform_of_entity(&self, entity: u64) -> Transform {
+    pub(crate) fn transform_of_entity(&self, entity: u64) -> Transform {
         let vector = |column: &str, default: Vec3| {
             self.world()
                 .ok()
@@ -157,16 +157,100 @@ impl EditorSession {
         }
     }
 
-    /// `mesh.convert` and `mesh.boolean` and `mesh.info`. Anything else is gone (DR-51).
+    /// `mesh.convert`, `mesh.boolean`, `mesh.info` and `mesh.loop_cut` (DR-53).
     pub(crate) fn mesh_request(&mut self, op: &str, request: &Json) -> Result<Json, Failure> {
         match op {
             "mesh.convert" => self.mesh_convert(request),
             "mesh.boolean" => self.mesh_boolean(request),
             "mesh.info" => self.mesh_info(request),
+            "mesh.loop_cut" => self.mesh_loop_cut(request),
             _ => Err(Failure::bad_request(
                 "edição de malha por faces, arestas e vértices foi removida; use blocagem ou Booleano",
             )),
         }
+    }
+
+    fn mesh_loop_cut(&mut self, request: &Json) -> Result<Json, Failure> {
+        let entity = self.target_entity(request)?;
+        let (mesh, _) = self.mesh_of(entity).ok_or_else(|| {
+            Failure::new(
+                "EDITOR_NOT_A_MESH",
+                "o corte em laço só funciona em malha gravada (após converter ou booleano)",
+                "Converta o brush para malha antes de aplicar o corte em laço.",
+            )
+        })?;
+        let edge = match request.get("edge") {
+            Some(value) => {
+                let pair = value
+                    .as_array()
+                    .ok_or_else(|| Failure::bad_request("`edge` precisa ser um par [v1, v2]"))?;
+                if let [first_val, second_val] = pair.as_slice() {
+                    let a = first_val
+                        .as_u64()
+                        .ok_or_else(|| Failure::bad_request("vértice inválido"))?
+                        as u32;
+                    let b = second_val
+                        .as_u64()
+                        .ok_or_else(|| Failure::bad_request("vértice inválido"))?
+                        as u32;
+                    [a, b]
+                } else {
+                    return Err(Failure::bad_request("`edge` precisa ter 2 vértices"));
+                }
+            }
+            None => {
+                if self.component_kind == crate::component::ComponentKind::Edge {
+                    if let Some(&first_component) = self.components.first() {
+                        let edge_idx = first_component as usize;
+                        let edges = crate::component::mesh_edges(&mesh);
+                        let [v0, v1] = edges.get(edge_idx).copied().ok_or_else(|| {
+                            Failure::new(
+                                "MESH_NO_EDGES",
+                                "aresta selecionada inválida",
+                                "Selecione uma aresta da malha.",
+                            )
+                        })?;
+                        [v0 as u32, v1 as u32]
+                    } else if let Some(&[v0, v1]) = crate::component::mesh_edges(&mesh).first() {
+                        [v0 as u32, v1 as u32]
+                    } else {
+                        return Err(Failure::new(
+                            "MESH_NO_EDGES",
+                            "o corte em laço precisa de uma malha com arestas",
+                            "A malha está vazia.",
+                        ));
+                    }
+                } else if let Some(&[v0, v1]) = crate::component::mesh_edges(&mesh).first() {
+                    [v0 as u32, v1 as u32]
+                } else {
+                    return Err(Failure::new(
+                        "MESH_NO_EDGES",
+                        "o corte em laço precisa de uma malha com arestas",
+                        "A malha está vazia.",
+                    ));
+                }
+            }
+        };
+        let cuts = request
+            .get("cuts")
+            .and_then(Json::as_u64)
+            .unwrap_or(1)
+            .clamp(1, 32) as u32;
+        let slide = request
+            .get("slide")
+            .and_then(Json::as_f64)
+            .unwrap_or(0.0)
+            .clamp(-1.0, 1.0) as f32;
+        let result = petunia_mesh::loop_cut(&mesh, edge, cuts, slide).map_err(Failure::from)?;
+        let record = Self::set_geometry(entity, &result);
+        self.execute(&record)?;
+        Ok(json!({
+            "entity": entity,
+            "cuts": cuts,
+            "slide": slide,
+            "vertices": result.positions.len(),
+            "faces": result.faces.len(),
+        }))
     }
 
     fn mesh_convert(&mut self, request: &Json) -> Result<Json, Failure> {
@@ -510,6 +594,54 @@ mod tests {
         assert_eq!(missed["ok"], false, "{missed}");
         assert_eq!(geometry(&session, wall).positions.len(), before);
         assert!(session.item_of(away).is_some());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_converted_box_supports_loop_cut_remains_solid_and_one_undo_restores_it() {
+        let root = std::env::temp_dir().join(format!(
+            "petunia_editor_test_loop_cut_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let mut session = EditorSession::new().expect("session");
+        call(
+            &mut session,
+            json!({ "op": "project.new_sample", "path": root.display().to_string(), "name": "loop_cut" }),
+        );
+        let box_entity = brush_at(&mut session, "box", Vec3::new(0.0, 1.0, 0.0));
+        call(
+            &mut session,
+            json!({ "op": "mesh.convert", "entity": box_entity }),
+        );
+
+        let before = geometry(&session, box_entity);
+        assert_eq!(before.faces.len(), 6);
+        assert!(petunia_mesh::is_solid(&before));
+
+        let cut = call(
+            &mut session,
+            json!({
+                "op": "mesh.loop_cut",
+                "entity": box_entity,
+                "edge": [0, 1],
+                "cuts": 2,
+                "slide": 0.0
+            }),
+        );
+        assert_eq!(cut["cuts"], 2);
+        let after = geometry(&session, box_entity);
+        assert!(after.faces.len() > before.faces.len());
+        assert!(
+            petunia_mesh::is_solid(&after),
+            "mesh remains solid after loop cut"
+        );
+
+        session.undo().expect("undo");
+        let restored = geometry(&session, box_entity);
+        assert_eq!(restored.faces.len(), 6);
+        assert_eq!(restored.positions.len(), before.positions.len());
+
         let _ = std::fs::remove_dir_all(&root);
     }
 }

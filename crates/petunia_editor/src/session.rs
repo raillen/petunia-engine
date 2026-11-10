@@ -48,10 +48,10 @@ pub(crate) struct OpenProject {
 
 /// A drag in progress: the values being changed live (columns of one row) and what they were
 /// before the drag.
-struct Gesture {
-    entity: u64,
+pub(crate) struct Gesture {
+    pub(crate) entity: u64,
     /// (table, column, value before the drag)
-    originals: Vec<(String, String, Value)>,
+    pub(crate) originals: Vec<(String, String, Value)>,
 }
 
 struct LogEntry {
@@ -83,7 +83,7 @@ pub struct EditorSession {
     pub(crate) script_diagnostics: Vec<petunia_project::Diagnostic>,
     pub(crate) dirty: bool,
     log_counter: u64,
-    gesture: Option<Gesture>,
+    pub(crate) gesture: Option<Gesture>,
     pub(crate) tool: Tool,
     pub(crate) snap: Snap,
     pub(crate) hover: Option<Handle>,

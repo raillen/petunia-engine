@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use glam::Vec3;
 use serde::{Deserialize, Serialize};
 
+pub mod loop_cut;
 pub mod validation;
 
 pub use validation::{
@@ -457,6 +458,147 @@ impl Mesh {
             }
         }
         self.faces = out;
+    }
+
+    pub fn select_all(&mut self) {
+        for v in &mut self.verts {
+            v.selected = true;
+        }
+        for f in &mut self.faces {
+            f.selected = true;
+        }
+        self.selected_edges = self.edges_unique().into_iter().collect();
+    }
+
+    pub fn deselect_all(&mut self) {
+        for v in &mut self.verts {
+            v.selected = false;
+        }
+        for f in &mut self.faces {
+            f.selected = false;
+        }
+        self.selected_edges.clear();
+    }
+
+    pub fn slice_plane(&mut self, plane_point: Vec3, plane_normal: Vec3, fill_cap: bool) {
+        if !plane_point.is_finite() || !plane_normal.is_finite() {
+            return;
+        }
+        let n = plane_normal.normalize_or_zero();
+        if n.length_squared() < 1e-4 {
+            return;
+        }
+
+        let mut new_faces: Vec<Face> = Vec::new();
+        let mut original_face_indices_to_remove: Vec<usize> = Vec::new();
+        let mut cut_edge_cache: std::collections::HashMap<(u32, u32), u32> =
+            std::collections::HashMap::new();
+
+        for (fi, face) in self.faces.iter().enumerate() {
+            let m = face.verts.len();
+            if m < 3 {
+                continue;
+            }
+
+            let mut dists = Vec::with_capacity(m);
+            for &vi in &face.verts {
+                let p = self.verts[vi as usize].vec();
+                let d = (p - plane_point).dot(n);
+                dists.push(d);
+            }
+
+            let eps = 1e-5;
+            let all_pos = dists.iter().all(|&d| d >= -eps);
+            let all_neg = dists.iter().all(|&d| d <= eps);
+
+            if all_pos || all_neg {
+                continue;
+            }
+
+            original_face_indices_to_remove.push(fi);
+
+            let mut pos_poly: Vec<(u32, [f32; 2])> = Vec::new();
+            let mut neg_poly: Vec<(u32, [f32; 2])> = Vec::new();
+
+            for k in 0..m {
+                let k2 = (k + 1) % m;
+                let v1 = face.verts[k];
+                let v2 = face.verts[k2];
+                let uv1 = face.uv[k];
+                let uv2 = face.uv[k2];
+                let d1 = dists[k];
+                let d2 = dists[k2];
+
+                if d1 >= -eps {
+                    pos_poly.push((v1, uv1));
+                }
+                if d1 <= eps {
+                    neg_poly.push((v1, uv1));
+                }
+
+                if (d1 > eps && d2 < -eps) || (d1 < -eps && d2 > eps) {
+                    let e_key = edge_key(v1, v2);
+                    let t = (d1 / (d1 - d2)).clamp(0.0, 1.0);
+                    let uv_cut = [
+                        uv1[0] + (uv2[0] - uv1[0]) * t,
+                        uv1[1] + (uv2[1] - uv1[1]) * t,
+                    ];
+
+                    let cut_idx = if let Some(&existing) = cut_edge_cache.get(&e_key) {
+                        existing
+                    } else {
+                        let p1 = self.verts[v1 as usize].vec();
+                        let p2 = self.verts[v2 as usize].vec();
+                        let p_cut = p1.lerp(p2, t);
+                        let col1 = self.verts[v1 as usize].color;
+                        let col2 = self.verts[v2 as usize].color;
+                        let col_cut = [
+                            col1[0] + (col2[0] - col1[0]) * t,
+                            col1[1] + (col2[1] - col1[1]) * t,
+                            col1[2] + (col2[2] - col1[2]) * t,
+                        ];
+
+                        self.verts.push(Vertex {
+                            pos: p_cut.to_array(),
+                            color: col_cut,
+                            selected: false,
+                        });
+                        let idx = (self.verts.len() - 1) as u32;
+                        cut_edge_cache.insert(e_key, idx);
+                        idx
+                    };
+
+                    pos_poly.push((cut_idx, uv_cut));
+                    neg_poly.push((cut_idx, uv_cut));
+                }
+            }
+
+            if pos_poly.len() >= 3 {
+                let verts = pos_poly.iter().map(|(v, _)| *v).collect();
+                let uvs = pos_poly.iter().map(|(_, uv)| *uv).collect();
+                let mut split = Face::with_uv(verts, uvs);
+                split.material_slot = face.material_slot;
+                split.selected = face.selected;
+                new_faces.push(split);
+            }
+            if !fill_cap && neg_poly.len() >= 3 {
+                let verts = neg_poly.iter().map(|(v, _)| *v).collect();
+                let uvs = neg_poly.iter().map(|(_, uv)| *uv).collect();
+                let mut split = Face::with_uv(verts, uvs);
+                split.material_slot = face.material_slot;
+                split.selected = face.selected;
+                new_faces.push(split);
+            }
+        }
+
+        original_face_indices_to_remove.sort_unstable_by(|a, b| b.cmp(a));
+        for fi in original_face_indices_to_remove {
+            self.faces.remove(fi);
+        }
+
+        for f in new_faces {
+            self.push_face(f);
+        }
     }
 }
 
