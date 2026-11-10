@@ -20,9 +20,11 @@ mod limits;
 mod material;
 mod path_network;
 mod rng;
+pub mod sky_layer;
 mod stamp;
 mod table;
 mod value;
+pub mod weather;
 mod world;
 
 pub use buffer::{CommandBuffer, DeferredOp};
@@ -36,7 +38,12 @@ pub use limits::Limits;
 pub use material::{MATERIAL_TABLE, MaterialKind, MaterialSpec, material_of};
 pub use path_network::{PathEdge, PathNetwork, PathNode, PathNodeType, WaterVolume};
 pub use rng::Rng;
+pub use sky_layer::{SKY_LAYER_TABLE, SkyLayerSpec, extract_sky_layers, sky_layer_of};
 pub use stamp::StampShape;
 pub use table::{ColumnSpec, TableSpec, is_valid_name};
 pub use value::{MAX_SAFE_INT, MAX_TEXT_BYTES, Value, ValueKind};
+pub use weather::{
+    EvaluatedWeather, WEATHER_TABLE, WeatherSpec, active_weathers_at, extract_all_weathers,
+    weather_of,
+};
 pub use world::{EntitySnapshot, World};

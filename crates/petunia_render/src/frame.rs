@@ -291,6 +291,30 @@ impl SpriteItem {
     }
 }
 
+/// A sky layer item ready to be drawn by the renderer (DR-53 Frente 7).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SkyLayerItem {
+    pub order: i64,
+    pub color: Color,
+    pub image_asset: String,
+    pub image: Option<TextureId>,
+    pub alpha: f32,
+    pub scroll: Vec3,
+}
+
+impl Default for SkyLayerItem {
+    fn default() -> Self {
+        Self {
+            order: 0,
+            color: Color::WHITE,
+            image_asset: String::new(),
+            image: None,
+            alpha: 1.0,
+            scroll: Vec3::ZERO,
+        }
+    }
+}
+
 /// A 2D-looking helper drawn on top of the scene (editor gizmos). Sizes are in pixels, so a
 /// handle keeps the same size on screen at any distance.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -361,6 +385,8 @@ pub struct RenderFrame {
     pub grid_height: f32,
     pub clear_color: Color,
     pub lighting: Lighting,
+    /// Sky layers drawn from furthest to closest before the rest of the scene (DR-53 Frente 7).
+    pub sky_layers: Vec<SkyLayerItem>,
     /// Vegetation impostors to draw on top of the scene, in world coordinates (phase 5).
     pub vegetation: Option<Arc<MeshData>>,
     /// Precipitation (rain or snow), if the weather is falling (phase 4 and 5).
@@ -372,6 +398,29 @@ pub struct RenderFrame {
     /// The host's clock in seconds, used by sprite animations. The editor leaves it at 0 while
     /// editing, so a scene at rest draws the same picture every frame; Play and the player advance it.
     pub seconds: f32,
+}
+
+impl Default for RenderFrame {
+    fn default() -> Self {
+        Self {
+            camera: Camera::default(),
+            items: Vec::new(),
+            sprites: Vec::new(),
+            textures: Vec::new(),
+            sculpts: Vec::new(),
+            overlay: Vec::new(),
+            show_grid: false,
+            grid_height: 0.0,
+            clear_color: Color::rgb(0.53, 0.70, 0.88),
+            lighting: Lighting::default(),
+            sky_layers: Vec::new(),
+            vegetation: None,
+            precipitation: None,
+            fog: None,
+            grade: Grade::default(),
+            seconds: 0.0,
+        }
+    }
 }
 
 /// One fullscreen grade: contrast, vignette, grain and a luminance ceiling.
@@ -469,6 +518,14 @@ impl RenderFrame {
             if !item.normal_texture_asset.is_empty() {
                 item.normal_texture = store.id_of(&item.normal_texture_asset);
                 if let Some(id) = item.normal_texture {
+                    used.insert(id);
+                }
+            }
+        }
+        for layer in &mut self.sky_layers {
+            if !layer.image_asset.is_empty() {
+                layer.image = store.id_of(&layer.image_asset);
+                if let Some(id) = layer.image {
                     used.insert(id);
                 }
             }
@@ -989,7 +1046,32 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
     // every machine, so a scene draws the same picture every frame.
     sprites.sort_by_key(|sprite| (sprite.layer, sprite.entity));
 
-    let lighting = extract_lighting(world, camera.position);
+    let raw_sky_layers = petunia_world::extract_sky_layers(world);
+    let sky_layers = raw_sky_layers
+        .into_iter()
+        .map(|spec| SkyLayerItem {
+            order: spec.order,
+            color: spec.color,
+            image_asset: spec.image,
+            image: None,
+            alpha: spec.alpha,
+            scroll: spec.scroll,
+        })
+        .collect();
+
+    let mut clear_color = Color::rgb(0.53, 0.70, 0.88);
+    let mut fog = None;
+    let mut lighting = extract_lighting(world, camera.position);
+    if let Some(world_sky) = crate::weather::evaluate_world_sky(world, camera.position, false) {
+        clear_color = world_sky.horizon;
+        fog = world_sky.fog;
+        if !lighting.custom {
+            lighting.custom = true;
+            lighting.sun = Some((world_sky.sun_direction, world_sky.sun_color));
+            lighting.ambient = world_sky.ambient;
+        }
+    }
+
     RenderFrame {
         camera,
         items,
@@ -999,12 +1081,13 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
         overlay: Vec::new(),
         show_grid: false,
         grid_height: 0.0,
-        clear_color: Color::rgb(0.53, 0.70, 0.88),
+        clear_color,
         lighting,
+        sky_layers,
         // Filled by whoever has the rules and the weather; an extracted frame carries only the world.
         vegetation: None,
         precipitation: None,
-        fog: None,
+        fog,
         grade: Grade::default(),
         seconds: 0.0,
     }
@@ -1689,6 +1772,82 @@ mod tests {
             .expect("brick texture");
         frame.resolve_textures(&store);
         assert_eq!(frame.items[0].base_texture, Some(brick_id));
+        assert_eq!(frame.textures.len(), 1);
+    }
+
+    #[test]
+    fn world_weather_and_sky_layers_reach_frame_and_resolve() {
+        let mut world = empty_world();
+        world
+            .define_table(
+                TableSpec::new(petunia_world::WEATHER_TABLE)
+                    .column("preset", ValueKind::Text, Value::Text("rain".to_string()))
+                    .column("hours", ValueKind::Float, Value::Float(20.0))
+                    .column("weight", ValueKind::Float, Value::Float(1.0))
+                    .column("volume", ValueKind::Text, Value::Text(String::new())),
+            )
+            .expect("Weather");
+        world
+            .define_table(
+                TableSpec::new(petunia_world::SKY_LAYER_TABLE)
+                    .column("order", ValueKind::Int, Value::Int(0))
+                    .column("color", ValueKind::Color, Value::Color(Color::WHITE))
+                    .column(
+                        "image",
+                        ValueKind::Text,
+                        Value::Text("assets/sky.png".to_string()),
+                    )
+                    .column("alpha", ValueKind::Float, Value::Float(0.8))
+                    .column(
+                        "scroll",
+                        ValueKind::Vec3,
+                        Value::Vec3(Vec3::new(0.01, 0.0, 0.0)),
+                    ),
+            )
+            .expect("SkyLayer");
+
+        let weather_entity = world.spawn().expect("spawn");
+        world
+            .insert_row_values(
+                weather_entity,
+                petunia_world::WEATHER_TABLE,
+                vec![
+                    Value::Text("rain".to_string()),
+                    Value::Float(20.0),
+                    Value::Float(1.0),
+                    Value::Text(String::new()),
+                ],
+            )
+            .expect("weather row");
+
+        let sky_entity = world.spawn().expect("spawn");
+        world
+            .insert_row_values(
+                sky_entity,
+                petunia_world::SKY_LAYER_TABLE,
+                vec![
+                    Value::Int(5),
+                    Value::Color(Color::WHITE),
+                    Value::Text("assets/sky.png".to_string()),
+                    Value::Float(0.8),
+                    Value::Vec3(Vec3::new(0.01, 0.0, 0.0)),
+                ],
+            )
+            .expect("sky row");
+
+        let mut frame = extract_frame(&world, Camera::default());
+        assert!(frame.fog.is_some(), "rain weather brings fog to the frame");
+        assert_eq!(frame.sky_layers.len(), 1);
+        assert_eq!(frame.sky_layers[0].order, 5);
+        assert_eq!(frame.sky_layers[0].image_asset, "assets/sky.png");
+        assert_eq!(frame.sky_layers[0].alpha, 0.8);
+
+        let mut store = TextureStore::new();
+        let sky_id = store
+            .insert("assets/sky.png", 4, 4, vec![200; 64])
+            .expect("sky texture");
+        frame.resolve_textures(&store);
+        assert_eq!(frame.sky_layers[0].image, Some(sky_id));
         assert_eq!(frame.textures.len(), 1);
     }
 }

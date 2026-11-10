@@ -127,6 +127,15 @@ impl EditorSession {
 
     /// `weather.get`: the current hour and preset.
     pub fn weather_get(&self) -> Json {
+        if let Ok(world) = self.world() {
+            let active = petunia_world::active_weathers_at(world, self.camera.camera.position);
+            if let Some(first) = active.first() {
+                return json!({
+                    "hours": first.hours,
+                    "weather": first.preset,
+                });
+            }
+        }
         json!({
             "hours": self.time_of_day.hours,
             "weather": weather_name(self.weather),
@@ -139,7 +148,15 @@ impl EditorSession {
     /// world and never enters the undo history.
     pub(crate) fn apply_weather_and_flora(&self, frame: &mut petunia_render::RenderFrame) {
         let high_contrast = self.high_contrast;
-        let computed = sky(self.time_of_day, self.weather, high_contrast);
+        let world_sky = self.world().ok().and_then(|world| {
+            petunia_render::weather::evaluate_world_sky(
+                world,
+                self.camera.camera.position,
+                high_contrast,
+            )
+        });
+        let computed =
+            world_sky.unwrap_or_else(|| sky(self.time_of_day, self.weather, high_contrast));
         frame.fog = computed.fog;
         // The sky drives the light only when the scene has no light of its own; otherwise the
         // person's lights win, exactly as before.
@@ -166,7 +183,10 @@ impl EditorSession {
         // Precipitation: the particle mesh around the camera, when the preset asks for it. The pool
         // is stepped with the same clock as the animation (see `animation_advance`), so the drops
         // fall instead of hanging in the air.
-        if precipitation_of(self.weather) != Precipitation::None {
+        let precipitation_kind = world_sky
+            .map(|sky_item| sky_item.precipitation)
+            .unwrap_or_else(|| precipitation_of(self.weather));
+        if precipitation_kind != Precipitation::None {
             frame.precipitation = Some(std::sync::Arc::new(self.precipitation.mesh()));
         }
     }
@@ -174,7 +194,20 @@ impl EditorSession {
     /// Steps the precipitation around the camera. Called by the same clock as the animation, so a
     /// paused editor has still air and a playing one has rain.
     pub(crate) fn advance_precipitation(&mut self, seconds: f32) {
-        if precipitation_of(self.weather) == Precipitation::None {
+        let world_precipitation = self
+            .world()
+            .ok()
+            .and_then(|world| {
+                petunia_render::weather::evaluate_world_sky(
+                    world,
+                    self.camera.camera.position,
+                    false,
+                )
+            })
+            .map(|sky_item| sky_item.precipitation);
+        let precipitation_kind =
+            world_precipitation.unwrap_or_else(|| precipitation_of(self.weather));
+        if precipitation_kind == Precipitation::None {
             return;
         }
         let centre = self.camera.camera.position;

@@ -135,6 +135,14 @@ QString propertyLabel(const QString& table, const QString& column) {
         {QStringLiteral("normal_texture"), QStringLiteral("Mapa normal")},
         {QStringLiteral("effect"), QStringLiteral("Efeito")},
         {QStringLiteral("alpha"), QStringLiteral("Opacidade")},
+        // Weather and sky layers (DR-53 Corte C).
+        {QStringLiteral("preset"), QStringLiteral("Preset")},
+        {QStringLiteral("hours"), QStringLiteral("Hora")},
+        {QStringLiteral("weight"), QStringLiteral("Peso")},
+        {QStringLiteral("volume"), QStringLiteral("Volume")},
+        {QStringLiteral("order"), QStringLiteral("Ordem")},
+        {QStringLiteral("image"), QStringLiteral("Imagem")},
+        {QStringLiteral("scroll"), QStringLiteral("Rolagem")},
     };
     if (table == QLatin1String("Collider") && column == QLatin1String("height")) {
         return QStringLiteral("Altura");

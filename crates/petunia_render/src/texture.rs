@@ -269,6 +269,7 @@ mod tests {
             grid_height: 0.0,
             clear_color: petunia_math::Color::WHITE,
             lighting: crate::frame::Lighting::default(),
+            sky_layers: Vec::new(),
             seconds: 0.0,
             vegetation: None,
             precipitation: None,

@@ -325,6 +325,22 @@ struct SpritePass {
     texture: Option<glow::UniformLocation>,
 }
 
+#[derive(Clone, Copy)]
+/// Fullscreen equirectangular and flat sky layers (DR-53 Frente 7).
+struct SkyPass {
+    program: glow::Program,
+    vertex_array: glow::VertexArray,
+    camera_forward: Option<glow::UniformLocation>,
+    camera_right: Option<glow::UniformLocation>,
+    camera_up: Option<glow::UniformLocation>,
+    half_size: Option<glow::UniformLocation>,
+    color: Option<glow::UniformLocation>,
+    alpha: Option<glow::UniformLocation>,
+    scroll: Option<glow::UniformLocation>,
+    time: Option<glow::UniformLocation>,
+    has_image: Option<glow::UniformLocation>,
+}
+
 /// A texture on the GPU beside the pixels it came from: the same handle with new pixels (the
 /// host reloaded the file) has to be uploaded again.
 struct CachedTexture {
@@ -384,6 +400,7 @@ pub struct GlRenderer {
     /// Scene target and the fused grade (DR-13, first cut).
     grade: GradePass,
     sprite_pass: SpritePass,
+    sky_pass: SkyPass,
     /// Sprites left without a loaded asset are drawn with this 1x1 white texture.
     white_texture: glow::Texture,
     sprite_textures: HashMap<TextureId, CachedTexture>,
@@ -420,6 +437,7 @@ impl GlRenderer {
         let overlay_pass = create_overlay_pass(&gl)?;
         let grade = create_grade_pass(&gl)?;
         let sprite_pass = create_sprite_pass(&gl)?;
+        let sky_pass = create_sky_pass(&gl)?;
         let white_texture = create_texture(&gl, 1, 1, &[255, 255, 255, 255])?;
         unsafe {
             gl.enable(glow::DEPTH_TEST);
@@ -441,6 +459,7 @@ impl GlRenderer {
             overlay_pass,
             grade,
             sprite_pass,
+            sky_pass,
             white_texture,
             sprite_textures: HashMap::new(),
             started: std::time::Instant::now(),
@@ -476,6 +495,9 @@ impl GlRenderer {
             self.gl.clear_color(clear.r, clear.g, clear.b, clear.a);
             self.gl
                 .clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT);
+        }
+        self.draw_sky_layers(frame, aspect_ratio)?;
+        unsafe {
             self.gl.use_program(Some(self.program));
             self.gl.uniform_matrix_4_f32_slice(
                 self.uniforms.view_projection.as_ref(),
@@ -725,6 +747,88 @@ impl GlRenderer {
             self.gl.disable(glow::BLEND);
             self.gl.use_program(Some(self.program));
         }
+    }
+
+    /// Draws sky layers in order of their `order` ascending, before any geometry is drawn (DR-53 Frente 7).
+    fn draw_sky_layers(
+        &mut self,
+        frame: &RenderFrame,
+        aspect_ratio: f32,
+    ) -> Result<(), RenderError> {
+        if frame.sky_layers.is_empty() {
+            return Ok(());
+        }
+        let forward = frame.camera.forward();
+        let right = frame.camera.right();
+        let up = right.cross(forward).normalized_or_zero();
+        let half_height = (frame.camera.fov_degrees.to_radians() * 0.5).tan();
+        let half_width = half_height * aspect_ratio;
+
+        unsafe {
+            self.gl.use_program(Some(self.sky_pass.program));
+            self.gl.bind_vertex_array(Some(self.sky_pass.vertex_array));
+            self.gl.disable(glow::DEPTH_TEST);
+            self.gl.depth_mask(false);
+            self.gl.enable(glow::BLEND);
+            self.gl
+                .blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+
+            self.gl.uniform_3_f32(
+                self.sky_pass.camera_forward.as_ref(),
+                forward.x,
+                forward.y,
+                forward.z,
+            );
+            self.gl.uniform_3_f32(
+                self.sky_pass.camera_right.as_ref(),
+                right.x,
+                right.y,
+                right.z,
+            );
+            self.gl
+                .uniform_3_f32(self.sky_pass.camera_up.as_ref(), up.x, up.y, up.z);
+            self.gl
+                .uniform_2_f32(self.sky_pass.half_size.as_ref(), half_width, half_height);
+            self.gl
+                .uniform_1_f32(self.sky_pass.time.as_ref(), frame.seconds);
+
+            for layer in &frame.sky_layers {
+                let has_image = if let Some(texture_id) = layer.image {
+                    if let Some(texture) = self.texture_for(texture_id, &frame.textures)? {
+                        self.gl.active_texture(glow::TEXTURE0);
+                        self.gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+                        1
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                };
+                self.gl
+                    .uniform_1_i32(self.sky_pass.has_image.as_ref(), has_image);
+                self.gl.uniform_4_f32(
+                    self.sky_pass.color.as_ref(),
+                    layer.color.r,
+                    layer.color.g,
+                    layer.color.b,
+                    layer.color.a,
+                );
+                self.gl
+                    .uniform_1_f32(self.sky_pass.alpha.as_ref(), layer.alpha);
+                self.gl.uniform_2_f32(
+                    self.sky_pass.scroll.as_ref(),
+                    layer.scroll.x,
+                    layer.scroll.y,
+                );
+
+                self.gl.draw_arrays(glow::TRIANGLES, 0, 3);
+            }
+
+            self.gl.enable(glow::DEPTH_TEST);
+            self.gl.depth_mask(true);
+            self.gl.disable(glow::BLEND);
+        }
+        Ok(())
     }
 
     /// Draws the flat sprites of the frame in the order the extractor sorted them (painter's
@@ -1245,6 +1349,8 @@ impl Drop for GlRenderer {
             self.gl.delete_vertex_array(self.sprite_pass.vertex_array);
             self.gl.delete_buffer(self.sprite_pass.vertex_buffer);
             self.gl.delete_program(self.sprite_pass.program);
+            self.gl.delete_vertex_array(self.sky_pass.vertex_array);
+            self.gl.delete_program(self.sky_pass.program);
             self.gl.delete_texture(self.white_texture);
         }
         unsafe { self.gl.delete_program(self.program) };
@@ -1442,6 +1548,84 @@ fn create_sprite_pass(gl: &glow::Context) -> Result<SpritePass, RenderError> {
             program,
             vertex_array,
             vertex_buffer,
+        })
+    }
+}
+
+const SKY_VERTEX: &str = r#"#version 330 core
+out vec3 v_ray_dir;
+uniform vec3 u_camera_forward;
+uniform vec3 u_camera_right;
+uniform vec3 u_camera_up;
+uniform vec2 u_half_size;
+
+void main() {
+    vec2 corners[3] = vec2[](vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
+    vec2 pos = corners[gl_VertexID];
+    gl_Position = vec4(pos, 1.0, 1.0);
+    v_ray_dir = u_camera_forward + u_camera_right * (pos.x * u_half_size.x) + u_camera_up * (pos.y * u_half_size.y);
+}
+"#;
+
+const SKY_FRAGMENT: &str = r#"#version 330 core
+in vec3 v_ray_dir;
+out vec4 out_color;
+
+uniform sampler2D u_image;
+uniform int u_has_image;
+uniform vec4 u_color;
+uniform float u_alpha;
+uniform vec2 u_scroll;
+uniform float u_time;
+
+const float PI = 3.14159265358979323846;
+
+void main() {
+    vec3 dir = normalize(v_ray_dir);
+    float phi = atan(dir.z, dir.x);
+    float theta = asin(clamp(dir.y, -1.0, 1.0));
+    vec2 uv = vec2(phi / (2.0 * PI) + 0.5, theta / PI + 0.5);
+    uv += u_scroll * u_time;
+    uv = fract(uv);
+
+    vec4 color = u_color;
+    if (u_has_image != 0) {
+        color *= texture(u_image, uv);
+    }
+    color.a *= u_alpha;
+    out_color = color;
+}
+"#;
+
+fn create_sky_pass(gl: &glow::Context) -> Result<SkyPass, RenderError> {
+    unsafe {
+        let program = compile_source_program(gl, SKY_VERTEX, SKY_FRAGMENT)?;
+        let vertex_array = gl.create_vertex_array().map_err(RenderError::Gl)?;
+        let camera_forward = gl.get_uniform_location(program, "u_camera_forward");
+        let camera_right = gl.get_uniform_location(program, "u_camera_right");
+        let camera_up = gl.get_uniform_location(program, "u_camera_up");
+        let half_size = gl.get_uniform_location(program, "u_half_size");
+        let color = gl.get_uniform_location(program, "u_color");
+        let alpha = gl.get_uniform_location(program, "u_alpha");
+        let scroll = gl.get_uniform_location(program, "u_scroll");
+        let time = gl.get_uniform_location(program, "u_time");
+        let has_image = gl.get_uniform_location(program, "u_has_image");
+        if let Some(image_loc) = gl.get_uniform_location(program, "u_image") {
+            gl.use_program(Some(program));
+            gl.uniform_1_i32(Some(&image_loc), 0);
+        }
+        Ok(SkyPass {
+            program,
+            vertex_array,
+            camera_forward,
+            camera_right,
+            camera_up,
+            half_size,
+            color,
+            alpha,
+            scroll,
+            time,
+            has_image,
         })
     }
 }

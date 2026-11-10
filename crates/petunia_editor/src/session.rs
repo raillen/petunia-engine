@@ -1049,6 +1049,8 @@ impl EditorSession {
                             Some(&["standard", "flat", "masked", "blended", "post"])
                         }
                         ("Material", "effect") => Some(&["grade", "fog"]),
+                        ("Weather", "preset") => Some(&["clear", "cloudy", "rain", "fog", "snow"]),
+                        ("Weather", "volume") => Some(&["", "box"]),
                         _ => None,
                     };
                     if let Some(choices) = choices {

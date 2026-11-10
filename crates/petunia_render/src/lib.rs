@@ -22,8 +22,8 @@ pub use camera::{Camera, Mat4, ProjectionMode, model_matrix, multiply};
 pub use fly::FlyCamera;
 pub use frame::{
     DrawItem, Grade, Lighting, MAX_POINT_LIGHTS, MaterialKind, OverlayItem, PointLight,
-    RenderFrame, Shape, SkinWeight, SpriteItem, extract_frame, extract_frame_cached, skin_mesh,
-    solid_shapes, start_camera, start_camera_at,
+    RenderFrame, Shape, SkinWeight, SkyLayerItem, SpriteItem, extract_frame, extract_frame_cached,
+    skin_mesh, solid_shapes, start_camera, start_camera_at,
 };
 pub use grid::{GRID_LIFT, GridLine, axis_lines, grid_lines};
 pub use mesh::{MeshCache, MeshData, MeshError, build_mesh, item_mesh, polygon_mesh_data};

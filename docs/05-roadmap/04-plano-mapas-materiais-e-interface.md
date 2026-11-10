@@ -130,6 +130,8 @@ Quando `standard` desenhar a textura do GLB, o aviso "texturas ignoradas" sai de
 
 ## 6. Clima como entidade, mais de um ao mesmo tempo
 
+**Estado:** feito (2026-11-10, `petunia_world::weather`, tabela `Weather` com `preset`, `hours`, `weight` e `volume`, suporte a volumes em caixas com prioridade sobre global, mistura ponderada contínua via `blend_skies` e avaliação por observador/câmera, testes unitários e smoke tests passando).
+
 **Hoje (`LOCAL`).** `Weather` é um valor da sessão: um preset (`clear`, `cloudy`, `rain`, `fog`, `snow`) e uma hora. `weather.set` não é desfazer. Não está na cena. O céu achata o flash quando a pessoa pediu menos movimento.
 
 **Corte.** Tabela `Weather` em uma entidade:
@@ -148,6 +150,8 @@ O limitador de flash continua no estado misturado, não em cada preset.
 **Não entra.** Relâmpago, trovão, poça, neve acumulada no chão, áudio de chuva.
 
 ## 7. Skybox em camadas, com animação
+
+**Estado:** feito (2026-11-10, `petunia_world::sky_layer`, tabela `SkyLayer` com `order`, `color`, `image`, `alpha` e `scroll`, renderização OpenGL equirretangular e fundos lisos ordenados com profundidade desligada antes da geometria, rolagem animada pelo relógio da cena, resolução de textura e testes passando).
 
 **Hoje (`LOCAL`).** O céu é a cor do clima. Não há cubemap.
 

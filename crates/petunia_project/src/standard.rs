@@ -248,6 +248,23 @@ pub fn register_standard_tables(world: &mut World) -> Result<(), WorldError> {
             )
             .column("effect", ValueKind::Text, Value::Text(String::new())),
     )?;
+    // Weather (DR-53 Frente 6): preset, hours, weight, volume
+    world.define_table(
+        TableSpec::new(petunia_world::WEATHER_TABLE)
+            .column("preset", ValueKind::Text, Value::Text("clear".to_string()))
+            .column("hours", ValueKind::Float, Value::Float(13.0))
+            .column("weight", ValueKind::Float, Value::Float(1.0))
+            .column("volume", ValueKind::Text, Value::Text(String::new())),
+    )?;
+    // SkyLayer (DR-53 Frente 7): order, color, image, alpha, scroll
+    world.define_table(
+        TableSpec::new(petunia_world::SKY_LAYER_TABLE)
+            .column("order", ValueKind::Int, Value::Int(0))
+            .column("color", ValueKind::Color, Value::Color(Color::WHITE))
+            .column("image", ValueKind::Text, Value::Text(String::new()))
+            .column("alpha", ValueKind::Float, Value::Float(1.0))
+            .column("scroll", ValueKind::Vec3, Value::Vec3(Vec3::ZERO)),
+    )?;
     world.define_table(
         TableSpec::new("Script")
             .column("owner", ValueKind::Int, Value::Int(0))

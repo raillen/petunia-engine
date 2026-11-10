@@ -185,6 +185,7 @@ fn empty_frame() -> petunia_render::RenderFrame {
         grid_height: 0.0,
         clear_color: petunia_math::Color::rgb(0.16, 0.17, 0.20),
         lighting: petunia_render::Lighting::default(),
+        sky_layers: Vec::new(),
         // The empty frame has no sky extras: nothing is being drawn.
         vegetation: None,
         precipitation: None,
