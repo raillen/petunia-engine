@@ -70,6 +70,7 @@ Regra: **`DECLARADO`, `GERAL` e `HIPÓTESE` nunca viram fato sem prova.**
 - [01 Fases e experimentos](05-roadmap/01-fases-e-experimentos.md)
 - [02 Riscos e fora de escopo](05-roadmap/02-riscos-e-fora-de-escopo.md)
 - [03 **Estado da implementação**](05-roadmap/03-estado-da-implementacao.md) — o que existe e o que foi verificado
+- [04 **Plano: mapas, materiais e interface**](05-roadmap/04-plano-mapas-materiais-e-interface.md) — corte aceito em 2026-11-09 (DR-53); a UI de jogo ainda é conversa
 
 ### 07 — Prova de conceito
 - [01 Remake do Digi-Tactics](07-prova-de-conceito/01-digi-tactics.md)

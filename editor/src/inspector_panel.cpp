@@ -371,19 +371,6 @@ void InspectorPanel::rebuild(const QJsonObject& description) {
         content_->addWidget(makeSection(table.value("name").toString(), table.value("columns").toArray()));
     }
 
-    // A brush can become an editable mesh without going through Tab: the operation is the same.
-    if (tableNames.contains(QStringLiteral("Brush"))) {
-        auto* convert = new QPushButton(QStringLiteral("Tornar editável"));
-        convert->setProperty("role", QStringLiteral("addRow"));
-        convert->setIcon(PetuniaIcons::get(QStringLiteral("mode_edit")));
-        convert->setAccessibleName(QStringLiteral("Transformar este brush em malha editável"));
-        convert->setToolTip(QStringLiteral("Transforma o brush em malha editável; Tab entra no modo de edição"));
-        connect(convert, &QPushButton::clicked, this, [this] {
-            runOperation(QStringLiteral("mesh.convert"), QJsonObject{{"entity", static_cast<double>(entity_)}});
-        });
-        content_->addWidget(convert);
-    }
-
     const QJsonArray addable = description.value("addable_tables").toArray();
     addableTables_.clear();
     for (const QJsonValue& name : addable) {

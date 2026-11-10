@@ -435,6 +435,22 @@ fn transform_of(world: &World, handle: EntityHandle) -> Transform {
 /// Builds the frame from the world: every entity with a `Brush` or a `Mesh`. Entities with
 /// unknown shapes are skipped (the Project Doctor reports them). Cuts every editable mesh into
 /// triangles; a host that extracts often uses [`extract_frame_cached`].
+fn paint_fingerprint(entity: u64, face: usize, color: Color, size: Vec3) -> u64 {
+    let mut bits = entity
+        ^ ((face as u64) << 56)
+        ^ (size.x.to_bits() as u64).rotate_left(8)
+        ^ (size.y.to_bits() as u64).rotate_left(16)
+        ^ (size.z.to_bits() as u64).rotate_left(24)
+        ^ (color.r.to_bits() as u64)
+        ^ (color.g.to_bits() as u64).rotate_left(11)
+        ^ (color.b.to_bits() as u64).rotate_left(22)
+        ^ (color.a.to_bits() as u64).rotate_left(33);
+    if bits == 0 {
+        bits = 1;
+    }
+    bits
+}
+
 pub fn extract_frame(world: &World, camera: Camera) -> RenderFrame {
     extract_frame_cached(world, camera, &mut MeshCache::new())
 }
@@ -478,6 +494,35 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
             wireframe: false,
             xray: false,
         });
+        // The box stays the first item, so collision keeps the solid box. Painted faces are extra.
+        if shape == Shape::Box && size.x > 0.0 && size.y > 0.0 && size.z > 0.0 && size.is_finite() {
+            let paints = petunia_world::face_colors(world, entity, 6);
+            for (face, paint) in paints.into_iter().enumerate() {
+                let Some(paint) = paint else {
+                    continue;
+                };
+                let Some(shell) = crate::mesh::box_face_shell(size * 0.5, face) else {
+                    continue;
+                };
+                let fingerprint = paint_fingerprint(entity, face, paint, size);
+                items.push(DrawItem {
+                    entity,
+                    selected: false,
+                    hovered: false,
+                    shape: Shape::Mesh,
+                    size,
+                    detail: 0,
+                    transform,
+                    color: paint,
+                    mesh: Some(cache.store_drawing(fingerprint, shell)),
+                    mesh_fingerprint: fingerprint,
+                    skin: Vec::new(),
+                    skin_matrices: Vec::new(),
+                    wireframe: false,
+                    xray: false,
+                });
+            }
+        }
     }
     for handle in world.entities_with_table("Mesh").unwrap_or_default() {
         let Ok(Value::Mesh(geometry)) = world.get(handle, "Mesh", "geometry") else {
@@ -937,6 +982,10 @@ pub fn solid_shapes(world: &World) -> std::collections::BTreeMap<u64, petunia_ma
     let frame = extract_frame(world, Camera::default());
     for item in &frame.items {
         if item.color.a < 0.9 {
+            continue;
+        }
+        // A painted face is a second item of the same object. The brush (drawn first) is the solid.
+        if item.entity != 0 && found.contains_key(&item.entity) {
             continue;
         }
         let Ok(mesh) = crate::mesh::item_mesh(item) else {

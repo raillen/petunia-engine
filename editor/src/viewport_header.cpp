@@ -1,5 +1,4 @@
 #include "viewport_header.h"
-#include "viewport_widget.h"
 
 #include <cmath>
 
@@ -55,39 +54,6 @@ ViewportHeader::ViewportHeader(QWidget* parent) : QWidget(parent) {
         layout->addWidget(button);
         return button;
     };
-
-    // Mode switch: Objeto / Edição
-    modeGroup_ = new QButtonGroup(this);
-    objectModeButton_ = makeSegment(QStringLiteral("Objeto"), QStringLiteral("first"), QStringLiteral("Modo Objeto (Tab)"));
-    editModeButton_ = makeSegment(QStringLiteral("Edição"), QStringLiteral("last"), QStringLiteral("Modo Edição de Malha (Tab)"));
-    modeGroup_->addButton(objectModeButton_);
-    modeGroup_->addButton(editModeButton_);
-    objectModeButton_->setChecked(true);
-    connect(objectModeButton_, &QPushButton::clicked, this, [this] { emit editModeRequested(false); });
-    connect(editModeButton_, &QPushButton::clicked, this, [this] { emit editModeRequested(true); });
-
-    // Component mode (only visible in edit mode)
-    componentGroup_ = new QButtonGroup(this);
-    vertexButton_ = makeSegment(QStringLiteral("Vértice (1)"), QStringLiteral("first"), QStringLiteral("Selecionar vértices (1)"));
-    edgeButton_ = makeSegment(QStringLiteral("Aresta (2)"), QStringLiteral("middle"), QStringLiteral("Selecionar arestas (2)"));
-    faceButton_ = makeSegment(QStringLiteral("Face (3)"), QStringLiteral("last"), QStringLiteral("Selecionar faces (3)"));
-    componentGroup_->addButton(vertexButton_);
-    componentGroup_->addButton(edgeButton_);
-    componentGroup_->addButton(faceButton_);
-    faceButton_->setChecked(true);
-    connect(vertexButton_, &QPushButton::clicked, this, [this] { emit componentModeRequested(ComponentMode::Vertex); });
-    connect(edgeButton_, &QPushButton::clicked, this, [this] { emit componentModeRequested(ComponentMode::Edge); });
-    connect(faceButton_, &QPushButton::clicked, this, [this] { emit componentModeRequested(ComponentMode::Face); });
-
-    componentSeparator_ = rule(this);
-    layout->addWidget(componentSeparator_);
-
-    vertexButton_->hide();
-    edgeButton_->hide();
-    faceButton_->hide();
-    componentSeparator_->hide();
-
-    layout->addWidget(rule(this));
 
     // Axes of the gizmo: a two-button switch.
     auto* axes = new QButtonGroup(this);
@@ -339,30 +305,6 @@ void ViewportHeader::showFloor(const QJsonObject& floor) {
     const QJsonValue current = floor.value(QStringLiteral("entity"));
     if (!current.isNull()) {
         floorBox_->setCurrentIndex(qMax(0, floorBox_->findData(current.toDouble())));
-    }
-}
-
-void ViewportHeader::showEditMode(bool on) {
-    const QSignalBlocker a(objectModeButton_);
-    const QSignalBlocker b(editModeButton_);
-    objectModeButton_->setChecked(!on);
-    editModeButton_->setChecked(on);
-    vertexButton_->setVisible(on);
-    edgeButton_->setVisible(on);
-    faceButton_->setVisible(on);
-    componentSeparator_->setVisible(on);
-}
-
-void ViewportHeader::showComponentMode(ComponentMode mode) {
-    const QSignalBlocker a(vertexButton_);
-    const QSignalBlocker b(edgeButton_);
-    const QSignalBlocker c(faceButton_);
-    if (mode == ComponentMode::Vertex) {
-        vertexButton_->setChecked(true);
-    } else if (mode == ComponentMode::Edge) {
-        edgeButton_->setChecked(true);
-    } else {
-        faceButton_->setChecked(true);
     }
 }
 

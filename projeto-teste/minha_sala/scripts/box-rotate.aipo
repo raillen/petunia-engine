@@ -1,0 +1,18 @@
+# Script do objeto. O motor chama estas funções quando a coisa acontece.
+
+let up_time = 3.0
+
+
+fn on_start(entity) {
+log.info("começou", entity)
+}
+
+fn on_update(entity, dt) {
+    #transform.rotate(entity, 0.0,90*dt,0.0)
+    #var tm = transform.move(entity, 0.0, 0.5*dt, 0.0)
+    var tm = transform.get_position(entity)
+    
+    
+    tm["y"] = 500
+    log.info(tm)
+}

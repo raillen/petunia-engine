@@ -1,6 +1,6 @@
 # Estado da implementação
 
-**Revisão:** 2026-11-09 (linhas consolidadas: cenas, animação, vegetação, outliner, grid, prefabs, interface de malha e 2D) · **Fase atual:** 1 (esqueleto) concluída no código; **fase 2 (editor e construção de mapas) avançou**
+**Revisão:** 2026-11-09 · **Fase atual:** 1 concluída no código; fase 2 avançou. **Edição de malha completa removida** (DR-51): ficam blocagem e booleano. **Cor por face de caixa** (DR-52): Operações > Pintar face…. **Plano DR-53:** a frente 4 (vão do booleano) está provada em teste. O resto do [plano](04-plano-mapas-materiais-e-interface.md) ainda não foi implementado.
 
 ## Resumo (TL;DR)
 
@@ -59,7 +59,7 @@ Fecha o que faltava do **nível 2** da [edição de brushes](../02-arquitetura/1
 
 **Não verificado:** a janela na sua sessão real; leitor de tela; cilindros/escadas/malhas nessas operações (recusados por projeto).
 
-**Próximo da lista:** material por face e prefabs do próprio projeto. (O `grid`/A\\* foi feito em 2026-11-09, acima; o Event Sheet foi descartado pelo DR-30, que o trocou pelo sistema de nós; as alças no viewport para redimensionar colisões foram feitas em 2026-11-08, abaixo.)
+**Próximo da lista:** prefabs do próprio projeto. (A cor por face de caixa entrou em 2026-11-09, DR-52.) (O `grid`/A\\* foi feito em 2026-11-09, acima; o Event Sheet foi descartado pelo DR-30, que o trocou pelo sistema de nós; as alças no viewport para redimensionar colisões foram feitas em 2026-11-08, abaixo.)
 
 ## Antes: rios, estradas, água e terreno no editor (2026-10-29)
 ## Etapa atual: valor ao vivo e faca por clique (2026-10-30, mesma rodada)
@@ -592,7 +592,7 @@ Fase 2 do pedido "pendências e fases 1 a 6". Decisão: [DR-29](../06-decisoes/r
 
 **Não verificado:** importar um modelo real de um programa de modelagem (só GLBs montados nos testes); a sua sessão real; leitor de tela.
 
-**Ainda falta da fase 2:** material por face; interface da grade no viewport (o `grid`/A\* existe para scripts desde 2026-11-09).
+**Ainda falta da fase 2:** interface da grade no viewport (o `grid`/A\* existe para scripts desde 2026-11-09). A cor por face de caixa entrou em 2026-11-09 (DR-52).
 
 ## Última etapa: personagem, modo Jogar e solidez automática (2026-10-26)
 
@@ -611,7 +611,7 @@ Bloco 1 do pedido "pendências e fases 1 a 6": fecha o essencial da fase 3. Deci
 
 **Não verificado:** a sua sessão real; o jogo no `petunia run` numa janela; teclado e mouse reais no modo Jogar (só `xdotool` no display virtual); leitor de tela. (As alças para redimensionar colisões foram vistas e exercidas no display virtual: caixa de 1 m redimensionada para 2 m num arrasto, com centro movendo 0,5 m; `Ctrl+Z` reverteu.)
 
-**Ainda falta do bloco:** material por face; prefabs do próprio projeto. (O Event Sheet foi descartado pelo DR-30, que o trocou pelo sistema de nós; o módulo `grid`/A\\* foi feito em 2026-11-09; Porta, Item coletável e Ponto de nascimento foram feitos no passo N4, em 2026-10-26; as alças no viewport para redimensionar colisões foram feitas em 2026-11-08: as quatro faces de uma colisão caixa viram quadrados brancos, arrastar uma delas muda `size` e `center` juntos com o desfazer de um passo; colisões esféricas, em cápsula e convexas ficam para depois.)
+**Ainda falta do bloco:** prefabs do próprio projeto. (A cor por face de caixa entrou em 2026-11-09, DR-52.) (O Event Sheet foi descartado pelo DR-30, que o trocou pelo sistema de nós; o módulo `grid`/A\\* foi feito em 2026-11-09; Porta, Item coletável e Ponto de nascimento foram feitos no passo N4, em 2026-10-26; as alças no viewport para redimensionar colisões foram feitas em 2026-11-08: as quatro faces de uma colisão caixa viram quadrados brancos, arrastar uma delas muda `size` e `center` juntos com o desfazer de um passo; colisões esféricas, em cápsula e convexas ficam para depois.)
 
 ## Antes: contorno girado e colisão com física (2026-10-25)
 

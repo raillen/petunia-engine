@@ -452,6 +452,14 @@ impl EditorSession {
             }
             "face.end" => self.face_drag_end(),
             "face.cancel" => self.face_drag_cancel(),
+            "brush.paint_face" => {
+                let under = if request.get("x").is_some() {
+                    Some(pointer(request)?)
+                } else {
+                    None
+                };
+                self.paint_face(under, request)
+            }
             "brush.carve" => self.carve_selection(),
             "brush.cut_plane" => {
                 self.cut_selection(axis_index(request)?, number_or(request, "offset", 0.0))
@@ -465,6 +473,16 @@ impl EditorSession {
                 vector_field(request, "center")?,
                 axis_index(request)?,
             ),
+            "brush.handle_begin" => self.box_handle_begin(pointer(request)?),
+            "brush.handle_drag" => {
+                let invert = request
+                    .get("invert_snap")
+                    .and_then(Json::as_bool)
+                    .unwrap_or(false);
+                self.box_handle_drag(pointer(request)?, invert)
+            }
+            "brush.handle_end" => self.box_handle_end(),
+            "brush.handle_cancel" => self.box_handle_cancel(),
             "brush.mirror" => self.mirror_selection(
                 axis_index(request)?,
                 number(request, "plane")?,
@@ -612,6 +630,21 @@ impl EditorSession {
             }
 
             "selection.set" => self.select(request.get("entity").and_then(Json::as_u64)),
+            "component.pick" => self.component_pick(
+                pointer(request)?,
+                request
+                    .get("additive")
+                    .and_then(Json::as_bool)
+                    .unwrap_or(false),
+            ),
+            "component.kind" => {
+                let under = if request.get("x").is_some() {
+                    Some(pointer(request)?)
+                } else {
+                    None
+                };
+                self.component_set_kind(text(request, "kind")?, under)
+            }
             "object.hide" => self.set_hidden(
                 request.get("entity").and_then(Json::as_u64),
                 request

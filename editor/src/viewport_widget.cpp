@@ -211,13 +211,6 @@ void ViewportWidget::keyPressEvent(QKeyEvent* event) {
 }
 
 void ViewportWidget::keyReleaseEvent(QKeyEvent* event) {
-    // The live mesh value ends when the key that opened it is let go: a tap applies the value of
-    // the bar (as before), holding and moving adjusts it.
-    if (!event->isAutoRepeat()
-        && (event->key() == Qt::Key_I || event->key() == Qt::Key_E || event->key() == Qt::Key_B
-            || event->key() == Qt::Key_R)) {
-        emit meshValueKeyReleased();
-    }
     if (isAlwaysMovementKey(event->key()) || isLetterMovementKey(event->key())) {
         if (!event->isAutoRepeat()) {
             heldKeys_.remove(event->key());
@@ -297,165 +290,15 @@ void ViewportWidget::startFreeMode(const QString& tool) {
     update();
 }
 
-void ViewportWidget::setEditMode(bool on) {
-    if (editMode_ == on) {
-        return;
-    }
-    if (!on) {
-        if (livePreviewActive_) {
-            finishMeshPreview(false);
-        }
-        if (knifeArmed_) {
-            knifeArmed_ = false;
-            knifeStart_ = QJsonObject();
-            emit knifeArmedChanged(false);
-        }
-    }
-    editMode_ = on;
-    if (editMode_) {
-        // Editing happens in the 3D view: give it the keyboard so the mesh shortcuts (K, I, E…)
-        // work right after choosing an object in the hierarchy.
-        setFocus(Qt::OtherFocusReason);
-        setCursor(Qt::CrossCursor);
-    } else {
-        unsetCursor();
-    }
-    emit editModeChanged(editMode_);
-    update();
-}
 
-void ViewportWidget::setKnifeArmed(bool armed) {
-    knifeArmed_ = armed;
-    knifeStart_ = QJsonObject();
-    if (armed) {
-        setCursor(Qt::CrossCursor);
-    } else if (!editMode_) {
-        unsetCursor();
-    }
-    updateKnifeOverlay();
-    emit knifeArmedChanged(knifeArmed_);
-    update();
-}
 
-void ViewportWidget::setLiveMeshOperation(const QString& operation) {
-    liveMeshOperation_ = operation;
-    if (operation.isEmpty() && livePreviewActive_) {
-        finishMeshPreview(false);
-    }
-}
 
-void ViewportWidget::setLiveMeshValues(const QJsonObject& values) {
-    liveMeshValues_ = values;
-}
 
-QString ViewportWidget::livePreviewReason(const QJsonObject& result) const {
-    const QJsonObject reason = result.value(QStringLiteral("reason")).toObject();
-    const QString message = reason.value(QStringLiteral("message")).toString();
-    return message.isEmpty() ? QStringLiteral("o valor ainda não funciona") : message;
-}
 
-void ViewportWidget::startMeshPreview(const QPoint& position) {
-    if (!hasProject() || !bridge_->hasSelection() || liveMeshOperation_.isEmpty()) {
-        return;
-    }
-    livePreviewActive_ = true;
-    livePreviewStart_ = position;
-    // The bar's fields are the starting values; the drag changes the one that operation uses.
-    livePreviewStartValue_ = 0.0;
-    if (liveMeshOperation_ == QLatin1String("loop_cut")) {
-        livePreviewStartValue_ = liveMeshValues_.value(QStringLiteral("slide")).toDouble();
-    } else if (liveMeshOperation_ == QLatin1String("bevel")) {
-        livePreviewStartValue_ = liveMeshValues_.value(QStringLiteral("width")).toDouble();
-    } else {
-        livePreviewStartValue_ = liveMeshValues_.value(QStringLiteral("distance")).toDouble();
-    }
-    QJsonObject fields = liveMeshValues_;
-    fields.insert(QStringLiteral("operation"), liveMeshOperation_);
-    fields.insert(QStringLiteral("entity"), static_cast<double>(bridge_->selection()));
-    const Reply reply = bridge_->call(QStringLiteral("mesh.preview"), fields);
-    if (!reply.ok) {
-        livePreviewActive_ = false;
-        emit meshStatus(reply.explanation());
-        return;
-    }
-    const QJsonObject result = reply.result.toObject();
-    if (!result.value(QStringLiteral("valid")).toBool()) {
-        emit meshStatus(QStringLiteral("Prévia: %1").arg(livePreviewReason(result)));
-    }
-    update();
-}
 
-void ViewportWidget::updateMeshPreview(const QPoint& position, Qt::KeyboardModifiers modifiers) {
-    if (!livePreviewActive_ || liveMeshOperation_.isEmpty()) {
-        return;
-    }
-    const double pixels = position.x() - livePreviewStart_.x();
-    const double step = modifiers.testFlag(Qt::ShiftModifier) ? 0.001 : 0.005;
-    QJsonObject fields = liveMeshValues_;
-    fields.insert(QStringLiteral("operation"), liveMeshOperation_);
-    fields.insert(QStringLiteral("entity"), static_cast<double>(bridge_->selection()));
-    if (liveMeshOperation_ == QLatin1String("loop_cut")) {
-        fields.insert(QStringLiteral("slide"),
-                      qBound(-1.0, livePreviewStartValue_ + pixels * step, 1.0));
-    } else {
-        const double value = qMax(0.001, livePreviewStartValue_ + pixels * step);
-        fields.insert(liveMeshOperation_ == QLatin1String("bevel") ? QStringLiteral("width")
-                                                                  : QStringLiteral("distance"),
-                      value);
-    }
-    const Reply reply = bridge_->call(QStringLiteral("mesh.preview"), fields);
-    if (!reply.ok) {
-        emit meshStatus(reply.explanation());
-        return;
-    }
-    const QJsonObject result = reply.result.toObject();
-    if (!result.value(QStringLiteral("valid")).toBool()) {
-        emit meshStatus(QStringLiteral("Prévia: %1").arg(livePreviewReason(result)));
-    } else {
-        emit meshStatus(QStringLiteral("Prévia ao vivo: solte para aplicar, Esc cancela."));
-    }
-    emit gizmoPreviewed();
-    update();
-}
 
-void ViewportWidget::finishMeshPreview(bool commit) {
-    if (!livePreviewActive_) {
-        return;
-    }
-    livePreviewActive_ = false;
-    if (!engineAlive_) {
-        return;
-    }
-    const Reply reply =
-        bridge_->call(QStringLiteral("mesh.preview_end"), QJsonObject{{QStringLiteral("commit"), commit}});
-    if (!reply.ok) {
-        emit meshStatus(reply.explanation());
-    } else if (commit && reply.result.toObject().value(QStringLiteral("committed")).toBool()) {
-        emit meshStatus(QStringLiteral("Operação aplicada. Ctrl+Z desfaz."));
-    } else if (commit) {
-        emit meshStatus(QStringLiteral("Nada mudou — ajuste o valor ou selecione uma parte antes de arrastar."));
-    } else {
-        emit meshStatus(QStringLiteral("Prévia cancelada."));
-    }
-    emit selectionChanged();
-    update();
-}
 
-void ViewportWidget::updateKnifeOverlay() {
-    if (overlay_ == nullptr) {
-        return;
-    }
-    overlay_->setKnifeLine(knifeArmed_ && !knifeStart_.isEmpty(), knifeStartScreen_, knifeHoverScreen_);
-}
 
-void ViewportWidget::setComponentMode(ComponentMode mode) {
-    if (componentMode_ == mode) {
-        return;
-    }
-    componentMode_ = mode;
-    emit componentModeChanged(componentMode_);
-    update();
-}
 
 void ViewportWidget::finishFreeMode(bool confirm) {
     freeMode_ = false;
@@ -529,14 +372,15 @@ bool ViewportWidget::event(QEvent* event) {
     if (event->type() == QEvent::ShortcutOverride) {
         auto* key = static_cast<QKeyEvent*>(event);
         const bool plain = !(key->modifiers() & (Qt::ControlModifier | Qt::AltModifier));
-        if ((plain && key->key() == Qt::Key_Tab) ||
-            (looking_ && plain && isLetterMovementKey(key->key())) ||
-            ((gizmoDragging_ || faceDragging_ || colliderDragging_) &&
+        if ((looking_ && plain && isLetterMovementKey(key->key())) ||
+            ((gizmoDragging_ || faceDragging_ || colliderDragging_ || boxDragging_) &&
              key->key() == Qt::Key_Escape) ||
-            ((livePreviewActive_ || knifeArmed_) && key->key() == Qt::Key_Escape) ||
             (freeMode_ && plain && isFreeModeKey(key->key())) ||
             (plain && key->key() == Qt::Key_Space && hasProject() &&
              currentTool() == QLatin1String("terrain")) ||
+            (plain && hasProject() && (key->key() == Qt::Key_1 || key->key() == Qt::Key_2 || key->key() == Qt::Key_3) &&
+             (currentTool() == QLatin1String("move") || currentTool() == QLatin1String("rotate") ||
+              currentTool() == QLatin1String("scale"))) ||
             ((pathPending() || naturalPathPending()) &&
              (key->key() == Qt::Key_Escape || key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter ||
               key->key() == Qt::Key_Backspace))) {
@@ -546,19 +390,6 @@ bool ViewportWidget::event(QEvent* event) {
     }
     if (event->type() == QEvent::KeyPress) {
         auto* key = static_cast<QKeyEvent*>(event);
-        if (key->key() == Qt::Key_Escape && livePreviewActive_) {
-            finishMeshPreview(false);
-            return true;
-        }
-        if (key->key() == Qt::Key_Escape && knifeArmed_) {
-            setKnifeArmed(false);
-            emit meshStatus(QStringLiteral("Faca cancelada."));
-            return true;
-        }
-        if (key->key() == Qt::Key_Tab && !(key->modifiers() & (Qt::ControlModifier | Qt::AltModifier))) {
-            emit editModeToggleRequested();
-            return true;
-        }
         // The keyboard path of the terrain brush: one press, one stamp, no drag at all.
         if (key->key() == Qt::Key_Space && !(key->modifiers() & (Qt::ControlModifier | Qt::AltModifier)) &&
             hasProject() && currentTool() == QLatin1String("terrain") && !naturalDragging_) {
@@ -569,7 +400,7 @@ bool ViewportWidget::event(QEvent* event) {
             handleFreeKey(key);
             return true;
         }
-        if ((gizmoDragging_ || colliderDragging_) && key->key() == Qt::Key_Escape) {
+        if ((gizmoDragging_ || colliderDragging_ || boxDragging_) && key->key() == Qt::Key_Escape) {
             cancelGizmoDrag();
             return true;
         }
@@ -621,6 +452,18 @@ bool ViewportWidget::event(QEvent* event) {
             update();
             return true;
         }
+        if (!(key->modifiers() & (Qt::ControlModifier | Qt::AltModifier)) && hasProject() &&
+            (key->key() == Qt::Key_1 || key->key() == Qt::Key_2 || key->key() == Qt::Key_3) &&
+            (currentTool() == QLatin1String("move") || currentTool() == QLatin1String("rotate") ||
+             currentTool() == QLatin1String("scale"))) {
+            const char* kind = key->key() == Qt::Key_1 ? "face" : key->key() == Qt::Key_2 ? "edge" : "vertex";
+            QJsonObject fields = lastPointerFields();
+            fields.insert(QStringLiteral("kind"), QString::fromLatin1(kind));
+            bridge_->call(QStringLiteral("component.kind"), fields);
+            emit selectionChanged();
+            update();
+            return true;
+        }
         if (faceDragging_ && key->key() == Qt::Key_Escape) {
             faceDragging_ = false;
             bridge_->call(QStringLiteral("face.cancel"));
@@ -633,7 +476,10 @@ bool ViewportWidget::event(QEvent* event) {
 }
 
 void ViewportWidget::cancelGizmoDrag() {
-    if (colliderDragging_) {
+    if (boxDragging_) {
+        boxDragging_ = false;
+        bridge_->call(QStringLiteral("brush.handle_cancel"));
+    } else if (colliderDragging_) {
         colliderDragging_ = false;
         bridge_->call(QStringLiteral("collider.handle_cancel"));
     } else {
@@ -672,35 +518,27 @@ void ViewportWidget::cancelActiveEdit() {
         gizmoDragging_ = false;
         faceDragging_ = false;
         colliderDragging_ = false;
+        boxDragging_ = false;
         sculptDragging_ = false;
         naturalDragging_ = false;
         freeTyped_.clear();
         heldKeys_.clear();
         looking_ = false;
-        livePreviewActive_ = false;
-        knifeArmed_ = false;
-        knifeStart_ = QJsonObject();
         hoveredHandle_.clear();
         hoveredEntity_ = QJsonValue();
         hoveredFace_ = QJsonValue();
         hoveredCollider_ = false;
+        hoveredBox_ = false;
         clickCandidate_ = false;
         unsetCursor();
-        updateKnifeOverlay();
     };
     if (!engineAlive_ || !hasProject()) {
         clearLocalState();
         return;
     }
-    if (livePreviewActive_) {
-        finishMeshPreview(false);
-    }
-    if (knifeArmed_) {
-        setKnifeArmed(false);
-    }
     if (freeMode_) {
         finishFreeMode(false);
-    } else if (gizmoDragging_ || colliderDragging_) {
+    } else if (gizmoDragging_ || colliderDragging_ || boxDragging_) {
         cancelGizmoDrag();
     }
     if (faceDragging_) {
@@ -742,31 +580,6 @@ void ViewportWidget::mousePressEvent(QMouseEvent* event) {
         lastMouse_ = event->pos();
         setCursor(Qt::ClosedHandCursor);
     } else if (event->button() == Qt::LeftButton) {
-        if (hasProject() && editMode_) {
-            if (faceTool()) {
-                const Reply reply = bridge_->call(QStringLiteral("face.begin"), pointerFields(event->pos()));
-                if (reply.ok && reply.result.toObject().value(QStringLiteral("started")).toBool()) {
-                    faceDragging_ = true;
-                    clickCandidate_ = false;
-                    emit selectionChanged();
-                    update();
-                    event->accept();
-                    return;
-                }
-                if (!reply.ok) {
-                    emit renderFailed(reply.message);
-                }
-            }
-            pressPosition_ = event->pos();
-            if (!liveMeshOperation_.isEmpty() && !knifeArmed_) {
-                clickCandidate_ = false;
-                startMeshPreview(event->pos());
-            } else {
-                clickCandidate_ = true;
-            }
-            event->accept();
-            return;
-        }
         if (hasProject() && currentTool() == QLatin1String("sculpt")) {
             QJsonObject fields = pointerFields(event->pos());
             fields.insert(QStringLiteral("invert"), event->modifiers().testFlag(Qt::ControlModifier));
@@ -840,6 +653,14 @@ void ViewportWidget::mousePressEvent(QMouseEvent* event) {
                 event->accept();
                 return;
             }
+            const Reply box = bridge_->call(QStringLiteral("brush.handle_begin"), pointerFields(event->pos()));
+            if (box.ok && box.result.toObject().value(QStringLiteral("started")).toBool()) {
+                boxDragging_ = true;
+                clickCandidate_ = false;
+                update();
+                event->accept();
+                return;
+            }
         }
         pressPosition_ = event->pos();
         clickCandidate_ = true;
@@ -849,14 +670,6 @@ void ViewportWidget::mousePressEvent(QMouseEvent* event) {
 
 void ViewportWidget::mouseMoveEvent(QMouseEvent* event) {
     const bool invert = event->modifiers().testFlag(Qt::ControlModifier);
-    if (knifeArmed_ && !knifeStart_.isEmpty()) {
-        knifeHoverScreen_ = event->pos();
-        updateKnifeOverlay();
-    }
-    if (livePreviewActive_) {
-        updateMeshPreview(event->pos(), event->modifiers());
-        return;
-    }
     if (naturalDragging_) {
         bridge_->call(QStringLiteral("terrain.drag"), pointerFields(event->pos()));
         update();
@@ -874,14 +687,15 @@ void ViewportWidget::mouseMoveEvent(QMouseEvent* event) {
         update();
         return;
     }
-    if (freeMode_ || gizmoDragging_ || faceDragging_ || colliderDragging_) {
+    if (freeMode_ || gizmoDragging_ || faceDragging_ || colliderDragging_ || boxDragging_) {
         QJsonObject fields = pointerFields(event->pos());
         fields.insert(QStringLiteral("invert_snap"), invert);
         lastPointer_ = event->pos();
         if (freeMode_ && !freeTyped_.isEmpty()) {
             return;  // a typed value wins over the mouse
         }
-        const QString operation = colliderDragging_ ? QStringLiteral("collider.handle_drag")
+        const QString operation = boxDragging_ ? QStringLiteral("brush.handle_drag")
+                                  : colliderDragging_ ? QStringLiteral("collider.handle_drag")
                                   : faceDragging_ ? QStringLiteral("face.drag")
                                                   : QStringLiteral("gizmo.drag");
         bridge_->call(operation, fields);
@@ -916,9 +730,7 @@ void ViewportWidget::mouseReleaseEvent(QMouseEvent* event) {
             }
         }
     } else if (event->button() == Qt::LeftButton) {
-        if (livePreviewActive_) {
-            finishMeshPreview(true);
-        } else if (naturalDragging_) {
+        if (naturalDragging_) {
             naturalDragging_ = false;
             const Reply reply = bridge_->call(QStringLiteral("terrain.end"));
             if (!reply.ok) {
@@ -934,14 +746,16 @@ void ViewportWidget::mouseReleaseEvent(QMouseEvent* event) {
             }
             emit selectionChanged();  // refresh: one new undo step
             update();
-        } else if (gizmoDragging_ || faceDragging_ || colliderDragging_) {
-            const QString operation = colliderDragging_ ? QStringLiteral("collider.handle_end")
+        } else if (gizmoDragging_ || faceDragging_ || colliderDragging_ || boxDragging_) {
+            const QString operation = boxDragging_ ? QStringLiteral("brush.handle_end")
+                                      : colliderDragging_ ? QStringLiteral("collider.handle_end")
                                       : faceDragging_ ? QStringLiteral("face.end")
                                                       : QStringLiteral("gizmo.end");
             bridge_->call(operation);
             gizmoDragging_ = false;
             faceDragging_ = false;
             colliderDragging_ = false;
+            boxDragging_ = false;
             unsetCursor();
             hoveredHandle_.clear();
             emit selectionChanged();  // refresh: one new undo step, new values
@@ -966,23 +780,34 @@ void ViewportWidget::mouseReleaseEvent(QMouseEvent* event) {
             update();
         } else if (clickCandidate_) {
             clickCandidate_ = false;
-            if (editMode_) {
-                pickComponentAt(event->pos(), event->modifiers());
-            } else {
-                pickAt(event->pos());
+            const bool transformTool = currentTool() == QLatin1String("move") ||
+                                       currentTool() == QLatin1String("rotate") ||
+                                       currentTool() == QLatin1String("scale");
+            if (transformTool && bridge_->hasSelection()) {
+                QJsonObject fields = pointerFields(event->pos());
+                fields.insert(QStringLiteral("additive"), event->modifiers().testFlag(Qt::ShiftModifier));
+                const Reply reply = bridge_->call(QStringLiteral("component.pick"), fields);
+                if (reply.ok && reply.result.toObject().value(QStringLiteral("picked")).toBool()) {
+                    emit selectionChanged();
+                    update();
+                    event->accept();
+                    return;
+                }
             }
+            pickAt(event->pos());
         }
     }
     event->accept();
 }
 
 void ViewportWidget::leaveEvent(QEvent* event) {
-    if ((!hoveredHandle_.isEmpty() || !hoveredEntity_.isNull() || hoveredCollider_) &&
-        !gizmoDragging_ && !faceDragging_ && !colliderDragging_) {
+    if ((!hoveredHandle_.isEmpty() || !hoveredEntity_.isNull() || hoveredCollider_ || hoveredBox_) &&
+        !gizmoDragging_ && !faceDragging_ && !colliderDragging_ && !boxDragging_) {
         bridge_->call(QStringLiteral("pointer.hover"), QJsonObject{{"x", -10000}, {"y", -10000}, {"width", width()}, {"height", height()}});
         hoveredHandle_.clear();
         hoveredEntity_ = QJsonValue();
         hoveredCollider_ = false;
+        hoveredBox_ = false;
         update();
     }
     QOpenGLWidget::leaveEvent(event);
@@ -994,6 +819,11 @@ void ViewportWidget::focusOutEvent(QFocusEvent* event) {
     looking_ = false;
     unsetCursor();
     QOpenGLWidget::focusOutEvent(event);
+}
+
+QJsonObject ViewportWidget::lastPointerFields() const {
+    const QPoint position = lastPointer_.isNull() ? QPoint(width() / 2, height() / 2) : lastPointer_;
+    return pointerFields(position);
 }
 
 QJsonObject ViewportWidget::pointerFields(const QPoint& position) const {
@@ -1010,26 +840,25 @@ void ViewportWidget::updateHover(const QPoint& position) {
     if (!hasProject() || playing_) {
         return;
     }
-    if (editMode_) {
-        setCursor(Qt::CrossCursor);
-        return;
-    }
     const Reply reply = bridge_->call(QStringLiteral("pointer.hover"), pointerFields(position));
     const QJsonObject result = reply.result.toObject();
     const QString handle = result.value(QStringLiteral("handle")).toString();
     const QJsonValue entity = result.value(QStringLiteral("entity"));
     const QJsonValue face = result.value(QStringLiteral("face"));
     const bool collider = result.value(QStringLiteral("collider")).toBool();
+    const bool box = result.value(QStringLiteral("box")).toBool();
     if (handle != hoveredHandle_ || entity != hoveredEntity_ || face != hoveredFace_ ||
-        collider != hoveredCollider_) {
+        collider != hoveredCollider_ || box != hoveredBox_) {
         hoveredHandle_ = handle;
         hoveredEntity_ = entity;
         hoveredFace_ = face;
         hoveredCollider_ = collider;
-        const bool hot = !handle.isEmpty() || !face.isNull() || collider;
+        hoveredBox_ = box;
+        const bool hot = !handle.isEmpty() || !face.isNull() || collider || box;
         // A collider handle resizes: horizontal resize cursor reads as a handle without
-        // promising a direction the handle does not have.
-        setCursor(collider ? Qt::SizeHorCursor : hot ? Qt::PointingHandCursor : Qt::ArrowCursor);
+        // promising a direction the handle does not have. A box corner or edge does the same
+        // on the view plane.
+        setCursor(collider || box ? Qt::SizeHorCursor : hot ? Qt::PointingHandCursor : Qt::ArrowCursor);
         update();
     }
 }
@@ -1062,115 +891,4 @@ void ViewportWidget::pickAt(const QPoint& position) {
     }
 }
 
-QJsonObject ViewportWidget::pickMeshPartAt(const QPoint& position) {
-    if (width() <= 0 || height() <= 0 || !hasProject() || !bridge_->hasSelection()) {
-        return QJsonObject();
-    }
-    QJsonObject fields = pointerFields(position);
-    fields.insert(QStringLiteral("entity"), static_cast<double>(bridge_->selection()));
-    const Reply reply = bridge_->call(QStringLiteral("mesh.pick"), fields);
-    if (!reply.ok || !reply.result.isObject()) {
-        return QJsonObject();
-    }
-    return reply.result.toObject();
-}
 
-void ViewportWidget::pickComponentAt(const QPoint& position, Qt::KeyboardModifiers modifiers) {
-    if (width() <= 0 || height() <= 0 || !hasProject() || !bridge_->hasSelection()) {
-        return;
-    }
-    QJsonObject fields = pointerFields(position);
-    fields.insert(QStringLiteral("entity"), static_cast<double>(bridge_->selection()));
-    const Reply pickReply = bridge_->call(QStringLiteral("mesh.pick"), fields);
-
-    if (knifeArmed_) {
-        // Two clicks, each a point on an edge; the second one cuts the face between them.
-        if (!pickReply.ok || !pickReply.result.isObject()) {
-            knifeHoverScreen_ = position;
-            updateKnifeOverlay();
-            emit meshStatus(QStringLiteral("Faca: clique sobre uma aresta da malha selecionada."));
-            return;
-        }
-        const QJsonObject hit = pickReply.result.toObject();
-        if (!hit.contains(QStringLiteral("edge"))) {
-            knifeHoverScreen_ = position;
-            updateKnifeOverlay();
-            emit meshStatus(QStringLiteral("Faca: o ponto precisa estar sobre uma aresta."));
-            return;
-        }
-        const QJsonObject point{
-            {QStringLiteral("edge"), hit.value(QStringLiteral("edge"))},
-            {QStringLiteral("fraction"), hit.value(QStringLiteral("edge_fraction")).toDouble(0.5)},
-        };
-        if (knifeStart_.isEmpty()) {
-            knifeStart_ = point;
-            knifeStartScreen_ = position;
-            knifeHoverScreen_ = position;
-            updateKnifeOverlay();
-            emit meshStatus(QStringLiteral("Faca: primeiro ponto marcado; clique no segundo ponto da mesma face."));
-            return;
-        }
-        const Reply cut = bridge_->call(
-            QStringLiteral("mesh.knife"),
-            QJsonObject{
-                {QStringLiteral("entity"), static_cast<double>(bridge_->selection())},
-                {QStringLiteral("start"), knifeStart_},
-                {QStringLiteral("end"), point},
-            });
-        knifeStart_ = QJsonObject();
-        updateKnifeOverlay();
-        if (cut.ok) {
-            knifeArmed_ = false;
-            emit knifeArmedChanged(false);
-            emit meshStatus(QStringLiteral("Faca: corte feito. Ctrl+Z desfaz."));
-            emit selectionChanged();
-            update();
-        } else {
-            emit meshStatus(cut.explanation());
-        }
-        return;
-    }
-
-    QString selectMode = QStringLiteral("replace");
-    if (modifiers.testFlag(Qt::ControlModifier)) {
-        selectMode = QStringLiteral("toggle");
-    } else if (modifiers.testFlag(Qt::ShiftModifier)) {
-        selectMode = QStringLiteral("add");
-    }
-
-    if (!pickReply.ok || pickReply.result.isNull() || !pickReply.result.isObject()) {
-        if (selectMode == QLatin1String("replace")) {
-            bridge_->call(QStringLiteral("mesh.select"), QJsonObject{
-                {QStringLiteral("entity"), static_cast<double>(bridge_->selection())},
-                {QStringLiteral("mode"), QStringLiteral("clear")}
-            });
-            update();
-        }
-        return;
-    }
-
-    const QJsonObject hit = pickReply.result.toObject();
-    QJsonObject selectFields{
-        {QStringLiteral("entity"), static_cast<double>(bridge_->selection())},
-        {QStringLiteral("mode"), selectMode}
-    };
-
-    if (componentMode_ == ComponentMode::Vertex) {
-        if (hit.contains(QStringLiteral("vertex"))) {
-            const int vertex = hit.value(QStringLiteral("vertex")).toInt();
-            selectFields.insert(QStringLiteral("vertices"), QJsonArray{vertex});
-        }
-    } else if (componentMode_ == ComponentMode::Edge) {
-        if (hit.contains(QStringLiteral("edge"))) {
-            selectFields.insert(QStringLiteral("edges"), QJsonArray{hit.value(QStringLiteral("edge")).toArray()});
-        }
-    } else {
-        if (hit.contains(QStringLiteral("face"))) {
-            const int face = hit.value(QStringLiteral("face")).toInt();
-            selectFields.insert(QStringLiteral("faces"), QJsonArray{face});
-        }
-    }
-
-    bridge_->call(QStringLiteral("mesh.select"), selectFields);
-    update();
-}

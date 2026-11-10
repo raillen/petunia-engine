@@ -379,29 +379,97 @@ impl Mesh {
     }
 }
 
-mod bevel;
+impl Mesh {
+    /// Fuses vertices closer than `eps` (brush triangles share a corner per normal).
+    #[allow(clippy::needless_range_loop)]
+    pub fn weld(&mut self, eps: f32) {
+        let n = self.verts.len();
+        let mut rep: Vec<u32> = (0..n as u32).collect();
+        for i in 0..n {
+            if rep[i] != i as u32 {
+                continue;
+            }
+            for j in (i + 1)..n {
+                if rep[j] != j as u32 {
+                    continue;
+                }
+                let distance = (self.verts[i].vec() - self.verts[j].vec()).length();
+                if distance <= eps {
+                    rep[j] = i as u32;
+                }
+            }
+        }
+        let mut new_id = vec![u32::MAX; n];
+        let mut compacted = Vec::new();
+        for i in 0..n {
+            if rep[i] == i as u32 {
+                new_id[i] = compacted.len() as u32;
+                compacted.push(self.verts[i].clone());
+            }
+        }
+        for i in 0..n {
+            if rep[i] != i as u32 {
+                new_id[i] = new_id[rep[i] as usize];
+            }
+        }
+        for face in &mut self.faces {
+            for vertex in &mut face.verts {
+                *vertex = new_id[*vertex as usize];
+            }
+        }
+        self.faces.retain(|face| {
+            let mut unique = face.verts.clone();
+            unique.sort_unstable();
+            unique.dedup();
+            unique.len() >= 3
+        });
+        self.verts = compacted;
+        let edges: Vec<(u32, u32)> = self.selected_edges.iter().copied().collect();
+        self.selected_edges.clear();
+        for (a, b) in edges {
+            let (na, nb) = (new_id[a as usize], new_id[b as usize]);
+            if na != u32::MAX && nb != u32::MAX && na != nb {
+                self.selected_edges.insert(edge_key(na, nb));
+            }
+        }
+    }
+
+    /// Splits polygons into triangles. A face that cannot be split stays as it is.
+    pub fn triangulate(&mut self) {
+        let mut out = Vec::new();
+        for (face_index, face) in self.faces.iter().enumerate() {
+            if face.verts.len() <= 3 {
+                out.push(face.clone());
+                continue;
+            }
+            let corners = self.face_triangle_corners(face_index);
+            if corners.len() != face.verts.len() - 2 {
+                out.push(face.clone());
+                continue;
+            }
+            for triangle in corners {
+                let mut split = face.clone();
+                split.verts = triangle.map(|corner| face.verts[corner]).to_vec();
+                split.uv = triangle
+                    .map(|corner| face.uv.get(corner).copied().unwrap_or_default())
+                    .to_vec();
+                out.push(split);
+            }
+        }
+        self.faces = out;
+    }
+}
+
 pub mod boolean;
+pub mod half_edge;
+pub use half_edge::HalfEdgeMesh;
 pub mod boolean_cleanup;
 mod boolean_partition;
 pub mod cleanup;
-mod connect;
-pub mod half_edge;
-pub mod inset;
-pub mod knife;
-pub mod loop_cut;
-mod loops;
-pub mod obj;
-pub mod ops;
 pub mod primitives;
 pub mod topology;
 pub mod triangulate;
 
-pub use bevel::{BevelReport, MAX_BEVEL_SEGMENTS};
-pub use half_edge::{
-    EdgeId, FaceId, HalfEdge, HalfEdgeId, HalfEdgeMesh, TopologyDefect, TopologyReport, VertexId,
-};
-pub use inset::{InsetMode, InsetReport};
-pub use ops::ExtrudeMode;
 pub use topology::{DirtyDomains, ElementRemap, TopologyResult};
 
 impl Mesh {
@@ -632,8 +700,8 @@ mod tests {
     }
 
     use crate::legacy::{
-        EdgeKey, ExtrudeMode, Face, FaceIndex, Mesh, RepairPolicy, Vertex, VertexIndex, edge_key,
-        triangulate::ear_clip, triangulate::ray_tri_hit, validation::repair_external_mesh,
+        EdgeKey, Face, FaceIndex, Mesh, RepairPolicy, VertexIndex, edge_key, triangulate::ear_clip,
+        triangulate::ray_tri_hit, validation::repair_external_mesh,
     };
     use glam::Vec3;
 
@@ -675,24 +743,6 @@ mod tests {
     }
 
     #[test]
-    fn subdivide_quad_grows() {
-        let mut m = Mesh::cube(2.0);
-        m.select_all();
-        m.subdivide_selected();
-        assert!(m.faces.len() > 6);
-    }
-
-    #[test]
-    fn obj_roundtrip_with_uv() {
-        let m = Mesh::cube(2.0);
-        let s = m.to_obj();
-        assert!(s.contains("vt "));
-        let m2 = Mesh::from_obj(&s);
-        assert_eq!(m2.verts.len(), 8);
-        assert!(!m2.faces.is_empty());
-    }
-
-    #[test]
     fn ear_clip_concave() {
         // seta côncava: 7 pontos
         let pts = [
@@ -711,273 +761,6 @@ mod tests {
     #[test]
     fn ear_clip_rejects_degenerate() {
         assert!(ear_clip(&[[0.0, 0.0], [1.0, 1.0]]).is_err());
-    }
-
-    #[test]
-    fn revolve_vase_counts() {
-        let profile = [[0.0, 0.0], [1.0, 0.0], [1.0, 2.0], [0.0, 2.0]];
-        let m = Mesh::revolve(&profile, 8).expect("revolve");
-        assert!(!m.faces.is_empty());
-        assert!(m.faces.iter().all(|f| f.uv.len() == f.verts.len()));
-    }
-
-    #[test]
-    fn revolve_partial_angle_counts() {
-        let profile = [[0.0, 0.0], [1.0, 0.0], [1.0, 2.0], [0.0, 2.0]];
-        let m = Mesh::revolve_angle(&profile, 8, 180.0).expect("revolve 180");
-        assert!(!m.faces.is_empty());
-        assert!(!m.verts.is_empty());
-        assert!(m.faces.iter().all(|f| f.uv.len() == f.verts.len()));
-    }
-
-    #[test]
-    fn mirror_welds_center() {
-        let mut m = Mesh::plane(2.0);
-        m.select_all();
-        let before = m.vert_count();
-        m.mirror(0, 0.001);
-        // plano simétrico em X com weld: volta a ~4 verts (+ tolerância)
-        assert!(m.vert_count() <= before + 4);
-    }
-
-    #[test]
-    fn bevel_manifold_cube_edge() {
-        let mut m = Mesh::cube(2.0);
-        m.selected_edges.insert((0, 1));
-        let (ok, skipped) = m.bevel_selected(0.2);
-        assert_eq!(ok, 1);
-        assert_eq!(skipped, 0);
-        assert!(m.faces.len() > 6);
-    }
-
-    #[test]
-    fn bevel_clamp_overlap_option() {
-        let mut m_clamped = Mesh::cube(2.0);
-        m_clamped.selected_edges.insert((0, 1));
-        let (ok1, skip1) = m_clamped.bevel_selected_full(1.8, 1, true);
-        assert_eq!(ok1, 1);
-        assert_eq!(skip1, 0);
-
-        let mut m_unclamped = Mesh::cube(2.0);
-        m_unclamped.selected_edges.insert((0, 1));
-        let (ok2, skip2) = m_unclamped.bevel_selected_full(1.8, 1, false);
-        assert_eq!(ok2, 1);
-        assert_eq!(skip2, 0);
-
-        let pos_clamped = m_clamped.verts.last().unwrap().pos;
-        let pos_unclamped = m_unclamped.verts.last().unwrap().pos;
-        assert_ne!(pos_clamped, pos_unclamped);
-    }
-
-    #[test]
-    fn bevel_vertex_option() {
-        let mut m = Mesh::cube(2.0);
-        m.selected_edges.clear();
-        m.verts[0].selected = true;
-        let (ok, skip) = m.bevel_selected_full(0.3, 1, true);
-        assert_eq!(ok, 1);
-        assert_eq!(skip, 0);
-        let report = m.validate_topology();
-        assert!(report.is_manifold && report.is_closed);
-        assert_eq!((m.verts.len(), m.faces.len()), (10, 7));
-    }
-
-    #[test]
-    fn multi_edge_and_multi_vertex_bevel_batch() {
-        // 1. Multi-edge: seleciona 4 arestas paralelas verticais do cubo
-        let mut m_edges = Mesh::cube(2.0);
-        m_edges
-            .selected_edges
-            .extend([(0, 3), (1, 2), (4, 7), (5, 6)]);
-        let (ok_edges, skip_edges) = m_edges.bevel_selected_full(0.2, 1, true);
-        assert_eq!(ok_edges, 4);
-        assert_eq!(skip_edges, 0);
-        let rep_edges = m_edges.validate_topology();
-        assert!(rep_edges.is_manifold && rep_edges.is_closed);
-        assert_eq!((m_edges.verts.len(), m_edges.faces.len()), (16, 10));
-
-        // 2. Multi-vertex: seleciona todos os 8 cantos do cubo
-        let mut m_verts = Mesh::cube(2.0);
-        m_verts.selected_edges.clear();
-        for v in &mut m_verts.verts {
-            v.selected = true;
-        }
-        let (ok_verts, skip_verts) = m_verts.bevel_selected_full(0.2, 1, true);
-        assert_eq!(ok_verts, 8);
-        assert_eq!(skip_verts, 0);
-        let rep_verts = m_verts.validate_topology();
-        assert!(rep_verts.is_manifold && rep_verts.is_closed);
-        assert_eq!((m_verts.verts.len(), m_verts.faces.len()), (24, 14));
-    }
-
-    #[test]
-    fn extrude_keeps_uv_invariant() {
-        let mut m = Mesh::cube(2.0);
-        m.select_all();
-        m.extrude_selected(0.5);
-        assert!(m.faces.iter().all(|f| f.uv.len() == f.verts.len()));
-    }
-
-    /// C8: os três modos de extrusão — região (manifold), faces separadas e
-    /// cada face pela própria normal.
-    ///
-    /// Duas faces quadradas que compartilham a aresta 2–3.
-    fn two_adjacent_quads() -> Mesh {
-        let mut m = Mesh::default();
-        for corner in [
-            [0.0, 0.0, 0.0],
-            [1.0, 0.0, 0.0],
-            [1.0, 1.0, 0.0],
-            [0.0, 1.0, 0.0],
-            [1.0, 1.0, -1.0],
-            [1.0, 0.0, -1.0],
-        ] {
-            m.verts.push(Vertex::new(corner[0], corner[1], corner[2]));
-        }
-        let mut a = Face::new(vec![0, 1, 2, 3]);
-        a.selected = true;
-        let mut b = Face::new(vec![3, 2, 5, 4]);
-        b.selected = true;
-        m.faces.push(a);
-        m.faces.push(b);
-        m
-    }
-
-    #[test]
-    fn extrude_modes_differ_in_topology_and_direction() {
-        // Região: vértices compartilhados (malha fechada) e movimento comum.
-        let region = {
-            let mut m = two_adjacent_quads();
-            m.extrude_selected_with_mode(0.5, ExtrudeMode::Region);
-            // Só os vértices novos da região: 6 vértices únicos.
-            assert_eq!(m.verts.len(), 6 + 6, "região: vértices compartilhados");
-            // Nenhuma aresta com mais de duas faces: continua fechada.
-            let mut uses: std::collections::HashMap<(u32, u32), usize> =
-                std::collections::HashMap::new();
-            for face in &m.faces {
-                for k in 0..face.verts.len() {
-                    let a = face.verts[k];
-                    let b = face.verts[(k + 1) % face.verts.len()];
-                    let key = if a <= b { (a, b) } else { (b, a) };
-                    *uses.entry(key).or_default() += 1;
-                }
-            }
-            assert!(
-                uses.values().all(|count| *count <= 2),
-                "a região continua manifold"
-            );
-            m
-        };
-
-        // Individual: cada face duplica o topo (4 + 4 vértices).
-        let individual = {
-            let mut m = two_adjacent_quads();
-            m.extrude_selected_with_mode(0.5, ExtrudeMode::Individual);
-            assert_eq!(m.verts.len(), 6 + 8, "individual: topo de cada face");
-            m
-        };
-
-        // Direção: região e "individual" sobem pela normal da região;
-        // "along_normals" cada face segue a sua própria normal.
-        let top_of = |m: &Mesh, face: usize| -> Vec<[f32; 3]> {
-            m.faces[face]
-                .verts
-                .iter()
-                .map(|&vi| m.verts[vi as usize].pos)
-                .collect()
-        };
-        let region_top = top_of(&region, 0);
-        assert_eq!(
-            region_top,
-            top_of(&individual, 0),
-            "individual e região sobem na mesma direção"
-        );
-
-        let along = {
-            let mut m = two_adjacent_quads();
-            m.extrude_selected_with_mode(0.5, ExtrudeMode::AlongNormals);
-            m
-        };
-        assert_ne!(
-            region_top,
-            top_of(&along, 0),
-            "ao longo das normais cada face segue a sua própria normal"
-        );
-    }
-
-    #[test]
-    fn extrude_mode_ids_round_trip() {
-        for mode in [
-            ExtrudeMode::Region,
-            ExtrudeMode::Individual,
-            ExtrudeMode::AlongNormals,
-        ] {
-            assert_eq!(ExtrudeMode::from_id(mode.id()), Some(mode));
-        }
-        assert_eq!(ExtrudeMode::from_id("nope"), None);
-    }
-
-    #[test]
-    fn capsule_is_closedish() {
-        let m = Mesh::capsule(8, 0.5, 2.0);
-        assert!(m.vert_count() > 10 && !m.faces.is_empty());
-    }
-
-    /// Guarda de winding: normais das primitivas convexas apontam p/ fora.
-    /// (Viewers com culling escondem faces invertidas — bug crítico p/ export.)
-    #[test]
-    fn primitives_wind_outward() {
-        use glam::Vec3;
-        let prims: Vec<Mesh> = vec![
-            Mesh::cube(2.0),
-            Mesh::plane(2.0),
-            Mesh::cylinder(8, 1.0, 2.0),
-            Mesh::cone(8, 1.0, 2.0),
-            Mesh::sphere_low(10, 7, 1.2),
-            Mesh::capsule(8, 0.5, 2.0),
-            Mesh::revolve(&[[0.0, -1.0], [1.0, -1.0], [1.0, 1.0], [0.0, 1.0]], 10).unwrap(),
-        ];
-        for (pi, m) in prims.iter().enumerate() {
-            let mut center = Vec3::ZERO;
-            for v in &m.verts {
-                center += v.vec();
-            }
-            center /= m.verts.len().max(1) as f32;
-            for (fi, f) in m.faces.iter().enumerate() {
-                let n = m.face_normal(fi);
-                assert!(n.length() > 1e-6, "prim {pi} face {fi} degenerada");
-                let mut c = Vec3::ZERO;
-                for &vi in &f.verts {
-                    c += m.verts[vi as usize].vec();
-                }
-                c /= f.verts.len() as f32;
-                assert!(
-                    n.dot(c - center) > -1e-4,
-                    "prim {pi} face {fi} com normal para dentro"
-                );
-            }
-        }
-        // plano: convenção +Y (para cima)
-        let plane = Mesh::plane(2.0);
-        assert!(plane.face_normal(0).y > 0.99);
-    }
-
-    #[test]
-    fn obj_hostile_indices_dropped_no_panic() {
-        // M1: índices fora da malha são descartados, sem panic depois
-        let m = Mesh::from_obj("v 0 0 0\nf 999999 999998 999997\n");
-        assert!(m.faces.is_empty());
-        // render/export helpers não panicam com malha vazia
-        assert!(m.face_triangle_corners(0).is_empty());
-        assert_eq!(m.to_obj().matches("vt ").count(), 0);
-    }
-
-    #[test]
-    fn obj_nan_rejected() {
-        // M5: NaN/inf não entram na malha
-        let m = Mesh::from_obj("v nan nan nan\nv inf 0 0\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
-        assert!(m.verts.iter().all(|v| v.pos.iter().all(|x| x.is_finite())));
-        assert_eq!(m.faces.len(), 1);
     }
 
     #[test]
@@ -1049,199 +832,6 @@ mod tests {
     }
 
     #[test]
-    fn flip_normals_inverts_face_normal() {
-        let mut m = Mesh::plane(2.0);
-        let n_before = m.face_normal(0);
-        assert!(n_before.y > 0.9);
-        m.flip_normals();
-        let n_after = m.face_normal(0);
-        assert!(n_after.y < -0.9);
-    }
-
-    #[test]
-    fn recalculate_normals_unifies_inverted_cube() {
-        let mut m = Mesh::cube(2.0);
-        // Inverte propositalmente a face 0
-        m.faces[0].verts.reverse();
-        m.faces[0].uv.reverse();
-        m.recalculate_normals();
-        // Todas as normais devem apontar para fora do centro
-        for fi in 0..m.faces.len() {
-            let n = m.face_normal(fi);
-            let c = m.face_centroid(fi);
-            assert!(n.dot(c) > 0.0, "Face {} normal should point outward", fi);
-        }
-    }
-
-    #[test]
-    fn slice_plane_bisects_cube() {
-        use glam::Vec3;
-        let mut m = Mesh::cube(2.0);
-        // Corta o cubo no plano Y = 0
-        m.slice_plane(Vec3::ZERO, Vec3::Y, true);
-        assert_eq!(m.faces.len(), 6);
-        assert_eq!(m.verts.len(), 8);
-        assert!(m.verts.iter().all(|v| v.pos[1] >= 0.0));
-        let report = m.validate_topology();
-        assert!(report.is_manifold && report.is_closed, "{report:?}");
-    }
-
-    #[test]
-    fn join_and_fuse_approximate() {
-        let mut m1 = Mesh::cube(2.0);
-        let m2 = Mesh::cube(2.0);
-        let count1 = m1.verts.len();
-        m1.join(&m2);
-        assert_eq!(m1.verts.len(), count1 * 2);
-        assert_eq!(m1.faces.len(), 12);
-        // Funde vértices idênticos com eps
-        m1.weld(0.001);
-        assert_eq!(m1.verts.len(), count1);
-    }
-
-    #[test]
-    fn connect_loops_bridges_faces() {
-        let mut m1 = Mesh::plane(2.0);
-        let mut m2 = Mesh::plane(2.0);
-        m2.translate_selected([0.0, 3.0, 0.0]);
-        m1.join(&m2);
-        assert_eq!(m1.faces.len(), 2);
-        let res = m1.connect_loops(0, 1);
-        assert!(res.is_ok());
-        // Deve ter criado 4 quads laterais e removido as 2 faces das pontas
-        assert_eq!(m1.faces.len(), 4);
-    }
-
-    #[test]
-    fn connect_loops_with_segments_and_twist() {
-        let mut m1 = Mesh::plane(2.0);
-        let mut m2 = Mesh::plane(2.0);
-        m2.translate_selected([0.0, 3.0, 0.0]);
-        m1.join(&m2);
-        let res = m1.connect_loops_with_options(0, 1, 3, 1);
-        assert!(res.is_ok());
-        // Com 3 segmentos em torno de 4 arestas, deve gerar 4 * 3 = 12 faces
-        assert_eq!(m1.faces.len(), 12);
-    }
-
-    #[test]
-    fn dissolve_selected_edge_merges_faces() {
-        let mut m = Mesh::plane(2.0);
-        // Subdivide o plano para ter aresta interna
-        m.select_all();
-        m.subdivide_selected();
-        let faces_before = m.faces.len();
-        assert_eq!(faces_before, 4);
-        // Seleciona a primeira aresta interna compartilhada por 2 faces
-        let internal_edge = m
-            .edges_unique()
-            .into_iter()
-            .find(|&(a, b)| m.edge_faces(a, b).len() == 2);
-        assert!(internal_edge.is_some());
-        m.selected_edges.clear();
-        m.selected_edges.insert(internal_edge.unwrap());
-        m.dissolve_selected();
-        assert_eq!(m.faces.len(), faces_before - 1);
-    }
-
-    #[test]
-    fn dissolve_selected_faces_merges_faces() {
-        let mut m = Mesh::plane(2.0);
-        m.select_all();
-        m.subdivide_selected();
-        assert_eq!(m.faces.len(), 4);
-        // Seleciona duas faces adjacentes
-        m.deselect_all();
-        m.faces[0].selected = true;
-        m.faces[1].selected = true;
-        m.dissolve_selected();
-        // As duas faces devem se fundir em 1, restando 3 faces no plano
-        assert_eq!(m.faces.len(), 3);
-    }
-
-    #[test]
-    fn dissolve_selected_vertex_merges_fan() {
-        let mut m = Mesh::plane(2.0);
-        m.select_all();
-        m.subdivide_selected();
-        assert_eq!(m.faces.len(), 4);
-        // O vértice central tem índice 8 (ou valência 4)
-        let center_vert = (0..m.verts.len()).find(|&v| {
-            m.faces
-                .iter()
-                .filter(|f| f.verts.contains(&(v as u32)))
-                .count()
-                == 4
-        });
-        assert!(center_vert.is_some());
-        m.deselect_all();
-        m.verts[center_vert.unwrap()].selected = true;
-        m.dissolve_selected();
-        // Dissolver o vértice central deve fundir as 4 faces em 1 polígono
-        assert_eq!(m.faces.len(), 1);
-    }
-
-    #[test]
-    fn from_polygon_creates_quads_not_triangles() {
-        let square = [[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]];
-        let m = Mesh::from_polygon(&square, 2.0).expect("from_polygon");
-        // Uma caixa extrudada de 4 pontos deve ter exatamente 6 faces
-        assert_eq!(m.faces.len(), 6, "uma caixa de 4 pontos deve ter 6 faces");
-        // Todas as 6 faces (topo, base e 4 laterais) devem ser QUADS
-        for (i, f) in m.faces.iter().enumerate() {
-            assert_eq!(
-                f.verts.len(),
-                4,
-                "face {i} deve ser um quad (4 vértices), mas tem {}",
-                f.verts.len()
-            );
-        }
-    }
-
-    #[test]
-    fn delete_selected_face_keeps_adjacent_segment_intact() {
-        let square = [[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]];
-        let mut m = Mesh::from_polygon(&square, 2.0).expect("from_polygon");
-        assert_eq!(m.faces.len(), 6);
-
-        // Seleciona a face do topo
-        m.faces[1].selected = true;
-        m.sync_vert_selection_from_faces();
-
-        // Deleta a face selecionada
-        m.delete_selected();
-
-        // Apenas a face selecionada deve sumir; as 5 faces restantes devem continuar intactas
-        assert_eq!(
-            m.faces.len(),
-            5,
-            "apenas 1 face deve ser excluída, restando 5"
-        );
-        for f in &m.faces {
-            assert_eq!(f.verts.len(), 4, "as faces restantes continuam sendo quads");
-        }
-    }
-
-    #[test]
-    fn dissolve_single_face_does_not_destroy_neighbor_faces() {
-        let square = [[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]];
-        let mut m = Mesh::from_polygon(&square, 2.0).expect("from_polygon");
-        assert_eq!(m.faces.len(), 6);
-
-        // Seleciona apenas 1 face e simula sincronização de vértices
-        m.faces[0].selected = true;
-        m.sync_vert_selection_from_faces();
-
-        // dissolve_selected em 1 face isolada não deve fundir com nada nem dissolver os vértices
-        m.dissolve_selected();
-        assert_eq!(
-            m.faces.len(),
-            6,
-            "dissolver 1 única face isolada não deve deletar nem destruir faces vizinhas"
-        );
-    }
-
-    #[test]
     fn typed_indices_and_edge_key_invariants() {
         let v_idx = VertexIndex::from(42u32);
         assert_eq!(v_idx.0, 42);
@@ -1261,21 +851,8 @@ mod tests {
     }
 
     #[test]
-    fn decoupled_vertex_transforms_do_not_rely_on_selection_flags() {
-        let mut m = Mesh::cube(2.0);
-        // Nenhum vértice selecionado
-        assert!(m.verts.iter().all(|v| !v.selected));
-
-        let orig = m.verts[0].pos;
-        m.translate_vertices(&[0], [1.0, 2.0, 3.0]);
-        assert_eq!(
-            m.verts[0].pos,
-            [orig[0] + 1.0, orig[1] + 2.0, orig[2] + 3.0]
-        );
-        // Vértice 1 não foi modificado
-        assert_ne!(m.verts[1].pos[0], orig[0] + 1.0);
-
-        let center = m.vertices_center(&[0]);
-        assert_eq!(center, m.verts[0].pos);
+    fn a_cube_keeps_unselected_vertices() {
+        let mesh = Mesh::cube(2.0);
+        assert!(mesh.verts.iter().all(|vertex| !vertex.selected));
     }
 }

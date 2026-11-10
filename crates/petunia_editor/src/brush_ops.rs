@@ -13,8 +13,8 @@
 //! single undo restores everything.
 
 use petunia_commands::CommandRecord;
-use petunia_math::Vec3;
-use petunia_render::Shape;
+use petunia_math::{Color, Vec3};
+use petunia_render::{OverlayItem, Shape};
 use serde_json::{Value as Json, json};
 
 use crate::failure::Failure;
@@ -24,6 +24,11 @@ use crate::tools::Pointer;
 
 /// Thinnest a brush may get when pushing or pulling a face, in meters.
 const MINIMUM_THICKNESS: f32 = 0.05;
+/// Corner and edge handles of a selected box. Amber, so they stay distinct from collider squares.
+const BOX_HANDLE_COLOR: Color = Color::new(0.93, 0.55, 0.12, 1.0);
+const BOX_CORNER_PIXELS: f32 = 11.0;
+const BOX_EDGE_PIXELS: f32 = 7.0;
+const BOX_HANDLE_HIT_PIXELS: f32 = 12.0;
 
 /// Most items one arrangement may create, counting the original.
 const MAXIMUM_ARRANGE_COUNT: usize = 64;
@@ -183,6 +188,26 @@ pub struct FaceDrag {
     previous_selection: Option<u64>,
     has_dragged: bool,
     grown: f32,
+}
+
+/// One corner or edge of a box. A sign of `0` is the axis the edge runs along and does not resize.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BoxHandle {
+    pub entity: u64,
+    pub signs: [i8; 3],
+    pub center: Vec3,
+}
+
+/// A corner or edge drag. The opposite corner or edge stays put.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BoxDrag {
+    entity: u64,
+    signs: [i8; 3],
+    start_size: Vec3,
+    start_position: Vec3,
+    rotation_degrees: Vec3,
+    scale: Vec3,
+    start_point: Vec3,
 }
 
 pub(crate) fn component(vector: Vec3, index: usize) -> f32 {
@@ -511,6 +536,157 @@ impl EditorSession {
             self.selection = drag.previous_selection;
             return Ok(Json::Null);
         }
+        self.gesture_cancel()
+    }
+
+    /// Corner and edge handles of the selected box. Face centers stay on Push/Pull (`P`).
+    /// Cylinders, stairs and meshes have none. Hidden on tools that have no transform gizmo.
+    pub(crate) fn box_handles(&self) -> Vec<BoxHandle> {
+        if !self.tool.has_gizmo() {
+            return Vec::new();
+        }
+        let Some(entity) = self.selection else {
+            return Vec::new();
+        };
+        let Some(item) = self.item_of(entity) else {
+            return Vec::new();
+        };
+        if item.shape != Shape::Box {
+            return Vec::new();
+        }
+        let rotation = gizmo::rotation_from_euler(item.transform.rotation_degrees);
+        let half = Vec3::new(
+            item.size.x * item.transform.scale.x * 0.5,
+            item.size.y * item.transform.scale.y * 0.5,
+            item.size.z * item.transform.scale.z * 0.5,
+        );
+        let mut handles = Vec::with_capacity(20);
+        for x in [-1_i8, 0, 1] {
+            for y in [-1_i8, 0, 1] {
+                for z in [-1_i8, 0, 1] {
+                    let zeros = i8::from(x == 0) + i8::from(y == 0) + i8::from(z == 0);
+                    // 0 zeros: corner. 1 zero: edge. 2 zeros: face center (Push/Pull). 3: the pivot.
+                    if zeros != 0 && zeros != 1 {
+                        continue;
+                    }
+                    let signs = [x, y, z];
+                    let local = Vec3::new(
+                        signs[0] as f32 * half.x,
+                        signs[1] as f32 * half.y,
+                        signs[2] as f32 * half.z,
+                    );
+                    handles.push(BoxHandle {
+                        entity,
+                        signs,
+                        center: item.transform.position + gizmo::rotate_vector(&rotation, local),
+                    });
+                }
+            }
+        }
+        handles
+    }
+
+    pub(crate) fn box_handle_under(&self, pointer: Pointer) -> Option<BoxHandle> {
+        let view = self.view_for(pointer);
+        if !view.is_valid() {
+            return None;
+        }
+        let mouse = pointer.mouse();
+        self.box_handles()
+            .into_iter()
+            .filter_map(|handle| {
+                let screen = view.project(handle.center)?;
+                let gap = ((screen[0] - mouse[0]).powi(2) + (screen[1] - mouse[1]).powi(2)).sqrt();
+                (gap <= BOX_HANDLE_HIT_PIXELS).then_some((handle, gap))
+            })
+            .min_by(|(_, left), (_, right)| left.total_cmp(right))
+            .map(|(handle, _)| handle)
+    }
+
+    pub(crate) fn box_handle_overlay(&self, out: &mut Vec<OverlayItem>) {
+        for handle in self.box_handles() {
+            let corner = handle.signs.iter().all(|sign| *sign != 0);
+            out.push(OverlayItem::Square {
+                center: handle.center,
+                color: BOX_HANDLE_COLOR,
+                size_pixels: if corner {
+                    BOX_CORNER_PIXELS
+                } else {
+                    BOX_EDGE_PIXELS
+                },
+            });
+        }
+    }
+
+    /// `brush.handle_begin`: a corner or an edge under the pointer starts a resize.
+    pub fn box_handle_begin(&mut self, pointer: Pointer) -> Result<Json, Failure> {
+        let Some(handle) = self.box_handle_under(pointer) else {
+            return Ok(json!({ "started": false }));
+        };
+        let Some((position, rotation, scale, size, _)) = self.box_parts(handle.entity) else {
+            return Ok(json!({ "started": false }));
+        };
+        self.box_drag = Some(BoxDrag {
+            entity: handle.entity,
+            signs: handle.signs,
+            start_size: size,
+            start_position: position,
+            rotation_degrees: rotation,
+            scale,
+            start_point: handle.center,
+        });
+        self.hud = Some(String::new());
+        Ok(json!({ "started": true, "entity": handle.entity }))
+    }
+
+    /// `brush.handle_drag`: the grabbed corner or edge follows the pointer on the view plane.
+    /// Axes marked `0` in the handle stay put, and so does the opposite corner or edge.
+    pub fn box_handle_drag(
+        &mut self,
+        pointer: Pointer,
+        invert_snap: bool,
+    ) -> Result<Json, Failure> {
+        let Some(drag) = self.box_drag else {
+            return Ok(Json::Null);
+        };
+        let view = self.view_for(pointer);
+        let Some(ray) = view.ray(pointer.mouse()) else {
+            return Ok(Json::Null);
+        };
+        let Some(hit) = plane_hit(&ray, drag.start_point, view.camera.forward()) else {
+            return Ok(Json::Null);
+        };
+        let rotation = gizmo::rotation_from_euler(drag.rotation_degrees);
+        let local_delta = gizmo::inverse_rotate(&rotation, hit - drag.start_point);
+        let snap = (self.snap.enabled != invert_snap && self.snap.translate > 0.0)
+            .then_some(self.snap.translate);
+        let (position, size) = resized_box(
+            drag.start_position,
+            drag.rotation_degrees,
+            drag.scale,
+            drag.start_size,
+            drag.signs,
+            local_delta,
+            snap,
+        );
+        self.gesture_preview(drag.entity, "Brush", "size", &vector_json(size))?;
+        self.gesture_preview(drag.entity, "Transform", "position", &vector_json(position))?;
+        let summary = format!("{:.2} × {:.2} × {:.2} m", size.x, size.y, size.z).replace('.', ",");
+        self.hud = Some(summary.clone());
+        Ok(json!({ "summary": summary }))
+    }
+
+    /// `brush.handle_end`: one undo step for the size and the position together.
+    pub fn box_handle_end(&mut self) -> Result<Json, Failure> {
+        self.box_drag = None;
+        self.hud = None;
+        self.gesture_commit()
+    }
+
+    /// `brush.handle_cancel`: the box returns to the size and position from before the drag.
+    pub fn box_handle_cancel(&mut self) -> Result<Json, Failure> {
+        self.box_drag = None;
+        self.hud = None;
         self.gesture_cancel()
     }
 
@@ -933,6 +1109,143 @@ impl EditorSession {
         let (low, high) = crate::tools::item_bounds(&item)?;
         Some(Aabb { low, high })
     }
+
+    /// `brush.paint_face`: one colour on one face of a box. A face without a row keeps the box colour.
+    /// `face` is 0..5 (+X, -X, +Y, -Y, +Z, -Z). With a pointer, the face under the mouse is used.
+    pub(crate) fn paint_face(
+        &mut self,
+        under: Option<Pointer>,
+        request: &Json,
+    ) -> Result<Json, Failure> {
+        let (entity, face) = if let Some(pointer) = under {
+            let hit = self.face_under(pointer).ok_or_else(|| {
+                Failure::new(
+                    "EDITOR_PAINT_NO_FACE",
+                    "não há uma face de caixa sob o mouse",
+                    "Aponte para uma face da caixa e use Operações > Pintar face… de novo.",
+                )
+            })?;
+            let index = box_face_index(hit.axis, hit.sign)
+                .ok_or_else(|| Failure::bad_request("essa face não é um lado de caixa"))?;
+            (hit.entity, index)
+        } else {
+            let entity = match request.get("entity").and_then(Json::as_u64) {
+                Some(entity) => entity,
+                None => self.selection.ok_or_else(no_selection)?,
+            };
+            let face = request
+                .get("face")
+                .and_then(Json::as_u64)
+                .ok_or_else(|| Failure::bad_request("`face` precisa ser um inteiro de 0 a 5"))?;
+            if face > 5 {
+                return Err(Failure::bad_request(
+                    "`face` precisa ser um inteiro de 0 a 5",
+                ));
+            }
+            (entity, face as usize)
+        };
+        let item = self
+            .item_of(entity)
+            .ok_or_else(|| Failure::bad_request("esse objeto não está na cena"))?;
+        if item.shape != Shape::Box {
+            return Err(Failure::new(
+                "EDITOR_PAINT_NEEDS_BOX",
+                "pintar face vale para caixas",
+                "Cilindros, escadas e malhas gravadas ficam com a cor do objeto.",
+            ));
+        }
+        let color = paint_color(request.get("color"))?;
+        let existing = {
+            let world = self.world()?;
+            painted_face_row(world, entity, face)
+        };
+        let color_entity = if let Some(row) = existing {
+            self.execute(&CommandRecord::new(
+                "world.set",
+                json!({
+                    "entity": row,
+                    "table": "FaceColor",
+                    "column": "color",
+                    "value": color,
+                }),
+            ))?;
+            row
+        } else {
+            let owner = i64::try_from(entity)
+                .map_err(|_| Failure::bad_request("o id do objeto não cabe numa linha de cor"))?;
+            let created = self.execute(&CommandRecord::new(
+                "world.create",
+                json!({
+                    "rows": {
+                        "FaceColor": { "owner": owner, "face": face, "color": color }
+                    }
+                }),
+            ))?;
+            created
+                .get("entity")
+                .and_then(Json::as_u64)
+                .ok_or_else(|| Failure::bad_request("a linha de cor não devolveu um id"))?
+        };
+        Ok(json!({ "entity": entity, "face": face, "color_entity": color_entity }))
+    }
+}
+
+pub(crate) fn box_face_index(axis: usize, sign: f32) -> Option<usize> {
+    if axis > 2 || !sign.is_finite() || sign == 0.0 {
+        return None;
+    }
+    let side = if sign > 0.0 { 0 } else { 1 };
+    Some(axis * 2 + side)
+}
+
+fn paint_color(color: Option<&Json>) -> Result<Json, Failure> {
+    let Some(color) = color else {
+        return Err(Failure::bad_request("falta `color` com r, g e b"));
+    };
+    let component = |name: &str| -> Result<f64, Failure> {
+        let value = color
+            .get(name)
+            .and_then(Json::as_f64)
+            .ok_or_else(|| Failure::bad_request("a cor precisa de r, g e b finitos"))?;
+        if !value.is_finite() {
+            return Err(Failure::bad_request("a cor precisa de r, g e b finitos"));
+        }
+        Ok(value)
+    };
+    let red = component("r")?;
+    let green = component("g")?;
+    let blue = component("b")?;
+    let alpha = match color.get("a") {
+        Some(value) => {
+            let alpha = value
+                .as_f64()
+                .ok_or_else(|| Failure::bad_request("`a` precisa ser um número finito"))?;
+            if !alpha.is_finite() {
+                return Err(Failure::bad_request("`a` precisa ser um número finito"));
+            }
+            alpha
+        }
+        None => 1.0,
+    };
+    Ok(json!({ "r": red, "g": green, "b": blue, "a": alpha }))
+}
+
+fn painted_face_row(world: &petunia_world::World, owner: u64, face: usize) -> Option<u64> {
+    let owner = i64::try_from(owner).ok()?;
+    let face = face as i64;
+    for handle in world.entities_with_table("FaceColor").unwrap_or_default() {
+        let Ok(petunia_world::Value::Int(row_owner)) = world.get(handle, "FaceColor", "owner")
+        else {
+            continue;
+        };
+        let Ok(petunia_world::Value::Int(row_face)) = world.get(handle, "FaceColor", "face") else {
+            continue;
+        };
+        if *row_owner == owner && *row_face == face {
+            return world.persistent_id(handle).ok().map(|id| id.0);
+        }
+    }
+    None
 }
 
 fn no_selection() -> Failure {
@@ -941,6 +1254,65 @@ fn no_selection() -> Failure {
         "nenhuma entidade está selecionada",
         "Clique em um objeto no viewport ou escolha um item na Hierarquia.",
     )
+}
+
+/// Resizes `start_size` from one corner or edge. `signs` is `-1`, `0` or `1` per axis: `0` is not
+/// resized. The opposite point stays fixed. `local_delta` is meters along the box axes.
+pub(crate) fn resized_box(
+    start_position: Vec3,
+    rotation_degrees: Vec3,
+    scale: Vec3,
+    start_size: Vec3,
+    signs: [i8; 3],
+    local_delta: Vec3,
+    snap: Option<f32>,
+) -> (Vec3, Vec3) {
+    let [sign_x, sign_y, sign_z] = signs;
+    let (shift_x, size_x) = resize_axis(sign_x, start_size.x, scale.x, local_delta.x, snap);
+    let (shift_y, size_y) = resize_axis(sign_y, start_size.y, scale.y, local_delta.y, snap);
+    let (shift_z, size_z) = resize_axis(sign_z, start_size.z, scale.z, local_delta.z, snap);
+    let rotation = gizmo::rotation_from_euler(rotation_degrees);
+    (
+        start_position + gizmo::rotate_vector(&rotation, Vec3::new(shift_x, shift_y, shift_z)),
+        Vec3::new(size_x, size_y, size_z),
+    )
+}
+
+/// One axis of [`resized_box`]: `(center shift in scaled-local meters, new size)`.
+fn resize_axis(sign: i8, start_size: f32, scale: f32, delta: f32, snap: Option<f32>) -> (f32, f32) {
+    if sign == 0 {
+        return (0.0, start_size);
+    }
+    let moving_start = sign as f32 * start_size * scale * 0.5;
+    let fixed = -moving_start;
+    let desired = moving_start + delta;
+    let direction = if moving_start.abs() > 1.0e-8 {
+        moving_start.signum()
+    } else {
+        sign as f32
+    };
+    let mut extent = (desired - fixed) * direction;
+    if extent < MINIMUM_THICKNESS {
+        extent = MINIMUM_THICKNESS;
+    }
+    if let Some(step) = snap.filter(|step| *step > 0.0) {
+        extent = (extent / step).round() * step;
+        if extent < MINIMUM_THICKNESS {
+            extent = step.max(MINIMUM_THICKNESS);
+        }
+    }
+    let moving = fixed + direction * extent;
+    let scale_abs = scale.abs().max(1.0e-4);
+    ((fixed + moving) * 0.5, extent / scale_abs)
+}
+
+fn plane_hit(ray: &petunia_render::Ray, origin: Vec3, normal: Vec3) -> Option<Vec3> {
+    let facing = ray.direction.dot(normal);
+    if facing.abs() < 1.0e-3 {
+        return None;
+    }
+    let distance = (origin - ray.origin).dot(normal) / facing;
+    (distance > 0.0).then(|| ray.origin + ray.direction * distance)
 }
 
 /// Parameter of the point on `origin + direction * t` closest to the mouse ray.
@@ -967,6 +1339,62 @@ mod tests {
             low: Vec3::splat(low),
             high: Vec3::splat(high),
         }
+    }
+
+    #[test]
+    fn painting_a_box_face_draws_that_side_and_one_undo_restores_the_colour() {
+        let (mut session, _root) = opened("paint_face");
+        let entity = brush_at(&mut session, "box", Vec3::new(30.0, 1.0, 30.0));
+        session.select(Some(entity)).expect("select");
+        let painted = session.handle(&json!({
+            "op": "brush.paint_face",
+            "face": 0,
+            "color": { "r": 0.8, "g": 0.1, "b": 0.1, "a": 1.0 }
+        }));
+        assert_eq!(painted["ok"], true, "{painted}");
+        let shell = session
+            .draw_items()
+            .into_iter()
+            .find(|item| item.entity == entity && item.shape == Shape::Mesh)
+            .expect("painted face");
+        assert!((shell.color.r - 0.8).abs() < 1.0e-4);
+        let solid = petunia_render::solid_shapes(session.world().expect("world"));
+        assert!(solid.get(&entity).is_some_and(|shape| shape.is_box));
+        let again = session.handle(&json!({
+            "op": "brush.paint_face",
+            "face": 0,
+            "color": { "r": 0.1, "g": 0.2, "b": 0.9, "a": 1.0 }
+        }));
+        assert_eq!(again["ok"], true, "{again}");
+        let rows = session
+            .world()
+            .expect("world")
+            .entities_with_table("FaceColor")
+            .expect("table")
+            .len();
+        assert_eq!(rows, 1, "a second stroke replaces the colour");
+        session.undo().expect("undo colour");
+        let restored = session
+            .draw_items()
+            .into_iter()
+            .find(|item| item.entity == entity && item.shape == Shape::Mesh)
+            .expect("first colour");
+        assert!((restored.color.r - 0.8).abs() < 1.0e-4);
+        session.undo().expect("undo paint");
+        assert!(
+            session
+                .draw_items()
+                .iter()
+                .all(|item| item.entity != entity || item.shape == Shape::Box)
+        );
+        let cylinder = brush_at(&mut session, "cylinder", Vec3::new(34.0, 1.0, 30.0));
+        session.select(Some(cylinder)).expect("select cylinder");
+        let refused = session.handle(&json!({
+            "op": "brush.paint_face",
+            "face": 0,
+            "color": { "r": 1.0, "g": 0.0, "b": 0.0, "a": 1.0 }
+        }));
+        assert_eq!(refused["ok"], false, "{refused}");
     }
 
     #[test]
@@ -1378,6 +1806,169 @@ mod tests {
         }));
         assert_eq!(refused["ok"], false);
         assert_eq!(refused["error"]["code"], "EDITOR_MIRROR_NEEDS_BOX");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn resized_box_grows_from_the_opposite_side() {
+        let start = Vec3::new(2.0, 2.0, 2.0);
+        let (position, size) = resized_box(
+            Vec3::ZERO,
+            Vec3::ZERO,
+            Vec3::ONE,
+            start,
+            [1, 1, 1],
+            Vec3::new(1.0, 0.0, 0.0),
+            None,
+        );
+        assert!((size.x - 3.0).abs() < 1.0e-4, "{size:?}");
+        assert!((size.y - 2.0).abs() < 1.0e-4 && (size.z - 2.0).abs() < 1.0e-4);
+        assert!((position.x - 0.5).abs() < 1.0e-4, "{position:?}");
+        assert!(position.y.abs() < 1.0e-4 && position.z.abs() < 1.0e-4);
+
+        let (_, edge) = resized_box(
+            Vec3::ZERO,
+            Vec3::ZERO,
+            Vec3::ONE,
+            start,
+            [1, 0, 1],
+            Vec3::new(1.0, 5.0, 0.0),
+            None,
+        );
+        assert!((edge.x - 3.0).abs() < 1.0e-4, "{edge:?}");
+        assert!(
+            (edge.y - 2.0).abs() < 1.0e-4,
+            "the axis the edge runs along stays"
+        );
+        assert!((edge.z - 2.0).abs() < 1.0e-4);
+
+        let (turned, _) = resized_box(
+            Vec3::ZERO,
+            Vec3::new(0.0, 90.0, 0.0),
+            Vec3::ONE,
+            start,
+            [1, 1, 1],
+            Vec3::new(1.0, 0.0, 0.0),
+            None,
+        );
+        let rotation = gizmo::rotation_from_euler(Vec3::new(0.0, 90.0, 0.0));
+        let expected = gizmo::rotate_vector(&rotation, Vec3::new(0.5, 0.0, 0.0));
+        assert!(
+            (turned - expected).length() < 1.0e-4,
+            "{turned:?} {expected:?}"
+        );
+    }
+
+    fn screen_of(session: &EditorSession, point: Vec3) -> [f32; 2] {
+        let view = gizmo::View {
+            camera: session.camera.camera,
+            width: 1200.0,
+            height: 800.0,
+        };
+        view.project(point).expect("handle on screen")
+    }
+
+    #[test]
+    fn a_box_corner_resizes_and_undoes_in_one_step() {
+        let (mut session, root) = opened("box_handles");
+        let cylinder = brush_at(&mut session, "cylinder", Vec3::new(10.0, 1.0, 10.0));
+        session.select(Some(cylinder)).expect("select");
+        assert!(
+            session.box_handles().is_empty(),
+            "only boxes have corner and edge handles"
+        );
+
+        let entity = brush_at(&mut session, "box", Vec3::new(40.0, 1.0, 40.0));
+        session.select(Some(entity)).expect("select");
+        session.snap.enabled = false;
+        let looked = session.handle(&json!({ "op": "camera.view", "name": "front" }));
+        assert_eq!(looked["ok"], true, "{looked}");
+        let handles = session.box_handles();
+        assert_eq!(handles.len(), 20, "8 corners and 12 edges");
+        let mut squares = Vec::new();
+        session.box_handle_overlay(&mut squares);
+        assert_eq!(squares.len(), 20);
+        let corner = handles
+            .iter()
+            .find(|handle| handle.signs == [1, 1, 1])
+            .copied()
+            .expect("+X +Y +Z corner");
+        let before = session.item_of(entity).expect("box");
+        let start = screen_of(&session, corner.center);
+        let begun = session.handle(&json!({
+            "op": "brush.handle_begin",
+            "x": start[0], "y": start[1], "width": 1200.0, "height": 800.0,
+        }));
+        assert_eq!(begun["ok"], true, "{begun}");
+        assert_eq!(begun["result"]["started"], true);
+        let target = screen_of(&session, corner.center + Vec3::new(1.0, 0.0, 0.0));
+        let dragged = session.handle(&json!({
+            "op": "brush.handle_drag",
+            "x": target[0], "y": target[1], "width": 1200.0, "height": 800.0,
+        }));
+        assert_eq!(dragged["ok"], true, "{dragged}");
+        let ended = session.handle(&json!({ "op": "brush.handle_end" }));
+        assert_eq!(ended["ok"], true, "{ended}");
+        let after = session.item_of(entity).expect("resized");
+        assert!(
+            (after.size.x - (before.size.x + 1.0)).abs() < 1.0e-3,
+            "size {} -> {}",
+            before.size.x,
+            after.size.x
+        );
+        assert!((after.size.y - before.size.y).abs() < 1.0e-3);
+        assert!((after.size.z - before.size.z).abs() < 1.0e-3);
+        assert!(
+            (after.transform.position.x - (before.transform.position.x + 0.5)).abs() < 1.0e-3,
+            "the opposite side stays: {:?}",
+            after.transform.position
+        );
+        session.undo().expect("undo");
+        let restored = session.item_of(entity).expect("restored");
+        assert!((restored.size.x - before.size.x).abs() < 1.0e-3);
+        assert!((restored.transform.position.x - before.transform.position.x).abs() < 1.0e-3);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn cancelling_a_box_handle_restores_the_box() {
+        let (mut session, root) = opened("box_handle_cancel");
+        let entity = brush_at(&mut session, "box", Vec3::new(40.0, 1.0, 40.0));
+        session.select(Some(entity)).expect("select");
+        session.snap.enabled = false;
+        let _ = session.handle(&json!({ "op": "camera.view", "name": "front" }));
+        let corner = session
+            .box_handles()
+            .into_iter()
+            .find(|handle| handle.signs == [1, 0, 1])
+            .expect("edge");
+        let before = session.item_of(entity).expect("box");
+        let depth = session.dispatcher.undo_depth().0;
+        let start = screen_of(&session, corner.center);
+        let begun = session.box_handle_begin(Pointer {
+            x: start[0],
+            y: start[1],
+            width: 1200.0,
+            height: 800.0,
+        });
+        assert_eq!(begun.expect("begin")["started"], true);
+        let target = screen_of(&session, corner.center + Vec3::new(1.0, 0.0, 0.0));
+        session
+            .box_handle_drag(
+                Pointer {
+                    x: target[0],
+                    y: target[1],
+                    width: 1200.0,
+                    height: 800.0,
+                },
+                false,
+            )
+            .expect("drag");
+        session.box_handle_cancel().expect("cancel");
+        let after = session.item_of(entity).expect("box");
+        assert!((after.size.x - before.size.x).abs() < 1.0e-3);
+        assert!((after.transform.position.x - before.transform.position.x).abs() < 1.0e-3);
+        assert_eq!(session.dispatcher.undo_depth().0, depth);
         let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -384,7 +384,7 @@ Pool e fade (herdados, `LOCAL`) valem em todas.
 
 **Nível 1 (decidido e feito em 2026-10-24):** **brushes paramétricos** (caixa, rampa, cilindro, cone, esfera, escada) com gizmo de mover, girar e escalar, snap à grade e desfazer por gesto.
 
-**Nível 2 (feito em 2026-11-08):** empurrar/puxar, extrudar, cavar, tornar oco, **cortar com plano**, **arranjo em linha e em círculo** e **espelhar** existem. Falta só redimensionar pelas alças da caixa (cantos e arestas). As quatro operações novas são comandos de dados (`brush.cut_plane`, `brush.arrange_line`, `brush.arrange_circle`, `brush.mirror`), cada uma **um** `world.batch`; aceitam **caixas** (cilindros, escadas e malhas ficam para depois) e estão em **Operações** com `Ctrl+Alt+P`, `Ctrl+Alt+L`, `Ctrl+Alt+O` e `Ctrl+Alt+M`. Verificado na janela (display virtual) e na cena salva; detalhes em [edição de brushes](../02-arquitetura/13-primitivas-e-edicao-de-malha.md#nível-2-edição-de-brushes-feito-em-2026-11-08).
+**Nível 2 (feito):** empurrar/puxar, extrudar, cavar, tornar oco, **cortar com plano**, **arranjo em linha e em círculo**, **espelhar** e **alças de canto e aresta** (`brush.handle_*`, 2026-11-09). As quatro operações de diálogo são comandos de dados, cada uma **um** `world.batch`; aceitam **caixas** e estão em **Operações** com `Ctrl+Alt+P`, `Ctrl+Alt+L`, `Ctrl+Alt+O` e `Ctrl+Alt+M`. As alças aparecem na caixa selecionada (o gizmo ganha o clique) e também fecham em um desfazer. Detalhes em [edição de brushes](../02-arquitetura/13-primitivas-e-edicao-de-malha.md#nível-2-edição-de-brushes-feito-em-2026-11-08).
 
 **Nível 3 (decidido por você em 2026-10-25).** Pedido: "falta você trazer do petunia3d operações booleanas, inset, loopcut e etc…". Respostas à pergunta de modelo de dados:
 
@@ -1191,6 +1191,38 @@ a prévia de `loop_cut`.
 **Não verificado:** a animação correndo na janela (o relógio do modo Jogar é o mesmo do passo de física, mas nenhuma captura mostra dois quadros diferentes no tempo) e a sessão real.
 
 **Reabrir se:** o jogo precisar escolher a animação por estado (entra uma tabela de estados + transições) ou de quadros de tamanho diferente do retângulo da folha (entra `frame_size` em pixels).
+
+---
+
+## DR-51 — Só blocagem e booleano · ACEITA (2026-11-09)
+
+**Pedido:** a edição total de malha não estava ficando boa. Seguir só com blocagem e operação booleana, e apagar a edição de malha completa.
+
+**Decisão:** saem o modo de edição (`Tab`), a escolha de vértice/aresta/face, inset, extrudar de malha, loop cut, bevel, faca, subdividir, dissolver, fundir vértices e a barra **Malha** desses comandos. Ficam os brushes (empurrar, extrudar face, cavar, oco, plano, arranjo, espelho, alças de canto e aresta) e `mesh.boolean` (união, corte, interseção, com rotação e escala). Um brush vira malha gravada quando o booleano precisa; `mesh.convert` continua para pele e script, sem botão. `mesh.info` continua para o inspetor. Malha importada de GLB continua sendo desenhada; não se edita vértice a vértice.
+
+**Reabrir se:** um mapa precisar de um corte que o booleano e a blocagem não fazem.
+
+---
+
+## DR-52 — Cor por face na caixa · ACEITA (2026-11-09)
+
+**Pedido:** continuar a implementação depois de ficar só com blocagem e booleano. A base do mapa já pedia material por face; a tabela `FaceColor` existia e nada desenhava.
+
+**Decisão:** `brush.paint_face` grava uma cor numa face de caixa (0 a 5, na ordem +X, −X, +Y, −Y, +Z, −Z), ou na face sob o mouse. A face sem linha usa a cor da caixa. O desenho é um quadrado 2 mm para fora dessa face, porque o sombreador tem uma cor por objeto; a caixa continua sendo o sólido. Uma segunda pintura da mesma face troca a cor. Menu **Operações > Pintar face…**.
+
+**Reabrir se:** a cor precisar valer em cilindro, escada ou malha gravada, ou o quadrado de 2 mm piscar na face.
+
+---
+
+## DR-53 — Mapas, materiais e interface · ACEITA como plano (2026-11-09)
+
+**Pedido:** treze frentes, de seleção de componente até boas-vindas e UI de jogo, com um documento antes do código.
+
+**Decisão:** o corte e a ordem estão em [plano de mapas, materiais e interface](../05-roadmap/04-plano-mapas-materiais-e-interface.md). Em resumo: a seleção de face, aresta e vértice volta **sem modo novo**; o loop cut volta só na malha gravada; mover, girar e escalar agem no componente; o booleano existente passa a deixar vão andável. Materiais são cinco tipos de dado (`flat`, `standard`, `masked`, `blended`, `post`), sem grafo de nós e sem biblioteca nova. Clima vira entidade e vários se misturam. Skybox é camada com rolagem no relógio do jogo. Rio e estrada ganham junção, alça de largura e material. O 2D ganha plano de rolagem infinita com alfa. Escada ganha pisada e espelho; entram espiral, parede com vãos e arco. O código mostra quem usa o script, insere o exemplo da API e o id da entidade no cursor, e os quadros por segundo do jogo ficam no projeto. A boas-vindas lista projetos recentes e reserva o lugar do PIX e do Ko-fi, sem pagamento. A UI de jogo fica em conversa.
+
+O DR-51 continua valendo para faca, inset, bevel, dissolver, fundir vértices e para o modo `Tab`.
+
+**Reabrir se:** um mapa precisar de pintura em UV, ou a UI de jogo fechar as três perguntas da seção 13 do plano.
 
 ---
 

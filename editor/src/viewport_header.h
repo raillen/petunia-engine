@@ -12,7 +12,6 @@ class QFrame;
 class QMenu;
 class QPushButton;
 class QToolButton;
-enum class ComponentMode;
 
 // Strip above the viewport, the "tool settings" of the scene (Unity and Blender put them here):
 // axes (Global/Local), pivot, edit pivot, snapping and the floor. Snapping is one toggle that shows
@@ -30,8 +29,6 @@ public:
     void showTransform(const QJsonObject& transform);
     // Follows the engine's `floor` object (current floor, list of floors).
     void showFloor(const QJsonObject& floor);
-    void showEditMode(bool on);
-    void showComponentMode(ComponentMode mode);
     // Icons depend on the theme color.
     void refreshIcons();
     void setControlsEnabled(bool enabled) { setEnabled(enabled); }
@@ -42,8 +39,6 @@ signals:
     void floorStepRequested(int delta);
     void floorSelectRequested(double entity);
     void viewRequested(const QString& name);
-    void editModeRequested(bool on);
-    void componentModeRequested(ComponentMode mode);
 
 private:
     QComboBox* makeStepBox(QWidget* parent, const QString& accessibleName, const QList<double>& steps, const QString& suffix);
@@ -51,15 +46,6 @@ private:
     void emitTransform();
     void emitSnap();
     void updateSnapText();
-
-    QButtonGroup* modeGroup_ = nullptr;
-    QPushButton* objectModeButton_ = nullptr;
-    QPushButton* editModeButton_ = nullptr;
-    QButtonGroup* componentGroup_ = nullptr;
-    QPushButton* vertexButton_ = nullptr;
-    QPushButton* edgeButton_ = nullptr;
-    QPushButton* faceButton_ = nullptr;
-    QFrame* componentSeparator_ = nullptr;
 
     QPushButton* globalButton_;
     QPushButton* localButton_;
