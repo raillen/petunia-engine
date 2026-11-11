@@ -14,11 +14,10 @@ use petunia_render::{
 use petunia_world::{PersistentId, Value, World};
 use serde_json::{Map, Value as Json, json};
 
-use crate::brush_ops::{FaceDrag, FaceHit};
+use crate::brush_ops::{BoxDrag, FaceDrag, FaceHit};
 use crate::failure::Failure;
 use crate::floors::AboveFloor;
 use crate::gizmo::{Drag, Handle, Orientation, Snap, Tool};
-use crate::mesh_tool::{ComponentSelection, MeshComponentMode};
 use crate::natural_tool::NaturalState;
 use crate::sculpt_tool::SculptState;
 use crate::tools::{DEFAULT_FLOOR_HEIGHT, FreeMode, PivotMode, SnapTarget, nearer};
@@ -49,10 +48,10 @@ pub(crate) struct OpenProject {
 
 /// A drag in progress: the values being changed live (columns of one row) and what they were
 /// before the drag.
-struct Gesture {
-    entity: u64,
+pub(crate) struct Gesture {
+    pub(crate) entity: u64,
     /// (table, column, value before the drag)
-    originals: Vec<(String, String, Value)>,
+    pub(crate) originals: Vec<(String, String, Value)>,
 }
 
 struct LogEntry {
@@ -73,6 +72,9 @@ pub struct EditorSession {
     pub(crate) project: Option<OpenProject>,
     pub(crate) dispatcher: Dispatcher,
     pub(crate) selection: Option<u64>,
+    /// Face, edge or vertex picks on the selected object. Editor state, not part of the scene.
+    pub(crate) component_kind: crate::component::ComponentKind,
+    pub(crate) components: Vec<u32>,
     pub(crate) camera: FlyCamera,
     log: VecDeque<LogEntry>,
     pub(crate) report: Report,
@@ -81,7 +83,7 @@ pub struct EditorSession {
     pub(crate) script_diagnostics: Vec<petunia_project::Diagnostic>,
     pub(crate) dirty: bool,
     log_counter: u64,
-    gesture: Option<Gesture>,
+    pub(crate) gesture: Option<Gesture>,
     pub(crate) tool: Tool,
     pub(crate) snap: Snap,
     pub(crate) hover: Option<Handle>,
@@ -105,6 +107,8 @@ pub struct EditorSession {
     pub(crate) face_drag: Option<FaceDrag>,
     /// A collider face being resized in the viewport (square handles).
     pub(crate) collider_drag: Option<crate::colliders::ColliderDrag>,
+    /// A box corner or edge being resized in the viewport.
+    pub(crate) box_drag: Option<BoxDrag>,
     /// Short text for the heads-up display while dragging.
     pub(crate) hud: Option<String>,
     /// The object being "soloed" in the outliner, if any (a view, not a scene change).
@@ -131,13 +135,7 @@ pub struct EditorSession {
     pub(crate) sculpt: SculptState,
     /// Terrain, river and road tools.
     pub(crate) natural: NaturalState,
-    /// Faces, edges and vertices chosen on an editable mesh (`mesh.select`).
-    pub(crate) components: Option<ComponentSelection>,
-    /// Whether the mesh edit handles (all vertices, for example) are shown.
-    pub(crate) mesh_edit_mode: bool,
-    /// What a click chooses while editing a mesh.
-    pub(crate) mesh_component_mode: MeshComponentMode,
-    /// Triangles of editable meshes, reused while they do not change (the tools extract the
+    /// Triangles of stored meshes, reused while they do not change (the tools extract the
     /// scene many times per mouse move).
     pub(crate) mesh_cache: RefCell<MeshCache>,
     /// Pictures the scene names, decoded once from the project's `assets/` folder (DR-38).
@@ -196,6 +194,8 @@ impl EditorSession {
             project: None,
             dispatcher: new_dispatcher()?,
             selection: None,
+            component_kind: crate::component::ComponentKind::Face,
+            components: Vec::new(),
             camera: FlyCamera::new(petunia_render::Camera::default()),
             log: VecDeque::new(),
             report: Report::default(),
@@ -221,6 +221,7 @@ impl EditorSession {
             hovered_face: None,
             face_drag: None,
             collider_drag: None,
+            box_drag: None,
             hud: None,
             shading: Shading::Solid,
             playing: Vec::new(),
@@ -238,9 +239,6 @@ impl EditorSession {
             outline: crate::tools::OutlineStyle::default(),
             sculpt: SculptState::new(),
             natural: NaturalState::default(),
-            components: None,
-            mesh_edit_mode: false,
-            mesh_component_mode: MeshComponentMode::Face,
             mesh_cache: RefCell::new(MeshCache::new()),
             textures: RefCell::new(TextureLoader::new()),
             play: None,
@@ -362,13 +360,10 @@ impl EditorSession {
             || self.drag.is_some()
             || self.face_drag.is_some()
             || self.collider_drag.is_some()
+            || self.box_drag.is_some()
             || self.free.is_some()
             || self.sculpt.drag.is_some()
             || self.natural.dragging
-            || self
-                .components
-                .as_ref()
-                .is_some_and(ComponentSelection::is_previewing)
     }
 
     /// Forgets every drag bound to the old world. The world is being replaced, so there is
@@ -378,14 +373,13 @@ impl EditorSession {
         self.drag = None;
         self.face_drag = None;
         self.collider_drag = None;
+        self.box_drag = None;
         self.free = None;
         self.hud = None;
         self.hover = None;
         self.hovered = None;
         self.hovered_face = None;
         self.sculpt.reset_transient();
-        self.components = None;
-        self.mesh_edit_mode = false;
     }
 
     // ---- commands ------------------------------------------------------------------------
@@ -465,6 +459,7 @@ impl EditorSession {
             .is_some_and(|project| project.world.handle_of(PersistentId(id)).is_ok());
         if !alive {
             self.selection = None;
+            self.components.clear();
         }
     }
 
@@ -579,6 +574,13 @@ impl EditorSession {
                 ));
             }
         }
+        if entity.is_none() && !self.components.is_empty() {
+            self.components.clear();
+            return Ok(json!({ "selection": self.selection, "component_cleared": true }));
+        }
+        if self.selection != entity {
+            self.components.clear();
+        }
         self.selection = entity;
         Ok(json!({ "selection": entity }))
     }
@@ -601,6 +603,9 @@ impl EditorSession {
             (Some(object), _) => Some(object.0),
             (None, sculpt) => sculpt.map(|hit| hit.entity),
         };
+        if self.selection != hit {
+            self.components.clear();
+        }
         self.selection = hit;
         Ok(json!({ "selection": self.selection }))
     }
@@ -836,8 +841,9 @@ impl EditorSession {
         frame.overlay = self.outline_overlay(&frame);
         self.sculpt_overlay(&mut frame.overlay);
         self.natural_overlay(&mut frame.overlay);
-        self.mesh_overlay(&mut frame.overlay);
         self.collider_overlay(&frame.items, &mut frame.overlay);
+        self.box_handle_overlay(&mut frame.overlay);
+        self.component_overlay(&mut frame.overlay);
         self.light_overlay(&mut frame.overlay);
         frame.show_grid = true;
         frame.grid_height = self.floor_elevation();
@@ -983,6 +989,7 @@ impl EditorSession {
             ),
             "truncated": truncated,
             "selection": self.selection,
+            "component": self.component_json(),
             "can_undo": self.dispatcher.can_undo(),
             "can_redo": self.dispatcher.can_redo(),
             "diagnostics": diagnostics,
@@ -997,7 +1004,6 @@ impl EditorSession {
             // The window needs the hour and the preset to know whether to keep the clock running.
                 "weather": self.weather_get(),
                 "comfort": self.high_contrast,
-            "mesh_selection": self.components_json(),
             "textures": self.textures_json(),
         })
     }
@@ -1039,6 +1045,12 @@ impl EditorSession {
                         ("Camera", "mode") => {
                             Some(&["fixed", "third", "first", "isometric", "custom"])
                         }
+                        ("Material", "kind") => {
+                            Some(&["standard", "flat", "masked", "blended", "post"])
+                        }
+                        ("Material", "effect") => Some(&["grade", "fog"]),
+                        ("Weather", "preset") => Some(&["clear", "cloudy", "rain", "fog", "snow"]),
+                        ("Weather", "volume") => Some(&["", "box"]),
                         _ => None,
                     };
                     if let Some(choices) = choices {

@@ -53,7 +53,7 @@ grafo para `<nome>.aipo`. Um arquivo que já existe, de qualquer das duas extens
 sobrescrito. Além dos embutidos, o próprio projeto guarda os seus: **Criar ▸ Salvar seleção como
 prefab…** grava o objeto selecionado (com colisões, scripts e traços) em
 `prefabs/<nome>.prefab.json`, e **Criar ▸ Prefab do projeto** o recria na frente da câmera — o
-molde é texto, então difere e pode ser versionado junto do projeto (`DR-51`).
+molde é texto, então difere e pode ser versionado junto do projeto (`DR-54`).
 
 **Não há troca de método**, e não está prevista: a escolha é feita uma vez, ao criar o projeto, e
 vale até o fim (decisão de 2026-10-30). O projeto antigo continua abrindo, porque quem não tem o
@@ -115,6 +115,7 @@ lógica entre métodos, então o arquivo do outro método simplesmente deixa de 
 | `transform.set` | `orientation` (`global`, `local`), `pivot` (`object`, `bounds_center`, `base`), `edit_pivot` | Eixos do gizmo, ponto de pivô, modo **Editar pivô** |
 | `free.begin` · `free.axis` · `free.type` | `tool`, pixels / `axis` / `text` | **Modo Livre** (duplo toque em G, R ou S) |
 | `face.begin` · `face.drag` · `face.end` · `face.cancel` | pixels | **Empurrar/puxar** e **Extrudar** uma face |
+| `brush.handle_begin` · `brush.handle_drag` · `brush.handle_end` · `brush.handle_cancel` | pixels / `invert_snap` | **Cantos e arestas da caixa**: arrastar muda `size` e `position` juntos; o lado oposto fica; um desfazer por arrasto |
 | `script.list` · `script.read` · `script.new` | — / `name` | Scripts da pasta `scripts/`; criar a partir do modelo (nunca sobrescreve). `script.list` também devolve `missing`: nomes pedidos por uma tabela `Script` cujo arquivo ainda não existe |
 | `programming.list` | — | Scripts `.aipo` e grafos `.graph.json`, com **os objetos que usam cada um**; nomes pedidos por uma tabela `Script` sem arquivo aparecem como `missing` |
 | `script.write` | `name`, `text` | Grava; a versão anterior vai para `scripts/.backup/` |
@@ -129,10 +130,10 @@ lógica entre métodos, então o arquivo do outro método simplesmente deixa de 
 | `asset.list` | — | Modelos `.glb`/`.gltf` e imagens `.png` em `assets/` (`kind`: `model` ou `image`; caminhos do projeto; não segue links simbólicos) |
 | `asset.import` | `path` | Importa um modelo como **malhas editáveis**, um objeto por nó; copia o arquivo para `assets/` (um desfazer). Devolve `imported`, `names`, `asset`, `warnings` |
 | `asset.import_sprite` | `path` | Importa um `.png` como **sprite** (DR-49): um objeto com a tabela `Sprite`, na frente da câmera, com a proporção da imagem, virado para ela e apoiado no andar atual; copia o arquivo para `assets/` (um desfazer). Devolve `entity`, `asset`, `width`, `height`, `size` |
-| `prefab.list` | — | Os prefabs embutidos (`kind: builtin`): `door` (Porta), `pickup` (Item coletável), `spawn` (Ponto de nascimento) (DR-31) e `player` (Personagem jogável); e os do projeto (`kind: project`), com revisão, número de objetos e de anexos (DR-51) |
-| `prefab.spawn` | `id` | Cria o prefab na frente da câmera, no andar atual, em **um** desfazer; grava os grafos de que precisa em `scripts/` sem sobrescrever os que já existem. Devolve `entity`, `graphs_written`, `graphs_kept`. Com `id: "project:<nome>"`, cria um prefab salvo do projeto (DR-51) |
-| `prefab.save` | `name` | Grava o objeto selecionado (com colisões, scripts extras e traços) em `prefabs/<nome>.prefab.json`; a posição vira zero e salvar o mesmo nome sobe a `revision`. Devolve `prefab` (`project:<nome>`), `name`, `revision`, `path` (DR-51) |
-| `prefab.spawn_project` | `name` | Cria na frente da câmera, no andar atual, em **um** desfazer, o prefab salvo do projeto; devolve `entity`, `prefab`, a `revision` do arquivo e as listas vazias `graphs_written`/`graphs_kept` (DR-51) |
+| `prefab.list` | — | Os prefabs embutidos (`kind: builtin`): `door` (Porta), `pickup` (Item coletável), `spawn` (Ponto de nascimento) (DR-31) e `player` (Personagem jogável); e os do projeto (`kind: project`), com revisão, número de objetos e de anexos (DR-54) |
+| `prefab.spawn` | `id` | Cria o prefab na frente da câmera, no andar atual, em **um** desfazer; grava os grafos de que precisa em `scripts/` sem sobrescrever os que já existem. Devolve `entity`, `graphs_written`, `graphs_kept`. Com `id: "project:<nome>"`, cria um prefab salvo do projeto (DR-54) |
+| `prefab.save` | `name` | Grava o objeto selecionado (com colisões, scripts extras e traços) em `prefabs/<nome>.prefab.json`; a posição vira zero e salvar o mesmo nome sobe a `revision`. Devolve `prefab` (`project:<nome>`), `name`, `revision`, `path` (DR-54) |
+| `prefab.spawn_project` | `name` | Cria na frente da câmera, no andar atual, em **um** desfazer, o prefab salvo do projeto; devolve `entity`, `prefab`, a `revision` do arquivo e as listas vazias `graphs_written`/`graphs_kept` (DR-54) |
 | `graph.list` / `graph.new` `name` / `graph.open` `name` / `graph.close` | — | Grafos de nós (`scripts/<nome>.graph.json`, DR-30). Um grafo aberto por vez; cada edição **grava na hora** (atômico) e a primeira de uma abertura guarda o arquivo em `scripts/.backup/` |
 | `graph.view` | — | O grafo aberto como **contorno** (eventos com suas cadeias, entradas com a origem de cada valor, ramos, soltos e diagnósticos) **e** como **canvas** (`canvas`: caixas com posição, pinos, problemas e fios); `layout_problem` quando o `.layout.json` foi ignorado; `can_undo` / `can_redo` |
 | `graph.add` | `kind`, `after`? `{node,pin}`, `into`? `{node,pin}` | Põe um nó (na cadeia, depois de `after`; ou ligando o resultado a uma entrada `into`) |
@@ -158,25 +159,13 @@ No canvas (**Caixas e fios**): arraste uma caixa para mover; arraste de uma **sa
 | `sculpt.faceted` | `value` | Triângulos chapados (low poly) na caverna selecionada |
 | `brush.carve` · `brush.hollow` | — / `thickness` | **Cavar** (a seleção corta as caixas que toca) e **Tornar oco** |
 | `brush.cut_plane` | `axis` (`x`/`y`/`z` ou 0–2), `offset` (metros do centro) | **Cortar com plano**: a caixa vira duas caixas, com a mesma rotação, escala e cor. Um desfazer |
+| `brush.paint_face` | `face` (0–5: +X, −X, +Y, −Y, +Z, −Z) ou o ponteiro, `color` `{r,g,b,a}` | **Pintar face** de uma caixa. A face sem linha fica com a cor do objeto. Pintar de novo troca a cor. Um desfazer. Menu **Operações**. Cilindro, escada e malha gravada são recusados |
 | `brush.arrange_line` | `count` (2–64, com o original), `offset` `{x,y,z}` | **Arranjo em linha**: cópias espaçadas pelo passo. Um desfazer |
 | `brush.arrange_circle` | `count` (2–64), `center` `{x,y,z}`, `axis` | **Arranjo em círculo**: o original fica no ângulo zero e as cópias giram junto com o anel. Um desfazer |
 | `brush.mirror` | `axis`, `plane` (coordenada no eixo), `duplicate` (padrão `true`) | **Espelhar**: reflete posição e rotação; com `duplicate` cria cópia (leva colisores, scripts e traços), sem ele move o objeto. Um desfazer |
-| `mesh.convert` | `entity`? | **Tornar editável**: o brush vira malha (`Mesh`), mesma entidade, mesma aparência (um desfazer) |
-| `mesh.boolean` | `operation` (`union`, `subtract`, `intersect`), `tool`, `entity`?, `keep_tool`? | **Fundir, cortar, interseção** com outro brush ou malha, em qualquer rotação e escala; o alvo vira malha; a ferramenta some (a menos que `keep_tool`). Um desfazer |
-| `mesh.pick` | `x`, `y`, `width`, `height`, `entity`? | Face, aresta (com a fração ao longo dela), vértice e ponto sob o mouse |
-| `mesh.select` | `faces`, `edges` (`[[a, b]]`), `vertices`, `mode` (`replace`, `add`, `toggle`, `clear`) | Escolhe partes da malha. A escolha some quando a malha muda (desfazer, outra operação) |
-| `mesh.info` | `entity`?, `geometry`? | Vértices, faces, arestas, triângulos, se é **sólido fechado**, a escolha; com `geometry`, a malha inteira |
-| `mesh.inset` | `faces`?, `distance` (0,2), `grouping` (`region`, `individual`) | **Inset**: a face encolhe e ganha um anel; depois, a escolha é a face de dentro |
-| `mesh.extrude` | `faces`?, `distance` (0,5; negativo afunda), `grouping` | **Extrudar** faces da malha |
-| `mesh.loop_cut` | `edge`?, `cuts` (1 a 32), `slide` (-1 a 1) | **Corte em laço** no anel de quadriláteros da aresta; termina limpo em triângulos e n-gons |
-| `mesh.bevel` | `edges`?, `width` (0,1), `segments` (1 = chanfro, até 16 = arredondado) | **Bevel**: tudo ou nada; arestas que se encontram num canto são recusadas juntas (limite do Petunia3D) |
-| `mesh.subdivide` | `faces`?, `cuts` (1 a 32) | Subdivide triângulos e quadriláteros; os vizinhos ganham os pontos novos (sem rachaduras) |
-| `mesh.dissolve` | `edges`? | Tira arestas e junta as duas faces de cada lado |
-| `mesh.merge` · `mesh.merge_by_distance` | `vertices`? / `distance` (0,001) | Funde vértices no centro; funde os que estão perto demais |
-| `mesh.delete_faces` · `mesh.flip` | `faces`? | Apaga faces (a malha fica aberta); vira faces do avesso (sem `faces`: todas) |
-| `mesh.knife` | `start`, `end`: `{ "edge": [a, b], "fraction": 0.5 }` | **Faca**: corta uma face em duas entre dois pontos das suas arestas. Na janela, `K` arma a faca e **dois cliques** escolhem os pontos (o `mesh.pick` do clique dá a aresta e a fração); **Malha ▸ Faca por números…** continua para digitar as arestas |
-| `mesh.preview` | `operation` (`inset`, `extrude`, `bevel`, `loop_cut`) + os valores dela (`distance`, `width`, `slide`…) | **Valor ao vivo** enquanto o mouse arrasta: mostra o resultado sem gravar; cada passo parte da malha de antes do arrasto. Um valor que ainda não serve (inset de 0) mostra a malha como estava e responde `valid: false` com o motivo. Na janela: **segure `I`, `Ctrl+E`, `Ctrl+B` ou `Ctrl+R`** e mova o mouse (1 cm por pixel; no corte em laço, um corte a cada 40 px); soltar a tecla, clicar ou `Enter` aplica; `Esc` cancela (`DR-48`) |
-| `mesh.preview_end` | `commit` (padrão `true`) | Solta o arrasto: **um** passo de desfazer, ou nada quando `commit: false`. Outra operação de malha também encerra o arrasto (mantendo-o) |
+| `mesh.boolean` | `operation` (`union`, `subtract`, `intersect`), `tool`, `entity`?, `keep_tool`? | **Fundir, cortar, interseção** com outro brush ou malha, em qualquer rotação e escala; o alvo vira malha; a ferramenta some (a menos que `keep_tool`). Um desfazer. Menu **Malha** |
+| `mesh.convert` | `entity`? | O brush vira uma malha gravada (mesmo lugar). O booleano faz isso sozinho; o comando continua para pele e script |
+| `mesh.info` | `entity`?, `geometry`? | Vértices, faces, arestas, triângulos e se é um **sólido fechado**. O inspetor usa isto |
 | `floor.step` · `floor.height` | `delta` / `meters` | Sobe ou desce o **andar** (grade e criação); além do último, **cria** o andar (um desfazer) |
 | `floor.select` · `floor.above` | `entity` / `mode` (`ghost`, `hide`, `show`) | Vai a um andar da lista; como aparecem os objetos acima dele |
 | `viewport.overlay` | `width`, `height` | Modelo em pixels do gizmo, guias, marcadores, painel do gesto e eixos da câmera |
@@ -184,6 +173,7 @@ No canvas (**Caixas e fios**): arraste uma caixa para mover; arraste de uma **sa
 | `collider.add` | `shape` (`box`, `sphere`, `capsule`, `convex`) | Colisão com nome no objeto selecionado, ajustada a ele; nome livre ("colisão", "colisão 2"…); um passo de desfazer |
 | `collider.fit` | — | A colisão selecionada volta a envolver o objeto |
 | `collider.handle_begin` · `collider.handle_drag` · `collider.handle_end` · `collider.handle_cancel` | — / ponteiro / `invert_snap` | Redimensionar uma colisão em caixa no viewport: arrastar uma alça quadrada muda `size` e `center` juntos; um desfazer por arrasto |
+| `brush.handle_*` | ponteiro | O mesmo gesto na **caixa** selecionada: 8 cantos e 12 arestas (âmbar). O gizmo tem prioridade no clique |
 | `play.start` | — | **Jogar**: roda a cena numa **cópia** com scripts, física e o personagem do jogador (cria um herói de reserva no `PlayerStart` se não houver). Devolve `problems`, `has_player` |
 | `play.tick` | `seconds`, `forward`, `right`, `jump`, `look_x`, `look_y` | Um quadro do jogo; devolve o `log` dos scripts, as `faults` e o `debug` do quadro |
 | `play.debug` | — | O que o último quadro reportou (`tick`, `marks` com `ran` / `check` / `value`) e `playing`; responde também com o jogo parado (DR-32) |

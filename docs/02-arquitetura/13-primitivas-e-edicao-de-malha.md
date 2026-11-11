@@ -4,13 +4,13 @@
 
 ## Resumo (TL;DR)
 
-Há **três níveis** de edição para construir mapas. **Os três já existem no motor.** O nível 3 (booleanos, inset, loop cut, bevel e o resto) chegou em 2026-10-25 e tem teste; a **interface** chegou em 2026-10-27 (barra **Malha**, vértices visíveis e atalhos) e foi completada em 2026-11-04 com booleanos, faca, valor ao vivo e inspetor de malha: veja os [ganchos](#ganchos-da-interface).
+Há **dois caminhos** para construir mapas: brushes (níveis 1 e 2) e **booleano**. A edição por vértice, aresta, faca, inset, bevel e modo Tab foi **apagada** em 2026-11-09 ([DR-51](../06-decisoes/registro-de-decisoes.md)). O [DR-53](../06-decisoes/registro-de-decisoes.md) reabre só seleção de componente, loop cut na malha gravada e gizmo no componente, sem modo novo. O booleano continua: menu **Malha ▸ Booleano…**.
 
 | Nível | O que é | Estado | Custo |
 |---|---|---|---|
 | **1. Brushes paramétricos** | Formas com tamanho e detalhe, movidas com gizmo e snap | **Feito** | já pago |
 | **2. Edição de brushes** | Empurrar/puxar, extrudar, cavar, tornar oco | **Feito** em parte (falta cortar com plano, arranjo, espelhar) | sem dependência nova |
-| **3. Edição de malha** | Booleanos, inset, extrudar, loop cut, bevel, subdividir, dissolver, fundir, faca | **Feito no motor** (2026-10-25); interface pendente | 14,1 mil linhas copiadas (legado; 10,9 mil sem os testes) + ~3,3 mil novas; 2 dependências diretas |
+| **3. Edição de malha** | Inset, faca, bevel, loop cut, modo de componentes | **Removido** (DR-51). Fica o booleano | — |
 
 ## O nível 1: o que já existe
 
@@ -54,14 +54,14 @@ Medido em `crates/mesh`:
 
 ## Nível 2: edição de brushes (feito em 2026-11-08)
 
-**Feito em 2026-10-24:** empurrar/puxar (`P`), extrudar (`E`), **cavar** (caixa menos caixa gera até 6 caixas) e **tornar oco** (6 paredes). **Feito em 2026-11-08:** **cortar com plano**, **arranjo em linha**, **arranjo em círculo** e **espelhar**. Cada operação é **um** `world.batch`: um `Ctrl+Z` desfaz tudo. Falta só **redimensionar pelas alças da caixa** (cantos e arestas).
+**Feito em 2026-10-24:** empurrar/puxar (`P`), extrudar (`E`), **cavar** (caixa menos caixa gera até 6 caixas) e **tornar oco** (6 paredes). **Feito em 2026-11-08:** **cortar com plano**, **arranjo em linha**, **arranjo em círculo** e **espelhar**. **Feito em 2026-11-09:** **redimensionar pelos cantos e pelas arestas**. Cada operação é **um** desfazer.
 
 É o que ferramentas de mapa (Hammer, TrenchBroom) fazem, sem precisar de malha editável.
 
 | Ferramenta | Como funciona | Dependência |
 |---|---|---|
 | **Alças de face** (**feito**: `P` e `E`) | Arrastar a face de uma caixa muda `size` e `position` juntos, com snap | nenhuma |
-| **Redimensionar pela caixa** | Alças nos cantos e nas arestas | nenhuma |
+| **Redimensionar pela caixa** (**feito**) | 8 cantos e 12 arestas âmbar na caixa selecionada. Arrastar segue o plano da vista; o canto ou a aresta oposta fica. `Esc` cancela. Cilindro, escada e malha não têm essas alças | nenhuma |
 | **Cortar com plano** (**feito**) | Divide a caixa em duas com um plano perpendicular a um eixo dela | nenhuma |
 | **Brush subtrativo** (**feito para caixas**: cavar e tornar oco) | Cavar portas e janelas | caixas: nenhuma; formas livres: CSG (`manifold-rust`), no nível 3 |
 | **Arranjo** (**feito**) | Cópias em linha ou círculo (colunas, degraus, cercas) | nenhuma |
@@ -206,7 +206,7 @@ Módulo `petunia_editor/src/mesh_tool.rs`, operações `mesh.*` (lista no [edito
 
 **Partes escolhidas.** O valor ao vivo usa as faces (inserir, extrudar) ou arestas (chanfro, corte em laço) que já estão escolhidas. Arrastar sem nenhuma escolhida mostra *selecione uma face antes de arrastar* em vez de aplicar uma operação vazia; para escolher, ponha **Ao arrastar** em *Nada (clique escolhe)*.
 
-**Nada pendente no nível 3.** Do nível 2 falta só o redimensionamento pelas alças da caixa (cantos e arestas); cortar, arranjar e espelhar estão feitos (acima).
+**Nível 2 feito** (cortar, arranjar, espelhar, alças de canto e aresta). **Nível 3 de modelagem removido**; o corte de portas e janelas é o booleano.
 
 ## Riscos
 
@@ -218,4 +218,4 @@ Módulo `petunia_editor/src/mesh_tool.rs`, operações `mesh.*` (lista no [edito
 
 ## Próximo passo sugerido
 
-O nível 3 e as operações do nível 2 (cortar com plano, arranjo, espelhar) estão completos e verificados na interface. O que resta do nível 2 é **redimensionar pelas alças da caixa** (cantos e arestas), que fecha a blocagem no estilo Hammer/TrenchBroom. Depois dele, a lista por prioridade está em [estado da implementação](../05-roadmap/03-estado-da-implementacao.md).
+A blocagem (nível 2) e o booleano estão na interface. A edição de malha completa não volta sem uma decisão nova. A lista do que vem depois está em [estado da implementação](../05-roadmap/03-estado-da-implementacao.md).

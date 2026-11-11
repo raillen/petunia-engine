@@ -195,6 +195,153 @@ pub fn sky(time: TimeOfDay, weather: Weather, high_contrast: bool) -> Sky {
     }
 }
 
+/// Parses a weather preset name into a `Weather` variant.
+#[must_use]
+pub fn parse_weather(name: &str) -> Option<Weather> {
+    match name {
+        "clear" => Some(Weather::Clear),
+        "cloudy" => Some(Weather::Cloudy),
+        "rain" => Some(Weather::Rain),
+        "fog" => Some(Weather::Fog),
+        "snow" => Some(Weather::Snow),
+        _ => None,
+    }
+}
+
+/// Returns the string representation of a weather preset.
+#[must_use]
+pub fn weather_name(weather: Weather) -> &'static str {
+    match weather {
+        Weather::Clear => "clear",
+        Weather::Cloudy => "cloudy",
+        Weather::Rain => "rain",
+        Weather::Fog => "fog",
+        Weather::Snow => "snow",
+    }
+}
+
+/// Blends multiple skies by their respective weights into a single coherent sky (DR-53 Frente 6).
+#[must_use]
+pub fn blend_skies(items: &[(Sky, f32)]) -> Sky {
+    if items.is_empty() {
+        return sky(TimeOfDay::default(), Weather::Clear, false);
+    }
+    let total_weight: f32 = items
+        .iter()
+        .map(|(_, weight)| {
+            if weight.is_finite() && *weight > 0.0 {
+                *weight
+            } else {
+                0.0
+            }
+        })
+        .sum();
+    if total_weight <= 0.0 {
+        if let Some((first_sky, _)) = items.first() {
+            return *first_sky;
+        }
+        return sky(TimeOfDay::default(), Weather::Clear, false);
+    }
+
+    let mut sun_direction = Vec3::ZERO;
+    let mut sun_color = Vec3::ZERO;
+    let mut ambient = Vec3::ZERO;
+    let mut horizon_r = 0.0f32;
+    let mut horizon_g = 0.0f32;
+    let mut horizon_b = 0.0f32;
+    let mut horizon_a = 0.0f32;
+    let mut overcast = 0.0f32;
+
+    let mut fog_weight_sum = 0.0f32;
+    let mut fog_r = 0.0f32;
+    let mut fog_g = 0.0f32;
+    let mut fog_b = 0.0f32;
+    let mut fog_reach_sum = 0.0f32;
+
+    let mut rain_weight = 0.0f32;
+    let mut snow_weight = 0.0f32;
+
+    for (item_sky, raw_weight) in items {
+        if !raw_weight.is_finite() || *raw_weight <= 0.0 {
+            continue;
+        }
+        let normalized = *raw_weight / total_weight;
+        sun_direction = sun_direction + item_sky.sun_direction * normalized;
+        sun_color = sun_color + item_sky.sun_color * normalized;
+        ambient = ambient + item_sky.ambient * normalized;
+        horizon_r += item_sky.horizon.r * normalized;
+        horizon_g += item_sky.horizon.g * normalized;
+        horizon_b += item_sky.horizon.b * normalized;
+        horizon_a += item_sky.horizon.a * normalized;
+        overcast += item_sky.overcast * normalized;
+
+        if let Some((fog_color, reach)) = item_sky.fog {
+            fog_weight_sum += normalized;
+            fog_r += fog_color.r * normalized;
+            fog_g += fog_color.g * normalized;
+            fog_b += fog_color.b * normalized;
+            fog_reach_sum += reach * normalized;
+        }
+
+        match item_sky.precipitation {
+            Precipitation::Rain => rain_weight += normalized,
+            Precipitation::Snow => snow_weight += normalized,
+            Precipitation::None => {}
+        }
+    }
+
+    let sun_direction = sun_direction.normalized_or_zero();
+    let horizon = Color::new(horizon_r, horizon_g, horizon_b, horizon_a);
+    let fog = if fog_weight_sum > 0.05 {
+        let inv_fog = 1.0 / fog_weight_sum;
+        let color = Color::new(fog_r * inv_fog, fog_g * inv_fog, fog_b * inv_fog, 1.0);
+        let reach = (fog_reach_sum * inv_fog) / fog_weight_sum.clamp(0.1, 1.0);
+        Some((color, reach))
+    } else {
+        None
+    };
+
+    let precipitation = if rain_weight > 0.3 && rain_weight >= snow_weight {
+        Precipitation::Rain
+    } else if snow_weight > 0.3 {
+        Precipitation::Snow
+    } else {
+        Precipitation::None
+    };
+
+    Sky {
+        sun_direction,
+        sun_color,
+        ambient,
+        horizon,
+        fog,
+        overcast,
+        precipitation,
+    }
+}
+
+/// Evaluates the sky by querying active weathers in the world, or returns `None` if no weather entities exist.
+#[must_use]
+pub fn evaluate_world_sky(
+    world: &petunia_world::World,
+    observer_position: Vec3,
+    high_contrast: bool,
+) -> Option<Sky> {
+    let active = petunia_world::active_weathers_at(world, observer_position);
+    if active.is_empty() {
+        return None;
+    }
+    let skies: Vec<(Sky, f32)> = active
+        .into_iter()
+        .map(|spec| {
+            let weather = parse_weather(&spec.preset).unwrap_or(Weather::Clear);
+            let single_sky = sky(TimeOfDay { hours: spec.hours }, weather, high_contrast);
+            (single_sky, spec.weight)
+        })
+        .collect();
+    Some(blend_skies(&skies))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -280,5 +427,16 @@ mod tests {
                 time.hours
             );
         }
+    }
+
+    #[test]
+    fn blend_skies_mixes_rain_and_clear_deterministically() {
+        let clear = sky(TimeOfDay { hours: 12.0 }, Weather::Clear, false);
+        let rain = sky(TimeOfDay { hours: 12.0 }, Weather::Rain, false);
+        let mixed = blend_skies(&[(clear, 0.5), (rain, 0.5)]);
+        assert!(mixed.overcast > clear.overcast);
+        assert!(mixed.overcast < rain.overcast);
+        assert!(mixed.fog.is_some());
+        assert_eq!(mixed.precipitation, Precipitation::Rain);
     }
 }

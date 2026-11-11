@@ -1169,7 +1169,6 @@ mod tests {
             id(2, 1, 1),
             id(2, 0, 1),
         ]));
-        mesh.recalculate_normals();
         mesh
     }
 

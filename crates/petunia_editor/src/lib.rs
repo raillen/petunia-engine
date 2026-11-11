@@ -11,6 +11,7 @@ mod animation;
 mod assets;
 mod brush_ops;
 mod colliders;
+mod component;
 mod failure;
 mod floors;
 mod flora_weather;

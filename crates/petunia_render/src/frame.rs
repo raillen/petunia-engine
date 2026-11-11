@@ -40,6 +40,8 @@ impl Shape {
     }
 }
 
+pub use petunia_world::MaterialKind;
+
 /// One thing to draw.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DrawItem {
@@ -70,6 +72,46 @@ pub struct DrawItem {
     pub wireframe: bool,
     /// Draw through other geometry (`QT-09`, raio-X): the depth test is off for this item.
     pub xray: bool,
+    /// Material kind (DR-53: flat, standard, masked, blended, post).
+    pub material_kind: MaterialKind,
+    pub metallic: f32,
+    pub roughness: f32,
+    pub cutoff: f32,
+    pub base_texture_asset: String,
+    pub base_texture: Option<TextureId>,
+    pub normal_texture_asset: String,
+    pub normal_texture: Option<TextureId>,
+    pub effect: String,
+}
+
+impl Default for DrawItem {
+    fn default() -> Self {
+        Self {
+            entity: 0,
+            selected: false,
+            hovered: false,
+            shape: Shape::Box,
+            size: Vec3::ONE,
+            detail: 0,
+            transform: Transform::IDENTITY,
+            color: Color::rgb(0.8, 0.8, 0.8),
+            mesh: None,
+            mesh_fingerprint: 0,
+            skin: Vec::new(),
+            skin_matrices: Vec::new(),
+            wireframe: false,
+            xray: false,
+            material_kind: MaterialKind::Standard,
+            metallic: 0.0,
+            roughness: 0.5,
+            cutoff: 0.5,
+            base_texture_asset: String::new(),
+            base_texture: None,
+            normal_texture_asset: String::new(),
+            normal_texture: None,
+            effect: String::new(),
+        }
+    }
 }
 
 /// The four joint weights of one vertex, as the import keeps them. A local copy so the renderer
@@ -249,6 +291,30 @@ impl SpriteItem {
     }
 }
 
+/// A sky layer item ready to be drawn by the renderer (DR-53 Frente 7).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SkyLayerItem {
+    pub order: i64,
+    pub color: Color,
+    pub image_asset: String,
+    pub image: Option<TextureId>,
+    pub alpha: f32,
+    pub scroll: Vec3,
+}
+
+impl Default for SkyLayerItem {
+    fn default() -> Self {
+        Self {
+            order: 0,
+            color: Color::WHITE,
+            image_asset: String::new(),
+            image: None,
+            alpha: 1.0,
+            scroll: Vec3::ZERO,
+        }
+    }
+}
+
 /// A 2D-looking helper drawn on top of the scene (editor gizmos). Sizes are in pixels, so a
 /// handle keeps the same size on screen at any distance.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -319,6 +385,8 @@ pub struct RenderFrame {
     pub grid_height: f32,
     pub clear_color: Color,
     pub lighting: Lighting,
+    /// Sky layers drawn from furthest to closest before the rest of the scene (DR-53 Frente 7).
+    pub sky_layers: Vec<SkyLayerItem>,
     /// Vegetation impostors to draw on top of the scene, in world coordinates (phase 5).
     pub vegetation: Option<Arc<MeshData>>,
     /// Precipitation (rain or snow), if the weather is falling (phase 4 and 5).
@@ -330,6 +398,29 @@ pub struct RenderFrame {
     /// The host's clock in seconds, used by sprite animations. The editor leaves it at 0 while
     /// editing, so a scene at rest draws the same picture every frame; Play and the player advance it.
     pub seconds: f32,
+}
+
+impl Default for RenderFrame {
+    fn default() -> Self {
+        Self {
+            camera: Camera::default(),
+            items: Vec::new(),
+            sprites: Vec::new(),
+            textures: Vec::new(),
+            sculpts: Vec::new(),
+            overlay: Vec::new(),
+            show_grid: false,
+            grid_height: 0.0,
+            clear_color: Color::rgb(0.53, 0.70, 0.88),
+            lighting: Lighting::default(),
+            sky_layers: Vec::new(),
+            vegetation: None,
+            precipitation: None,
+            fog: None,
+            grade: Grade::default(),
+            seconds: 0.0,
+        }
+    }
 }
 
 /// One fullscreen grade: contrast, vignette, grain and a luminance ceiling.
@@ -407,14 +498,36 @@ impl RenderFrame {
         }
     }
 
-    /// Points every sprite at the texture its asset names, and collects the pixels the renderer
-    /// has to upload. Sprites whose asset is not loaded stay as plain colored quads.
+    /// Points every sprite and material at the texture its asset names, and collects the pixels the
+    /// renderer has to upload. Objects whose asset is not loaded stay with plain colour.
     pub fn resolve_textures(&mut self, store: &TextureStore) {
         let mut used = std::collections::BTreeSet::new();
         for sprite in &mut self.sprites {
             sprite.texture = store.id_of(&sprite.asset);
             if let Some(id) = sprite.texture {
                 used.insert(id);
+            }
+        }
+        for item in &mut self.items {
+            if !item.base_texture_asset.is_empty() {
+                item.base_texture = store.id_of(&item.base_texture_asset);
+                if let Some(id) = item.base_texture {
+                    used.insert(id);
+                }
+            }
+            if !item.normal_texture_asset.is_empty() {
+                item.normal_texture = store.id_of(&item.normal_texture_asset);
+                if let Some(id) = item.normal_texture {
+                    used.insert(id);
+                }
+            }
+        }
+        for layer in &mut self.sky_layers {
+            if !layer.image_asset.is_empty() {
+                layer.image = store.id_of(&layer.image_asset);
+                if let Some(id) = layer.image {
+                    used.insert(id);
+                }
             }
         }
         self.textures = used.into_iter().filter_map(|id| store.pixels(id)).collect();
@@ -435,6 +548,22 @@ fn transform_of(world: &World, handle: EntityHandle) -> Transform {
 /// Builds the frame from the world: every entity with a `Brush` or a `Mesh`. Entities with
 /// unknown shapes are skipped (the Project Doctor reports them). Cuts every editable mesh into
 /// triangles; a host that extracts often uses [`extract_frame_cached`].
+fn paint_fingerprint(entity: u64, face: usize, color: Color, size: Vec3) -> u64 {
+    let mut bits = entity
+        ^ ((face as u64) << 56)
+        ^ (size.x.to_bits() as u64).rotate_left(8)
+        ^ (size.y.to_bits() as u64).rotate_left(16)
+        ^ (size.z.to_bits() as u64).rotate_left(24)
+        ^ (color.r.to_bits() as u64)
+        ^ (color.g.to_bits() as u64).rotate_left(11)
+        ^ (color.b.to_bits() as u64).rotate_left(22)
+        ^ (color.a.to_bits() as u64).rotate_left(33);
+    if bits == 0 {
+        bits = 1;
+    }
+    bits
+}
+
 pub fn extract_frame(world: &World, camera: Camera) -> RenderFrame {
     extract_frame_cached(world, camera, &mut MeshCache::new())
 }
@@ -456,12 +585,50 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
             Ok(Value::Int(value)) => u32::try_from(*value).unwrap_or(0),
             _ => 0,
         };
-        let color = match world.get(handle, "Brush", "color") {
+        let brush_color = match world.get(handle, "Brush", "color") {
             Ok(Value::Color(color)) => *color,
             _ => Color::WHITE,
         };
         let transform = transform_of(world, handle);
         let entity = world.persistent_id(handle).map_or(0, |id| id.0);
+        let (
+            material_kind,
+            color,
+            metallic,
+            roughness,
+            cutoff,
+            base_texture_asset,
+            normal_texture_asset,
+            effect,
+        ) = if let Some(spec) = petunia_world::material_of(world, handle) {
+            let mut c = spec.color;
+            if spec.kind == petunia_world::MaterialKind::Blended
+                || spec.kind == petunia_world::MaterialKind::Flat
+            {
+                c.a *= spec.alpha;
+            }
+            (
+                spec.kind,
+                c,
+                spec.metallic,
+                spec.roughness,
+                spec.cutoff,
+                spec.base_texture,
+                spec.normal_texture,
+                spec.effect,
+            )
+        } else {
+            (
+                petunia_world::MaterialKind::Standard,
+                brush_color,
+                0.0,
+                0.5,
+                0.5,
+                String::new(),
+                String::new(),
+                String::new(),
+            )
+        };
         items.push(DrawItem {
             entity,
             selected: false,
@@ -477,7 +644,54 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
             skin_matrices: Vec::new(),
             wireframe: false,
             xray: false,
+            material_kind,
+            metallic,
+            roughness,
+            cutoff,
+            base_texture_asset,
+            base_texture: None,
+            normal_texture_asset,
+            normal_texture: None,
+            effect,
         });
+        // The box stays the first item, so collision keeps the solid box. Painted faces are extra.
+        if shape == Shape::Box && size.x > 0.0 && size.y > 0.0 && size.z > 0.0 && size.is_finite() {
+            for face in 0..6 {
+                let Some(spec) = petunia_world::face_material_of(world, entity, face) else {
+                    continue;
+                };
+                let Some(shell) = crate::mesh::box_face_shell(size * 0.5, face) else {
+                    continue;
+                };
+                let paint = spec.color;
+                let fingerprint = paint_fingerprint(entity, face, paint, size);
+                items.push(DrawItem {
+                    entity,
+                    selected: false,
+                    hovered: false,
+                    shape: Shape::Mesh,
+                    size,
+                    detail: 0,
+                    transform,
+                    color: paint,
+                    mesh: Some(cache.store_drawing(fingerprint, shell)),
+                    mesh_fingerprint: fingerprint,
+                    skin: Vec::new(),
+                    skin_matrices: Vec::new(),
+                    wireframe: false,
+                    xray: false,
+                    material_kind: spec.kind,
+                    metallic: spec.metallic,
+                    roughness: spec.roughness,
+                    cutoff: spec.cutoff,
+                    base_texture_asset: spec.base_texture,
+                    base_texture: None,
+                    normal_texture_asset: spec.normal_texture,
+                    normal_texture: None,
+                    effect: spec.effect,
+                });
+            }
+        }
     }
     for handle in world.entities_with_table("Mesh").unwrap_or_default() {
         let Ok(Value::Mesh(geometry)) = world.get(handle, "Mesh", "geometry") else {
@@ -486,9 +700,47 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
         let Some((low, high)) = geometry.bounds() else {
             continue;
         };
-        let color = match world.get(handle, "Mesh", "color") {
+        let mesh_color = match world.get(handle, "Mesh", "color") {
             Ok(Value::Color(color)) => *color,
             _ => Color::WHITE,
+        };
+        let (
+            material_kind,
+            color,
+            metallic,
+            roughness,
+            cutoff,
+            base_texture_asset,
+            normal_texture_asset,
+            effect,
+        ) = if let Some(spec) = petunia_world::material_of(world, handle) {
+            let mut c = spec.color;
+            if spec.kind == petunia_world::MaterialKind::Blended
+                || spec.kind == petunia_world::MaterialKind::Flat
+            {
+                c.a *= spec.alpha;
+            }
+            (
+                spec.kind,
+                c,
+                spec.metallic,
+                spec.roughness,
+                spec.cutoff,
+                spec.base_texture,
+                spec.normal_texture,
+                spec.effect,
+            )
+        } else {
+            (
+                petunia_world::MaterialKind::Standard,
+                mesh_color,
+                0.0,
+                0.5,
+                0.5,
+                String::new(),
+                String::new(),
+                String::new(),
+            )
         };
         let fingerprint = geometry.fingerprint();
         items.push(DrawItem {
@@ -506,6 +758,15 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
             skin_matrices: Vec::new(),
             wireframe: false,
             xray: false,
+            material_kind,
+            metallic,
+            roughness,
+            cutoff,
+            base_texture_asset,
+            base_texture: None,
+            normal_texture_asset,
+            normal_texture: None,
+            effect,
         });
     }
     // Terrain chunks: one draw item per chunk, in world coordinates.
@@ -592,6 +853,7 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
             skin_matrices: Vec::new(),
             wireframe: false,
             xray: false,
+            ..DrawItem::default()
         });
     }
 
@@ -618,6 +880,7 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
             skin_matrices: Vec::new(),
             wireframe: false,
             xray: false,
+            ..DrawItem::default()
         });
     }
 
@@ -652,6 +915,7 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
             skin_matrices: Vec::new(),
             wireframe: false,
             xray: false,
+            ..DrawItem::default()
         });
     }
 
@@ -685,6 +949,7 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
             skin_matrices: Vec::new(),
             wireframe: false,
             xray: false,
+            ..DrawItem::default()
         });
     }
 
@@ -737,6 +1002,7 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
             skin_matrices: Vec::new(),
             wireframe: false,
             xray: false,
+            ..DrawItem::default()
         });
     }
 
@@ -780,7 +1046,32 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
     // every machine, so a scene draws the same picture every frame.
     sprites.sort_by_key(|sprite| (sprite.layer, sprite.entity));
 
-    let lighting = extract_lighting(world, camera.position);
+    let raw_sky_layers = petunia_world::extract_sky_layers(world);
+    let sky_layers = raw_sky_layers
+        .into_iter()
+        .map(|spec| SkyLayerItem {
+            order: spec.order,
+            color: spec.color,
+            image_asset: spec.image,
+            image: None,
+            alpha: spec.alpha,
+            scroll: spec.scroll,
+        })
+        .collect();
+
+    let mut clear_color = Color::rgb(0.53, 0.70, 0.88);
+    let mut fog = None;
+    let mut lighting = extract_lighting(world, camera.position);
+    if let Some(world_sky) = crate::weather::evaluate_world_sky(world, camera.position, false) {
+        clear_color = world_sky.horizon;
+        fog = world_sky.fog;
+        if !lighting.custom {
+            lighting.custom = true;
+            lighting.sun = Some((world_sky.sun_direction, world_sky.sun_color));
+            lighting.ambient = world_sky.ambient;
+        }
+    }
+
     RenderFrame {
         camera,
         items,
@@ -790,12 +1081,13 @@ pub fn extract_frame_cached(world: &World, camera: Camera, cache: &mut MeshCache
         overlay: Vec::new(),
         show_grid: false,
         grid_height: 0.0,
-        clear_color: Color::rgb(0.53, 0.70, 0.88),
+        clear_color,
         lighting,
+        sky_layers,
         // Filled by whoever has the rules and the weather; an extracted frame carries only the world.
         vegetation: None,
         precipitation: None,
-        fog: None,
+        fog,
         grade: Grade::default(),
         seconds: 0.0,
     }
@@ -939,6 +1231,10 @@ pub fn solid_shapes(world: &World) -> std::collections::BTreeMap<u64, petunia_ma
         if item.color.a < 0.9 {
             continue;
         }
+        // A painted face is a second item of the same object. The brush (drawn first) is the solid.
+        if item.entity != 0 && found.contains_key(&item.entity) {
+            continue;
+        }
         let Ok(mesh) = crate::mesh::item_mesh(item) else {
             continue;
         };
@@ -1033,6 +1329,7 @@ mod skin_tests {
             skin_matrices: vec![petunia_anim::Mat4::translation(Vec3::new(2.0, 0.0, 0.0))],
             wireframe: false,
             xray: false,
+            ..DrawItem::default()
         }
     }
 
@@ -1386,5 +1683,171 @@ mod tests {
             frame.seconds, 0.6,
             "the frame carries the clock it was built from"
         );
+    }
+
+    #[test]
+    fn material_properties_reach_the_frame_and_textures_resolve() {
+        let mut world = empty_world();
+        world
+            .define_table(
+                TableSpec::new("Brush")
+                    .column("shape", ValueKind::Text, Value::Text("box".to_string()))
+                    .column("size", ValueKind::Vec3, Value::Vec3(Vec3::ONE))
+                    .column("detail", ValueKind::Int, Value::Int(16))
+                    .column("color", ValueKind::Color, Value::Color(Color::WHITE)),
+            )
+            .expect("Brush");
+        world
+            .define_table(
+                TableSpec::new(petunia_world::MATERIAL_TABLE)
+                    .column("kind", ValueKind::Text, Value::Text("standard".to_string()))
+                    .column(
+                        "color",
+                        ValueKind::Color,
+                        Value::Color(Color::rgb(0.5, 0.2, 0.8)),
+                    )
+                    .column("alpha", ValueKind::Float, Value::Float(0.75))
+                    .column("metallic", ValueKind::Float, Value::Float(0.9))
+                    .column("roughness", ValueKind::Float, Value::Float(0.2))
+                    .column("cutoff", ValueKind::Float, Value::Float(0.3))
+                    .column(
+                        "base_texture",
+                        ValueKind::Text,
+                        Value::Text("assets/brick.png".to_string()),
+                    )
+                    .column(
+                        "normal_texture",
+                        ValueKind::Text,
+                        Value::Text("assets/brick_norm.png".to_string()),
+                    )
+                    .column("effect", ValueKind::Text, Value::Text(String::new())),
+            )
+            .expect("Material");
+
+        let handle = world.spawn().expect("entity");
+        world
+            .insert_row_values(
+                handle,
+                "Brush",
+                vec![
+                    Value::Text("box".to_string()),
+                    Value::Vec3(Vec3::ONE),
+                    Value::Int(16),
+                    Value::Color(Color::WHITE),
+                ],
+            )
+            .expect("brush");
+        world
+            .insert_row_values(
+                handle,
+                petunia_world::MATERIAL_TABLE,
+                vec![
+                    Value::Text("masked".to_string()),
+                    Value::Color(Color::rgb(0.5, 0.2, 0.8)),
+                    Value::Float(0.75),
+                    Value::Float(0.9),
+                    Value::Float(0.2),
+                    Value::Float(0.3),
+                    Value::Text("assets/brick.png".to_string()),
+                    Value::Text("assets/brick_norm.png".to_string()),
+                    Value::Text(String::new()),
+                ],
+            )
+            .expect("material");
+
+        let mut frame = extract_frame(&world, Camera::default());
+        assert_eq!(frame.items.len(), 1);
+        let item = &frame.items[0];
+        assert_eq!(item.material_kind, MaterialKind::Masked);
+        assert_eq!(item.metallic, 0.9);
+        assert_eq!(item.roughness, 0.2);
+        assert_eq!(item.cutoff, 0.3);
+        assert_eq!(item.base_texture_asset, "assets/brick.png");
+        assert_eq!(item.normal_texture_asset, "assets/brick_norm.png");
+        assert_eq!(item.base_texture, None);
+
+        let mut store = TextureStore::new();
+        let brick_id = store
+            .insert("assets/brick.png", 2, 2, vec![255; 16])
+            .expect("brick texture");
+        frame.resolve_textures(&store);
+        assert_eq!(frame.items[0].base_texture, Some(brick_id));
+        assert_eq!(frame.textures.len(), 1);
+    }
+
+    #[test]
+    fn world_weather_and_sky_layers_reach_frame_and_resolve() {
+        let mut world = empty_world();
+        world
+            .define_table(
+                TableSpec::new(petunia_world::WEATHER_TABLE)
+                    .column("preset", ValueKind::Text, Value::Text("rain".to_string()))
+                    .column("hours", ValueKind::Float, Value::Float(20.0))
+                    .column("weight", ValueKind::Float, Value::Float(1.0))
+                    .column("volume", ValueKind::Text, Value::Text(String::new())),
+            )
+            .expect("Weather");
+        world
+            .define_table(
+                TableSpec::new(petunia_world::SKY_LAYER_TABLE)
+                    .column("order", ValueKind::Int, Value::Int(0))
+                    .column("color", ValueKind::Color, Value::Color(Color::WHITE))
+                    .column(
+                        "image",
+                        ValueKind::Text,
+                        Value::Text("assets/sky.png".to_string()),
+                    )
+                    .column("alpha", ValueKind::Float, Value::Float(0.8))
+                    .column(
+                        "scroll",
+                        ValueKind::Vec3,
+                        Value::Vec3(Vec3::new(0.01, 0.0, 0.0)),
+                    ),
+            )
+            .expect("SkyLayer");
+
+        let weather_entity = world.spawn().expect("spawn");
+        world
+            .insert_row_values(
+                weather_entity,
+                petunia_world::WEATHER_TABLE,
+                vec![
+                    Value::Text("rain".to_string()),
+                    Value::Float(20.0),
+                    Value::Float(1.0),
+                    Value::Text(String::new()),
+                ],
+            )
+            .expect("weather row");
+
+        let sky_entity = world.spawn().expect("spawn");
+        world
+            .insert_row_values(
+                sky_entity,
+                petunia_world::SKY_LAYER_TABLE,
+                vec![
+                    Value::Int(5),
+                    Value::Color(Color::WHITE),
+                    Value::Text("assets/sky.png".to_string()),
+                    Value::Float(0.8),
+                    Value::Vec3(Vec3::new(0.01, 0.0, 0.0)),
+                ],
+            )
+            .expect("sky row");
+
+        let mut frame = extract_frame(&world, Camera::default());
+        assert!(frame.fog.is_some(), "rain weather brings fog to the frame");
+        assert_eq!(frame.sky_layers.len(), 1);
+        assert_eq!(frame.sky_layers[0].order, 5);
+        assert_eq!(frame.sky_layers[0].image_asset, "assets/sky.png");
+        assert_eq!(frame.sky_layers[0].alpha, 0.8);
+
+        let mut store = TextureStore::new();
+        let sky_id = store
+            .insert("assets/sky.png", 4, 4, vec![200; 64])
+            .expect("sky texture");
+        frame.resolve_textures(&store);
+        assert_eq!(frame.sky_layers[0].image, Some(sky_id));
+        assert_eq!(frame.textures.len(), 1);
     }
 }

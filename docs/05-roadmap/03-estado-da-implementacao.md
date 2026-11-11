@@ -1,6 +1,6 @@
 # Estado da implementação
 
-**Revisão:** 2026-11-10 (prefabs do próprio projeto; linhas consolidadas: cenas, animação, vegetação, outliner, grid, prefabs, interface de malha e 2D) · **Fase atual:** 1 (esqueleto) concluída no código; **fase 2 (editor e construção de mapas) avançou**
+**Revisão:** 2026-11-10 (prefabs do próprio projeto; linhas consolidadas: cenas, animação, vegetação, outliner, grid, prefabs, interface de malha e 2D) · **Fase atual:** 1 concluída no código; fase 2 avançou. **Edição de malha completa removida** (DR-51): ficam blocagem e booleano. **Cor por face de caixa** (DR-52): Operações > Pintar face…. **Plano DR-53:** os cortes A–C estão registrados como feitos no [`DR-53`](../06-decisoes/registro-de-decisoes.md); o resto do [plano](04-plano-mapas-materiais-e-interface.md) ainda não foi implementado.
 
 ## Resumo (TL;DR)
 
@@ -16,13 +16,13 @@ Três análises novas pedem a sua decisão: [paridade da interface](../02-arquit
 
 ## Etapa atual: prefabs do próprio projeto (2026-11-10)
 
-Fecha o item que a fase 2 listava desde o `DR-31` (“prefabs do próprio projeto”). Decisão: [`DR-51`](../06-decisoes/registro-de-decisoes.md).
+Fecha o item que a fase 2 listava desde o `DR-31` (“prefabs do próprio projeto”). Decisão: [`DR-54`](../06-decisoes/registro-de-decisoes.md).
 
 | Entrega | Evidência |
 |---|---|
 | `prefab.save`: o objeto selecionado vira `prefabs/<nome>.prefab.json` — as linhas do objeto mais as **colisões**, os **scripts extras** e os **traços** que apontam para ele; a posição gravada vira zero, então o molde não guarda o lugar onde foi feito | 3 testes: a caixa com colisor volta com o colisor, `prefab.list` vê 5 e criar é **um** desfazer; a cópia nasce na frente da câmera, não onde foi salva; salvar de novo sobe a revisão e arquivo quebrado, nome desconhecido e falta de seleção são recusados com o motivo |
 | `prefab.spawn_project` e `prefab.spawn` com `id: "project:<nome>"`: cria na frente da câmera, no andar atual, num `world.batch` (um desfazer), já selecionado | os mesmos 3 testes |
-| Janela: **Criar ▸ Salvar seleção como prefab…** (nome no diálogo) e **Criar ▸ Prefab do projeto** (submenu recriado ao abrir, com “(nenhum prefab salvo)” quando vazio) | visto no display virtual; `scripts/editor-smoke.sh` **18/18**: o passo novo salva a malha selecionada como `smoke`, cria a cópia pelo submenu e confere o arquivo (posição zero, revisão 1) e as duas malhas na cena salva |
+| Janela: **Criar ▸ Salvar seleção como prefab…** (nome no diálogo) e **Criar ▸ Prefab do projeto** (submenu recriado ao abrir, com “(nenhum prefab salvo)” quando vazio) | visto no display virtual; `scripts/editor-smoke.sh` **17/17**: o passo novo salva a caixa selecionada como `smoke`, cria a cópia pelo submenu e confere o arquivo (posição zero, revisão 1) e o acréscimo de exatamente uma caixa na cena salva (2 antes, 3 depois) |
 
 **Limites declarados:** o molde guarda **um** objeto por arquivo (o formato já aceita `objects` com vários, mas o salvar grava a seleção); sem seleção, não salva. Salvar o mesmo nome sobe a revisão, mas **cópias já colocadas nunca são reescritas** — atualizar o que já está na cena precisa de decisão própria. O prefab guarda o **anexo** de script, não o arquivo: apagar `scripts/<nome>.aipo` deixa o anexo apontando para um arquivo que não existe (o Project Doctor avisa, como para qualquer anexo).
 
@@ -608,7 +608,7 @@ Fase 2 do pedido "pendências e fases 1 a 6". Decisão: [DR-29](../06-decisoes/r
 
 **Não verificado:** importar um modelo real de um programa de modelagem (só GLBs montados nos testes); a sua sessão real; leitor de tela.
 
-**Ainda falta da fase 2:** material por face; interface da grade no viewport (o `grid`/A\* existe para scripts desde 2026-11-09).
+**Ainda falta da fase 2:** interface da grade no viewport (o `grid`/A\* existe para scripts desde 2026-11-09). A cor por face de caixa entrou em 2026-11-09 (DR-52).
 
 ## Última etapa: personagem, modo Jogar e solidez automática (2026-10-26)
 

@@ -92,9 +92,8 @@ xdotool mouseup 1;                               sleep 0.6
 # Regression: choosing a table in "Adicionar tabela" rebuilds the inspector from inside that
 # button's menu. Deleting a widget inside its own signal used to crash Qt (SIGSEGV).
 xdotool mousemove 1185 600; for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do xdotool click 5; sleep 0.05; done; sleep 0.4
-# 497, not 457: a brush now also shows "Tornar editável" above this button, which moved it down
-# by one row. The coordinate is the middle of the button, so a new row above it means a new number.
-xdotool mousemove 1185 497 click 1;              sleep 0.6   # open the "Adicionar tabela" menu
+# The "Tornar editável" row is gone (DR-51), so the button is back at the earlier height.
+xdotool mousemove 1185 457 click 1;              sleep 0.6   # open the "Adicionar tabela" menu
 # The menu lists the tables the object still lacks, in alphabetical order, so this count follows the
 # schema: Bridge, Character, EditorState, Floor, Light, Mesh, PlayerStart... Adding a table that sorts
 # before PlayerStart (or removing one) means changing the number of Downs here.
@@ -125,15 +124,9 @@ xdotool mousemove 740 420 click 1;               sleep 0.5
 xdotool key Return;                              sleep 0.8
 xdotool key v;                                   sleep 0.3   # back to select
 xdotool mousemove 100 408 click 1;               sleep 0.5   # select the "Caixa" on the ground in the hierarchy
-xdotool mousemove 335 51 click 1;                sleep 0.8   # the Edição mode button (converts the selected box to a mesh)
-xdotool key 1;                                   sleep 0.4   # switch to vertex mode
-xdotool mousemove 990 431 click 1;               sleep 0.4   # pick component
-xdotool key 2;                                   sleep 0.4   # switch to edge mode
-xdotool mousemove 990 431 click 1;               sleep 0.4   # pick component
-xdotool key 3;                                   sleep 0.4   # switch to face mode
-xdotool mousemove 990 431 click 1;               sleep 0.4   # pick component
-xdotool key Tab;                                 sleep 0.6   # exit Edit Mode (remains a mesh)
-# Prefabs of the project (DR-51): the selected mesh becomes prefabs/smoke.prefab.json and comes
+xdotool key ctrl+s;                              sleep 0.5   # baseline before the prefab copy
+cp "$workdir/sala/scenes/room.scene.json" "$output.before-prefab.scene.json"
+# Prefabs of the project (DR-54): the selected box becomes prefabs/smoke.prefab.json and comes
 # back from Criar > Prefab do projeto. The menu is walked with Up, which is steadier than clicking:
 # the first Up lands on the last item (Sol), and eight presses reach Salvar seleção como prefab…
 # (Luz, Importar imagem, Importar modelo, aleatória, Caverna, Terreno), nine reach Prefab do projeto.
@@ -192,7 +185,7 @@ fi
 
 # The gizmo drag must have moved crate #9 along X only, onto the 0.5 m grid.
 set +e
-python3 -I - "$output.scene.json" "$aipo_has_graph" "$workdir/sala" <<'PY'
+python3 -I - "$output.scene.json" "$aipo_has_graph" "$workdir/sala" "$output.before-prefab.scene.json" <<'PY'
 import json, sys
 scene = json.load(open(sys.argv[1]))
 crate = next(e for e in scene["entities"] if e["id"] == 9)
@@ -219,14 +212,8 @@ import os
 script_path = sys.argv[1].replace(".scene.json", ".script.aipo")
 scripted = os.path.exists(script_path) and "fn on_update(entity, dt) {\n    log.info(" in open(script_path).read()
 print("verificação: script escrito no editor de código e salvo em scripts/ ->", "ok" if scripted else "FALHOU")
-converted_to_mesh = any(
-    e["rows"].get("Name", {}).get("text") in ("Caixa", "Caixa grande")
-    and "Mesh" in e["rows"] and "Brush" not in e["rows"]
-    for e in scene["entities"]
-)
-print("verificação: modo de edição converteu caixa para malha editável ->", "ok" if converted_to_mesh else "FALHOU")
-# Prefabs of the project (DR-51): the menu saved the selection as text with the position zeroed,
-# and created a copy back in the scene (the original mesh plus the copy).
+# Prefabs of the project (DR-54): the menu saved the selection as text with the position zeroed,
+# and created a copy back in the scene (the original box plus the copy).
 prefab_path = os.path.join(sys.argv[3], "prefabs", "smoke.prefab.json")
 prefab = json.load(open(prefab_path)) if os.path.exists(prefab_path) else {}
 objects = prefab.get("objects", [])
@@ -235,22 +222,28 @@ prefab_ok = (
     and prefab.get("name") == "smoke"
     and prefab.get("revision") == 1
     and len(objects) == 1
-    and "Mesh" in objects[0].get("rows", {})
+    and "Brush" in objects[0].get("rows", {})
     and objects[0]["rows"]["Transform"]["position"] == {"x": 0.0, "y": 0.0, "z": 0.0}
 )
 print("verificação: prefab salvo em prefabs/smoke.prefab.json com a posição zerada ->", "ok" if prefab_ok else "FALHOU")
-mesh_copies = [
-    e for e in scene["entities"]
-    if e["rows"].get("Name", {}).get("text") == "Caixa" and "Mesh" in e["rows"]
-]
-prefab_spawned = len(mesh_copies) >= 2
-print(f"verificação: Criar > Prefab do projeto criou uma cópia na cena ({len(mesh_copies)} malhas 'Caixa') ->", "ok" if prefab_spawned else "FALHOU")
+before = json.load(open(sys.argv[4]))
+
+
+def brush_boxes(entities):
+    return [
+        e for e in entities
+        if e["rows"].get("Name", {}).get("text") == "Caixa" and "Brush" in e["rows"]
+    ]
+
+
+prefab_spawned = len(brush_boxes(scene["entities"])) == len(brush_boxes(before["entities"])) + 1
+print(f"verificação: Criar > Prefab do projeto criou uma cópia na cena ({len(brush_boxes(scene['entities']))} caixas 'Caixa', antes {len(brush_boxes(before['entities']))}) ->", "ok" if prefab_spawned else "FALHOU")
 hero_free = not any(e["rows"].get("Name", {}).get("text") == "Jogador" for e in scene["entities"]) and not any("Character" in e["rows"] for e in scene["entities"])
 print("verificação: Jogar (F6) e parar (Esc) não deixaram o herói de reserva na cena salva ->", "ok" if hero_free else "FALHOU")
 # Phase 2, below, proves the pNodes side. Here an Aipo project must not have produced a graph.
 no_graph_in_aipo = sys.argv[2] == "0"
 print("verificação: projeto Aipo não criou grafo (a aba Lógica não é oferecida) ->", "ok" if no_graph_in_aipo else "FALHOU")
-phase1_ok = moved and added and on_cursor and built_up and carved and dug and scripted and converted_to_mesh and prefab_ok and prefab_spawned and hero_free and no_graph_in_aipo
+phase1_ok = moved and added and on_cursor and built_up and carved and dug and scripted and prefab_ok and prefab_spawned and hero_free and no_graph_in_aipo
 sys.exit(0 if phase1_ok else 1)
 PY
 phase1_failed=$?

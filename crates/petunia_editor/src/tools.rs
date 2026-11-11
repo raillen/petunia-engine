@@ -479,7 +479,13 @@ impl EditorSession {
                 }
             }
             _ if self.edit_pivot => self.object_pivot(id, position, rotation, scale),
-            _ => self.pivot_for(id, position, rotation, scale),
+            _ => {
+                if let Some(comp_pivot) = self.component_pivot(id) {
+                    comp_pivot
+                } else {
+                    self.pivot_for(id, position, rotation, scale)
+                }
+            }
         };
         Some((
             id,
@@ -540,7 +546,9 @@ impl EditorSession {
             .and_then(|(_, _, model)| gizmo::hit_test(&model, pointer.mouse()));
         // A collider face handle wins over the object under it: it is small and drawn on top.
         let collider = self.hover.is_none() && self.collider_handle_under(pointer).is_some();
-        self.hovered = if self.hover.is_some() || collider {
+        let box_handle =
+            self.hover.is_none() && !collider && self.box_handle_under(pointer).is_some();
+        self.hovered = if self.hover.is_some() || collider || box_handle {
             None
         } else {
             self.entity_under(pointer).map(|(entity, _)| entity)
@@ -550,6 +558,7 @@ impl EditorSession {
             "entity": self.hovered,
             "face": null,
             "collider": collider,
+            "box": box_handle,
         })
     }
 
@@ -686,6 +695,9 @@ impl EditorSession {
             self.gesture_preview(entity, "Transform", "pivot", &vector_json(offset))?;
             self.hud = Some(format!("Pivô {}", result.summary));
             return Ok(json!({ "summary": self.hud }));
+        }
+        if !self.components.is_empty() {
+            return self.component_drag(entity, &drag, &start, &result, snap.translate);
         }
         for (column, value, before) in [
             ("position", result.position, start.position),
@@ -1038,6 +1050,13 @@ impl EditorSession {
                 "snap": "Ctrl inverte o snap · Esc cancela",
             })
         });
+        let box_hud = self.box_drag.map(|_| {
+            json!({
+                "title": "Redimensionar caixa",
+                "detail": self.hud.clone().unwrap_or_default(),
+                "snap": "Ctrl inverte o snap · Esc cancela",
+            })
+        });
         let collider_hud = self.collider_drag.map(|_| {
             json!({
                 "title": "Redimensionar colisão",
@@ -1071,7 +1090,8 @@ impl EditorSession {
                 })
             })
             .or(face_hud)
-            .or(collider_hud);
+            .or(collider_hud)
+            .or(box_hud);
         json!({
             "camera": camera,
             "tool": self.tool.name(),

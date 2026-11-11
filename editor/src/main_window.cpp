@@ -75,18 +75,6 @@
 // Two taps on G, R or S within this time enter free mode (Petunia3D default: 350 ms).
 static constexpr qint64 kDoubleTapMilliseconds = 350;
 
-static QString componentModeName(ComponentMode mode) {
-    switch (mode) {
-    case ComponentMode::Vertex:
-        return QStringLiteral("vertex");
-    case ComponentMode::Edge:
-        return QStringLiteral("edge");
-    case ComponentMode::Face:
-        return QStringLiteral("face");
-    }
-    return QStringLiteral("face");
-}
-
 namespace {
 
 // A spin box steps by its singleStep. The stamp angle uses 15° so a quarter turn is six presses, and
@@ -170,7 +158,6 @@ MainWindow::MainWindow() : bridge_(std::make_unique<EngineBridge>()) {
     buildAppBar();
     buildToolPalette();
     buildSculptBar();
-    buildMeshBar();
     buildNaturalBar();
     buildDocks();
 
@@ -180,17 +167,6 @@ MainWindow::MainWindow() : bridge_(std::make_unique<EngineBridge>()) {
     statusBar()->addPermanentWidget(cameraLabel_);
 
     viewport_->installEventFilter(this);
-    // X11 delivers auto-repeat as a press/release pair, and Qt does not always mark the release as
-    // a repeat: a release only commits if the key does not press again right after it.
-    meshPreviewCommitTimer_ = new QTimer(this);
-    meshPreviewCommitTimer_->setSingleShot(true);
-    meshPreviewCommitTimer_->setInterval(120);
-    connect(meshPreviewCommitTimer_, &QTimer::timeout, this, [this] { endMeshPreview(true); });
-    connect(viewport_, &ViewportWidget::meshValueKeyReleased, this, [this] {
-        if (meshPreviewing_) {
-            meshPreviewCommitTimer_->start();
-        }
-    });
     connect(bridge_.get(), &EngineBridge::snapshotChanged, this, &MainWindow::onSnapshot);
     connect(viewport_, &ViewportWidget::selectionChanged, this, [this] { bridge_->refresh(); });
     connect(viewport_, &ViewportWidget::cameraChanged, this, &MainWindow::updateCameraLabel);
@@ -278,25 +254,8 @@ MainWindow::MainWindow() : bridge_(std::make_unique<EngineBridge>()) {
             updateCameraLabel();
         }
     });
-    connect(header_, &ViewportHeader::editModeRequested, this, [this](bool on) {
-        if (viewport_->isEditMode() != on) {
-            toggleEditMode();
-        }
-    });
-    connect(header_, &ViewportHeader::componentModeRequested, this, &MainWindow::setComponentMode);
-    connect(viewport_, &ViewportWidget::editModeChanged, header_, &ViewportHeader::showEditMode);
-    connect(viewport_, &ViewportWidget::componentModeChanged, header_, &ViewportHeader::showComponentMode);
-    connect(viewport_, &ViewportWidget::editModeToggleRequested, this, &MainWindow::toggleEditMode);
     connect(viewport_, &ViewportWidget::renderFailed, this, [this](const QString& message) {
         statusBar()->showMessage(message);
-    });
-    connect(viewport_, &ViewportWidget::meshStatus, this, [this](const QString& message) {
-        statusBar()->showMessage(message, 8000);
-    });
-    connect(viewport_, &ViewportWidget::knifeArmedChanged, this, [this](bool armed) {
-        if (knifeAction_ != nullptr && knifeAction_->isChecked() != armed) {
-            knifeAction_->setChecked(armed);
-        }
     });
     connect(hierarchy_, &HierarchyPanel::selectionRequested, this, [this](quint64 entity) {
         selectEntity(entity);
@@ -410,19 +369,6 @@ void MainWindow::buildActions() {
     deleteAction_->setShortcut(QKeySequence::Delete);
     clearSelectionAction_ = make(QStringLiteral("Limpar seleção"), QStringLiteral("Deixa de selecionar o objeto"));
     clearSelectionAction_->setShortcut(QKeySequence(Qt::Key_Escape));
-
-    editModeAction_ = make(QStringLiteral("Modo de edição"), QStringLiteral("Alterna entre Modo Objeto e Modo Edição de Malha (Tab)"));
-    editModeAction_->setCheckable(true);
-    editModeAction_->setShortcut(QKeySequence(Qt::Key_Tab));
-    vertexModeAction_ = make(QStringLiteral("Vértices"), QStringLiteral("Selecionar vértices da malha (1)"));
-    vertexModeAction_->setCheckable(true);
-    vertexModeAction_->setShortcut(QKeySequence(Qt::Key_1));
-    edgeModeAction_ = make(QStringLiteral("Arestas"), QStringLiteral("Selecionar arestas da malha (2)"));
-    edgeModeAction_->setCheckable(true);
-    edgeModeAction_->setShortcut(QKeySequence(Qt::Key_2));
-    faceModeAction_ = make(QStringLiteral("Faces"), QStringLiteral("Selecionar faces da malha (3)"));
-    faceModeAction_->setCheckable(true);
-    faceModeAction_->setShortcut(QKeySequence(Qt::Key_3));
 
     struct ShapeInfo {
         const char* shape;
@@ -610,6 +556,7 @@ void MainWindow::buildActions() {
     hollowAction_ = make(QStringLiteral("Tornar oco"), QStringLiteral("A caixa vira piso, teto e quatro paredes com a espessura do snap: salas, cavernas (Ctrl+Alt+H)"));
     hollowAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_H));
     cutPlaneAction_ = make(QStringLiteral("Cortar com plano…"), QStringLiteral("Divide a caixa selecionada em duas com um plano perpendicular a um dos eixos dela (Ctrl+Alt+P)"));
+    paintFaceAction_ = make(QStringLiteral("Pintar face…"), QStringLiteral("Pinta a face da caixa que estava sob o mouse. A outra cor fica no objeto."));
     cutPlaneAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_P));
     arrangeLineAction_ = make(QStringLiteral("Arranjo em linha…"), QStringLiteral("Copia a caixa selecionada em linha reta, com um passo em metros (Ctrl+Alt+L)"));
     arrangeLineAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_L));
@@ -660,23 +607,8 @@ void MainWindow::buildActions() {
     connect(duplicateAction_, &QAction::triggered, this, [this] { perform(QStringLiteral("edit.duplicate"), {}); });
     connect(deleteAction_, &QAction::triggered, this, [this] { perform(QStringLiteral("edit.delete"), {}); });
     connect(clearSelectionAction_, &QAction::triggered, this, [this] {
-        if (meshPreviewing_) {
-            endMeshPreview(false);
-            return;
-        }
-        if (knifeClick_) {
-            cancelKnife();
-            return;
-        }
-        if (viewport_->isEditMode()) {
-            viewport_->setEditMode(false);
-        }
         perform(QStringLiteral("selection.set"), {});
     });
-    connect(editModeAction_, &QAction::triggered, this, &MainWindow::toggleEditMode);
-    connect(vertexModeAction_, &QAction::triggered, this, [this] { setComponentMode(ComponentMode::Vertex); });
-    connect(edgeModeAction_, &QAction::triggered, this, [this] { setComponentMode(ComponentMode::Edge); });
-    connect(faceModeAction_, &QAction::triggered, this, [this] { setComponentMode(ComponentMode::Face); });
     for (QAction* action : shapeActions_) {
         connect(action, &QAction::triggered, this, [this, action] {
             perform(QStringLiteral("create.brush"), QJsonObject{{"shape", action->data().toString()}});
@@ -812,6 +744,7 @@ void MainWindow::buildActions() {
         }
     });
     connect(cutPlaneAction_, &QAction::triggered, this, &MainWindow::showCutPlaneDialog);
+    connect(paintFaceAction_, &QAction::triggered, this, &MainWindow::showPaintFaceDialog);
     connect(arrangeLineAction_, &QAction::triggered, this, &MainWindow::showArrangeLineDialog);
     connect(arrangeCircleAction_, &QAction::triggered, this, &MainWindow::showArrangeCircleDialog);
     connect(mirrorAction_, &QAction::triggered, this, &MainWindow::showMirrorDialog);
@@ -850,29 +783,10 @@ void MainWindow::buildMenus() {
     edit->addAction(clearSelectionAction_);
     edit->addSeparator();
     edit->addAction(preferencesAction_);
-    edit->addSeparator();
-    edit->addAction(editModeAction_);
-    edit->addAction(vertexModeAction_);
-    edit->addAction(edgeModeAction_);
-    edit->addAction(faceModeAction_);
 
     QMenu* mesh = menus_->addMenu(QStringLiteral("&Malha"));
-    for (QAction* action : std::as_const(meshActions_)) {
-        mesh->addAction(action);
-    }
-    mesh->addSeparator();
-    mesh->addAction(convertMeshAction_);
     mesh->addAction(booleanAction_);
-    // These need two points on edges, so they are not a single-button op.
-    mesh->addAction(knifeAction_);
-    knifeNumbersAction_ = mesh->addAction(QStringLiteral("Faca por números…"));
-    knifeNumbersAction_->setToolTip(QStringLiteral("O mesmo corte, digitando as arestas e as frações (sem mouse)"));
-    knifeNumbersAction_->setIcon(PetuniaIcons::get(QStringLiteral("knife")));
-    connect(knifeNumbersAction_, &QAction::triggered, this, &MainWindow::meshKnife);
-    meshInfoAction_ = mesh->addAction(QStringLiteral("Informações da malha"));
-    meshInfoAction_->setToolTip(QStringLiteral("Vértices, arestas, faces e se o sólido é fechado"));
-    meshInfoAction_->setIcon(PetuniaIcons::get(QStringLiteral("help")));
-    connect(meshInfoAction_, &QAction::triggered, this, &MainWindow::showMeshInfo);
+    mesh->addAction(loopCutAction_);
 
     QMenu* create = menus_->addMenu(QStringLiteral("&Criar"));
     create->addAction(primitivesMenuAction_);
@@ -932,6 +846,7 @@ void MainWindow::buildMenus() {
     operations->addAction(hollowAction_);
     operations->addSeparator();
     operations->addAction(cutPlaneAction_);
+    operations->addAction(paintFaceAction_);
     operations->addAction(arrangeLineAction_);
     operations->addAction(arrangeCircleAction_);
     operations->addAction(mirrorAction_);
@@ -1244,6 +1159,7 @@ void MainWindow::buildAppBar() {
     setActionIcon(duplicateAction_, QStringLiteral("duplicate"));
     setActionIcon(deleteAction_, QStringLiteral("trash"));
     setActionIcon(cutPlaneAction_, QStringLiteral("plane"));
+    setActionIcon(paintFaceAction_, QStringLiteral("paint_3d"));
     setActionIcon(arrangeLineAction_, QStringLiteral("duplicate"));
     setActionIcon(arrangeCircleAction_, QStringLiteral("circle"));
     setActionIcon(mirrorAction_, QStringLiteral("mirror"));
@@ -1317,24 +1233,12 @@ void MainWindow::buildToolPalette() {
         }
         auto* tool = new QToolButton(palette);
         tool->setDefaultAction(toolActions_[index]);
-        if (index == 4 || index == 5) {
-            editOnlyTools_.append(tool);
-            tool->hide();
-        }
         tool->setProperty("role", QStringLiteral("appTool"));
         tool->setIconSize(QSize(16, 16));
         tool->setFixedSize(28, 28);
         setActionIcon(toolActions_[index], toolActions_[index]->property("iconName").toString());
         layout->addWidget(tool);
     }
-    rule();
-    auto* editMesh = new QToolButton(palette);
-    editMesh->setDefaultAction(editModeAction_);
-    editMesh->setProperty("role", QStringLiteral("appTool"));
-    editMesh->setIconSize(QSize(16, 16));
-    editMesh->setFixedSize(28, 28);
-    setActionIcon(editModeAction_, QStringLiteral("mode_edit"));
-    layout->addWidget(editMesh);
     rule();
     auto* primitives = new QToolButton(palette);
     primitives->setProperty("role", QStringLiteral("appTool"));
@@ -1386,169 +1290,21 @@ void MainWindow::applyDefaultDocks(const QString& id) {
 }
 
 void MainWindow::buildMeshActions() {
-    struct MeshAction {
-        const char* operation;
-        const char* title;
-        const char* icon;
-        const char* tip;
-        const char* shortcut;
-    };
-    const MeshAction actions[] = {
-        {"mesh.inset", "Inserir (I)", "inset", "Recua as faces escolhidas (I); segure para ajustar ao vivo", "I"},
-        {"mesh.extrude", "Extrudar (Ctrl+E)", "extrude", "Puxa as faces escolhidas (Ctrl+E); segure para ajustar ao vivo", "Ctrl+E"},
-        {"mesh.bevel", "Chanfro (Ctrl+B)", "bevel", "Arredonda as arestas escolhidas (Ctrl+B); segure para ajustar ao vivo", "Ctrl+B"},
-        {"mesh.loop_cut", "Corte em laço (Ctrl+R)", "loop_cut", "Corta o anel da aresta escolhida (Ctrl+R); segure para ajustar ao vivo", "Ctrl+R"},
-        {"mesh.subdivide", "Subdividir", "subdivide", "Divide as faces escolhidas", ""},
-        {"mesh.dissolve", "Dissolver arestas", "dissolve", "Junta as duas faces de cada aresta escolhida (Ctrl+X)", "Ctrl+X"},
-        {"mesh.merge", "Fundir vértices", "merge", "Junta os vértices escolhidos num só (M)", "M"},
-        {"mesh.merge_by_distance", "Fundir por distância", "weld", "Junta vértices muito próximos", ""},
-        {"mesh.delete_faces", "Apagar faces", "delete", "Remove as faces escolhidas (X)", "X"},
-        {"mesh.flip", "Virar normais", "flip_normals", "Inverte as faces escolhidas", ""},
-    };
-    for (const MeshAction& entry : actions) {
-        auto* action = new QAction(QString::fromLatin1(entry.title), this);
-        action->setToolTip(QString::fromLatin1(entry.tip));
-        action->setData(QString::fromLatin1(entry.operation));
-        action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
-        const QString operation = QString::fromLatin1(entry.operation);
-        const bool live_value = operation == QLatin1String("mesh.inset")
-                                || operation == QLatin1String("mesh.extrude")
-                                || operation == QLatin1String("mesh.bevel")
-                                || operation == QLatin1String("mesh.loop_cut");
-        if (entry.shortcut[0] != '\0' && !live_value) {
-            action->setShortcut(QKeySequence(QString::fromLatin1(entry.shortcut)));
-        }
-        if (live_value) {
-            // A shortcut on the viewport, not on the action: pressing shows the result live,
-            // releasing applies it (a tap is the old one-key behavior).
-            auto* shortcut = new QShortcut(QKeySequence(QString::fromLatin1(entry.shortcut)), viewport_);
-            shortcut->setContext(Qt::WidgetWithChildrenShortcut);
-            connect(shortcut, &QShortcut::activated, this, [this, operation] { startMeshPreview(operation); });
-        }
-        setActionIcon(action, QString::fromLatin1(entry.icon));
-        connect(action, &QAction::triggered, this, [this, operation] { applyMesh(operation); });
-        viewport_->addAction(action);
-        meshActions_.append(action);
-    }
-
-    // Object-mode actions of the Malha menu: they work on the selected object, not on a component
-    // of an editable mesh.
     booleanAction_ = new QAction(QStringLiteral("Booleano…"), this);
-    booleanAction_->setToolTip(QStringLiteral("Funde, corta ou cruza a malha selecionada com outro objeto"));
+    booleanAction_->setToolTip(QStringLiteral("Funde, corta ou cruza o objeto selecionado com outro"));
     booleanAction_->setStatusTip(booleanAction_->toolTip());
     setActionIcon(booleanAction_, QStringLiteral("boolean_fuse"));
     connect(booleanAction_, &QAction::triggered, this, &MainWindow::showBooleanDialog);
 
-    convertMeshAction_ = new QAction(QStringLiteral("Tornar editável"), this);
-    convertMeshAction_->setToolTip(QStringLiteral("Transforma o brush selecionado em malha editável; Tab entra no modo de edição"));
-    convertMeshAction_->setStatusTip(convertMeshAction_->toolTip());
-    setActionIcon(convertMeshAction_, QStringLiteral("mode_edit"));
-    connect(convertMeshAction_, &QAction::triggered, this, &MainWindow::convertSelectionToMesh);
-
-    // The knife has two ways in: clicking two edges in the viewport, or typing them. Both exist
-    // because the click is faster and the numbers work without a mouse (accessibility).
-    knifeAction_ = new QAction(QStringLiteral("Faca…"), this);
-    knifeAction_->setToolTip(QStringLiteral("Corta uma face entre dois pontos de arestas (K): clique as duas arestas"));
-    knifeAction_->setShortcut(QKeySequence(QStringLiteral("K")));
-    knifeAction_->setShortcutContext(Qt::WidgetWithChildrenShortcut);
-    setActionIcon(knifeAction_, QStringLiteral("knife"));
-    connect(knifeAction_, &QAction::triggered, this, &MainWindow::startKnifeByClick);
-    viewport_->addAction(knifeAction_);
+    loopCutAction_ = new QAction(QStringLiteral("Loop Cut…"), this);
+    loopCutAction_->setToolTip(QStringLiteral("Subdivide uma malha inserindo cortes contínuos em anéis de quads (Ctrl+R)"));
+    loopCutAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_R));
+    loopCutAction_->setStatusTip(loopCutAction_->toolTip());
+    setActionIcon(loopCutAction_, QStringLiteral("tool_loop_cut"));
+    connect(loopCutAction_, &QAction::triggered, this, &MainWindow::showLoopCutDialog);
 }
 
-void MainWindow::buildMeshBar() {
-    meshBar_ = new QToolBar(QStringLiteral("Malha"), this);
-    meshBar_->setObjectName(QStringLiteral("PetuniaToolOptions"));
-    meshBar_->setMovable(false);
-    meshBar_->setFloatable(false);
-    meshBar_->setAccessibleName(QStringLiteral("Operações de edição de malha"));
-    // Icons only: the names are in the tooltips and in the Malha menu, and the value fields fit.
-    meshBar_->setToolButtonStyle(Qt::ToolButtonIconOnly);
-    sceneLayout_->insertWidget(1, meshBar_);
-    meshBar_->hide();
-    meshBar_->addWidget(new QLabel(QStringLiteral(" Malha ")));
-    for (QAction* action : std::as_const(meshActions_)) {
-        meshBar_->addAction(action);
-    }
-    // The numbers go on their own row: a toolbar inside a layout clips what does not fit instead of
-    // offering an overflow button, and this row plus the icons is wider than the viewport column.
-    meshValuesBar_ = new QToolBar(QStringLiteral("Valores da malha"), this);
-    meshValuesBar_->setObjectName(QStringLiteral("PetuniaToolOptions"));
-    meshValuesBar_->setMovable(false);
-    meshValuesBar_->setFloatable(false);
-    meshValuesBar_->setAccessibleName(QStringLiteral("Valores das operações de malha"));
-    sceneLayout_->insertWidget(2, meshValuesBar_);
-    meshValuesBar_->hide();
-    meshValuesBar_->addWidget(new QLabel(QStringLiteral(" Ao arrastar ")));
-    meshPreviewBox_ = new QComboBox;
-    meshPreviewBox_->setAccessibleName(QStringLiteral("Operação com valor ao vivo"));
-    meshPreviewBox_->setToolTip(QStringLiteral(
-        "Escolha uma operação e arraste no viewport: a distância (ou o deslize) muda ao vivo; "
-        "solte para aplicar, Esc cancela. Shift deixa o ajuste fino"));
-    meshPreviewBox_->addItem(QStringLiteral("Nada (clique escolhe)"), QString());
-    meshPreviewBox_->addItem(QStringLiteral("Inserir"), QStringLiteral("inset"));
-    meshPreviewBox_->addItem(QStringLiteral("Extrudar"), QStringLiteral("extrude"));
-    meshPreviewBox_->addItem(QStringLiteral("Chanfro"), QStringLiteral("bevel"));
-    meshPreviewBox_->addItem(QStringLiteral("Corte em laço"), QStringLiteral("loop_cut"));
-    WheelGuard::protect(meshPreviewBox_);
-    meshValuesBar_->addWidget(meshPreviewBox_);
-    meshValuesBar_->addSeparator();
-    meshValuesBar_->addWidget(new QLabel(QStringLiteral(" Distância ")));
-    meshDistance_ = new QDoubleSpinBox;
-    meshDistance_->setRange(0.01, 10.0);
-    meshDistance_->setSingleStep(0.05);
-    meshDistance_->setDecimals(3);
-    meshDistance_->setValue(0.2);
-    meshDistance_->setSuffix(QStringLiteral(" m"));
-    meshDistance_->setAccessibleName(QStringLiteral("Distância da operação de malha"));
-    meshDistance_->setToolTip(QStringLiteral("Inserir, extrudar e chanfro usam esta distância"));
-    meshValuesBar_->addWidget(meshDistance_);
-    meshValuesBar_->addWidget(new QLabel(QStringLiteral("  Cortes ")));
-    meshCuts_ = new QSpinBox;
-    meshCuts_->setRange(1, 32);
-    meshCuts_->setValue(1);
-    meshCuts_->setAccessibleName(QStringLiteral("Número de cortes"));
-    meshCuts_->setToolTip(QStringLiteral("Cortes do laço e da subdivisão"));
-    meshValuesBar_->addWidget(meshCuts_);
-    meshValuesBar_->addWidget(new QLabel(QStringLiteral("  Segmentos ")));
-    meshSegments_ = new QSpinBox;
-    meshSegments_->setRange(1, 8);
-    meshSegments_->setValue(1);
-    meshSegments_->setAccessibleName(QStringLiteral("Segmentos do chanfro"));
-    meshValuesBar_->addWidget(meshSegments_);
-    meshValuesBar_->addWidget(new QLabel(QStringLiteral("  Deslize ")));
-    meshSlide_ = new QDoubleSpinBox;
-    meshSlide_->setRange(-1.0, 1.0);
-    meshSlide_->setSingleStep(0.05);
-    meshSlide_->setDecimals(2);
-    meshSlide_->setValue(0.0);
-    meshSlide_->setAccessibleName(QStringLiteral("Deslize do corte em laço"));
-    meshSlide_->setToolTip(QStringLiteral("Corte em laço: -1 a 1; 0 fica no meio da aresta"));
-    meshValuesBar_->addWidget(meshSlide_);
 
-    connect(meshPreviewBox_, &QComboBox::currentIndexChanged, this, [this](int index) {
-        viewport_->setLiveMeshOperation(meshPreviewBox_->itemData(index).toString());
-    });
-    connect(meshDistance_, &QDoubleSpinBox::valueChanged, this, [this] { syncMeshPreviewValues(); });
-    connect(meshCuts_, &QSpinBox::valueChanged, this, [this] { syncMeshPreviewValues(); });
-    connect(meshSegments_, &QSpinBox::valueChanged, this, [this] { syncMeshPreviewValues(); });
-    connect(meshSlide_, &QDoubleSpinBox::valueChanged, this, [this] { syncMeshPreviewValues(); });
-    syncMeshPreviewValues();
-    viewport_->setLiveMeshOperation(meshPreviewBox_->currentData().toString());
-}
-
-void MainWindow::syncMeshPreviewValues() {
-    if (viewport_ == nullptr) {
-        return;
-    }
-    viewport_->setLiveMeshValues(QJsonObject{
-        {QStringLiteral("distance"), meshDistance_ != nullptr ? meshDistance_->value() : 0.2},
-        {QStringLiteral("width"), meshDistance_ != nullptr ? meshDistance_->value() : 0.2},
-        {QStringLiteral("cuts"), meshCuts_ != nullptr ? meshCuts_->value() : 1},
-        {QStringLiteral("segments"), meshSegments_ != nullptr ? meshSegments_->value() : 1},
-        {QStringLiteral("slide"), meshSlide_ != nullptr ? meshSlide_->value() : 0.0},
-    });
-}
 
 void MainWindow::buildSculptBar() {
     // The tool's own options sit under the viewport strip, not across the whole window.
@@ -2110,9 +1866,6 @@ bool MainWindow::createSampleAt(const QString& path, const QString& name, bool i
 }
 
 void MainWindow::selectEntity(quint64 entity) {
-    if (viewport_->isEditMode() && bridge_->selection() != entity) {
-        viewport_->setEditMode(false);
-    }
     perform(QStringLiteral("selection.set"), QJsonObject{{"entity", static_cast<double>(entity)}}, false);
 }
 
@@ -2354,6 +2107,16 @@ void MainWindow::checkRecovery(bool interactive) {
 
 void MainWindow::onSnapshot() {
     const QJsonObject snapshot = bridge_->snapshot();
+    const QString component = snapshot.value(QStringLiteral("component")).toObject().value(QStringLiteral("label")).toString();
+    if (component != componentLabel_) {
+        const bool had = !componentLabel_.isEmpty();
+        componentLabel_ = component;
+        if (!component.isEmpty()) {
+            statusBar()->showMessage(component);
+        } else if (had) {
+            statusBar()->clearMessage();
+        }
+    }
     const bool project = bridge_->hasProject();
     const bool selected = bridge_->hasSelection();
     const QJsonObject info = snapshot.value(QStringLiteral("project")).toObject();
@@ -2448,6 +2211,7 @@ void MainWindow::onSnapshot() {
                             arrangeLineAction_, arrangeCircleAction_, mirrorAction_}) {
         action->setEnabled(selected);
     }
+    paintFaceAction_->setEnabled(project);
     for (QAction* action : {floorUpAction_, floorDownAction_}) {
         action->setEnabled(project);
     }
@@ -2468,10 +2232,6 @@ void MainWindow::onSnapshot() {
         }
     }
 
-    if (!selected && viewport_->isEditMode()) {
-        viewport_->setEditMode(false);
-        bridge_->call(QStringLiteral("mesh.edit_mode"), QJsonObject{{QStringLiteral("active"), false}});
-    }
     syncEditMode();
 
     hierarchy_->reload();
@@ -2762,9 +2522,8 @@ void MainWindow::showShortcuts() {
             "T terreno · Y rio · U estrada · com o terreno, a barra de espaços aplica um carimbo sem arrastar<br>"
             "No gizmo: seta = eixo, quadrado = plano, centro = tela; Ctrl inverte o snap; Esc cancela<br><br>"
             "<b>Edição</b><br>"
-            "Tab modo edição de malha · 1 vértice · 2 aresta · 3 face<br>"
-            "I inserir · Ctrl+E extrudar · Ctrl+B chanfro · Ctrl+R corte em laço: segure e mova o mouse para ajustar (soltar aplica, Esc cancela)<br>"
-            "K faca: clique duas arestas (Esc cancela) · Malha > Faca por números para digitar as arestas<br>"
+            "Malha > Booleano: fundir, cortar ou cruzar o objeto selecionado com outro<br>"
+            "Cantos e arestas âmbar da caixa redimensionam o brush; P e E empurram e extrudam uma face<br>"
             "Ctrl+Z desfazer · Ctrl+Shift+Z refazer<br>"
             "Ctrl+D duplicar · Delete excluir · Esc limpar seleção<br>"
             "Ctrl+1 caixa · Ctrl+2 rampa · Ctrl+3 cilindro<br>"
@@ -2827,50 +2586,7 @@ void MainWindow::showPrimitivesPie() {
     pie->popup(viewportArea.contains(cursor) ? cursor : viewportArea.center());
 }
 
-void MainWindow::toggleKnife() {
-    if (!viewport_->isEditMode()) {
-        statusBar()->showMessage(
-            QStringLiteral("Entre no modo de edição (Tab) com uma malha selecionada para usar a faca."),
-            5000);
-        if (knifeAction_ != nullptr) {
-            knifeAction_->setChecked(false);
-        }
-        return;
-    }
-    const bool arm = !viewport_->isKnifeArmed();
-    viewport_->setKnifeArmed(arm);
-    if (arm) {
-        statusBar()->showMessage(
-            QStringLiteral("Faca: clique na primeira aresta e depois na segunda, na mesma face; Esc cancela."),
-            8000);
-        viewport_->setFocus(Qt::OtherFocusReason);
-    } else {
-        statusBar()->showMessage(QStringLiteral("Faca cancelada."), 3000);
-    }
-}
 
-void MainWindow::convertSelectionToMesh() {
-    if (!bridge_->hasSelection()) {
-        statusBar()->showMessage(QStringLiteral("Selecione um objeto para tornar editável."), 5000);
-        return;
-    }
-    const Reply reply = perform(QStringLiteral("mesh.convert"),
-                                QJsonObject{{QStringLiteral("entity"), static_cast<double>(bridge_->selection())}},
-                                false);
-    if (reply.ok) {
-        const QJsonObject result = reply.result.toObject();
-        statusBar()->showMessage(
-            QStringLiteral("Malha editável: %1 vértices, %2 faces. Tab entra no modo de edição.")
-                .arg(result.value(QStringLiteral("vertices")).toInt())
-                .arg(result.value(QStringLiteral("faces")).toInt()),
-            8000);
-    } else if (reply.code == QLatin1String("EDITOR_ALREADY_A_MESH")) {
-        statusBar()->showMessage(QStringLiteral("O objeto já é uma malha editável; Tab entra no modo de edição."),
-                                 5000);
-    } else {
-        showFailure(reply, true);
-    }
-}
 
 void MainWindow::showBooleanDialog() {
     if (!bridge_->hasSelection()) {
@@ -2955,6 +2671,100 @@ void MainWindow::showBooleanDialog() {
                          ? QStringLiteral(" A ferramenta foi removida; Ctrl+Z desfaz.")
                          : QString()),
             8000);
+    }
+}
+
+void MainWindow::showLoopCutDialog() {
+    if (!bridge_->hasSelection()) {
+        statusBar()->showMessage(QStringLiteral("Selecione a malha que vai receber o corte."), 5000);
+        return;
+    }
+    const quint64 target = bridge_->selection();
+
+    bool isMesh = false;
+    bool isBrush = false;
+    for (const QJsonValue& value : bridge_->snapshot().value(QStringLiteral("entities")).toArray()) {
+        const QJsonObject entity = value.toObject();
+        if (static_cast<quint64>(entity.value(QStringLiteral("id")).toDouble()) == target) {
+            const QJsonArray tables = entity.value(QStringLiteral("tables")).toArray();
+            for (const QJsonValue& table : tables) {
+                if (table.toString() == QLatin1String("Mesh")) {
+                    isMesh = true;
+                } else if (table.toString() == QLatin1String("Brush")) {
+                    isBrush = true;
+                }
+            }
+            break;
+        }
+    }
+
+    if (!isMesh && isBrush) {
+        perform(QStringLiteral("mesh.convert"), QJsonObject{{QStringLiteral("entity"), static_cast<double>(target)}}, true);
+        isMesh = true;
+    }
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(QStringLiteral("Loop Cut"));
+    auto* layout = new QFormLayout(&dialog);
+
+    auto* cutsSpin = new QSpinBox(&dialog);
+    cutsSpin->setRange(1, 32);
+    cutsSpin->setValue(1);
+    cutsSpin->setAccessibleName(QStringLiteral("Número de cortes"));
+    layout->addRow(QStringLiteral("Número de cortes"), cutsSpin);
+
+    auto* slideSpin = new QDoubleSpinBox(&dialog);
+    slideSpin->setRange(-1.0, 1.0);
+    slideSpin->setSingleStep(0.05);
+    slideSpin->setValue(0.0);
+    slideSpin->setAccessibleName(QStringLiteral("Deslizamento"));
+    layout->addRow(QStringLiteral("Deslizamento (slide)"), slideSpin);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    layout->addRow(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    const Reply reply = perform(
+        QStringLiteral("mesh.loop_cut"),
+        QJsonObject{
+            {QStringLiteral("entity"), static_cast<double>(target)},
+            {QStringLiteral("cuts"), cutsSpin->value()},
+            {QStringLiteral("slide"), slideSpin->value()},
+        },
+        true);
+    if (reply.ok) {
+        const QJsonObject result = reply.result.toObject();
+        statusBar()->showMessage(
+            QStringLiteral("Loop Cut: %1 cortes aplicados (%2 vértices, %3 faces). Ctrl+Z desfaz.")
+                .arg(result.value(QStringLiteral("cuts")).toInt())
+                .arg(result.value(QStringLiteral("vertices")).toInt())
+                .arg(result.value(QStringLiteral("faces")).toInt()),
+            5000);
+    } else {
+        statusBar()->showMessage(reply.explanation(), 5000);
+    }
+}
+
+void MainWindow::showPaintFaceDialog() {
+    const QColor chosen = QColorDialog::getColor(Qt::white, this, QStringLiteral("Cor da face"));
+    if (!chosen.isValid()) {
+        return;
+    }
+    QJsonObject fields = viewport_->lastPointerFields();
+    fields.insert(QStringLiteral("color"), QJsonObject{
+        {QStringLiteral("r"), chosen.redF()},
+        {QStringLiteral("g"), chosen.greenF()},
+        {QStringLiteral("b"), chosen.blueF()},
+        {QStringLiteral("a"), chosen.alphaF()},
+    });
+    const Reply reply = perform(QStringLiteral("brush.paint_face"), fields, true);
+    if (reply.ok) {
+        statusBar()->showMessage(QStringLiteral("Face pintada. Ctrl+Z desfaz."), 5000);
     }
 }
 
@@ -3188,514 +2998,29 @@ void MainWindow::showMirrorDialog() {
 }
 
 
-void MainWindow::meshKnife() {
-    if (!viewport_->isEditMode()) {
-        statusBar()->showMessage(QStringLiteral("Entre no modo de edição (Tab) com uma malha selecionada."), 5000);
-        return;
-    }
-    // A cut needs two points, each one on an edge of the mesh. The edges are the numbers the
-    // viewport already has selected or the person types; the fraction is along that edge.
-    QDialog dialog(this);
-    dialog.setWindowTitle(QStringLiteral("Faca: corte uma face entre duas arestas"));
-    dialog.resize(430, 320);
-    auto* layout = new QVBoxLayout(&dialog);
-    auto* hint = new QLabel(
-        QStringLiteral("Cada ponto fica numa aresta, escrito como os dois vértices dela "
-                       "(ex.: 0,1). A fração vai de 0 a 1 ao longo da aresta."),
-        &dialog);
-    hint->setWordWrap(true);
-    layout->addWidget(hint);
-    auto* form = new QFormLayout;
-    auto* startEdge = new QLineEdit(QStringLiteral("0,1"), &dialog);
-    startEdge->setAccessibleName(QStringLiteral("Aresta do ponto inicial"));
-    auto* startFraction = new QDoubleSpinBox(&dialog);
-    startFraction->setRange(0.0, 1.0);
-    startFraction->setSingleStep(0.1);
-    startFraction->setValue(0.5);
-    startFraction->setAccessibleName(QStringLiteral("Fração do ponto inicial"));
-    auto* endEdge = new QLineEdit(QStringLiteral("1,2"), &dialog);
-    endEdge->setAccessibleName(QStringLiteral("Aresta do ponto final"));
-    auto* endFraction = new QDoubleSpinBox(&dialog);
-    endFraction->setRange(0.0, 1.0);
-    endFraction->setSingleStep(0.1);
-    endFraction->setValue(0.5);
-    endFraction->setAccessibleName(QStringLiteral("Fração do ponto final"));
-    form->addRow(QStringLiteral("Aresta inicial"), startEdge);
-    form->addRow(QStringLiteral("Fração inicial"), startFraction);
-    form->addRow(QStringLiteral("Aresta final"), endEdge);
-    form->addRow(QStringLiteral("Fração final"), endFraction);
-    layout->addLayout(form);
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-    layout->addWidget(buttons);
-    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    if (dialog.exec() != QDialog::Accepted) {
-        return;
-    }
-    // "3,7" (or "3 7") becomes the pair the engine expects. Anything else is refused by it, with
-    // the reason in Portuguese, and the mesh does not change.
-    auto readEdge = [](const QLineEdit* field, const char* key) -> QJsonValue {
-        const QStringList parts = field->text().split(QRegularExpression(QStringLiteral("[,;\\s]+")),
-                                                      Qt::SkipEmptyParts);
-        if (parts.size() != 2) {
-            return QJsonValue();
-        }
-        bool first = false;
-        bool second = false;
-        const double a = parts.at(0).toDouble(&first);
-        const double b = parts.at(1).toDouble(&second);
-        if (!first || !second) {
-            return QJsonValue();
-        }
-        return QJsonObject{{QString::fromLatin1(key), QJsonArray{a, b}}};
-    };
-    const QJsonValue start = readEdge(startEdge, "edge");
-    const QJsonValue end = readEdge(endEdge, "edge");
-    if (start.isNull() || end.isNull()) {
-        statusBar()->showMessage(QStringLiteral("Cada aresta precisa de dois números (ex.: 0,1)."), 6000);
-        return;
-    }
-    const QJsonObject fields{
-        {QStringLiteral("start"), QJsonObject{{QStringLiteral("edge"), start.toObject().value(QStringLiteral("edge"))},
-                                             {QStringLiteral("fraction"), startFraction->value()}}},
-        {QStringLiteral("end"), QJsonObject{{QStringLiteral("edge"), end.toObject().value(QStringLiteral("edge"))},
-                                           {QStringLiteral("fraction"), endFraction->value()}}},
-    };
-    const Reply reply = perform(QStringLiteral("mesh.knife"), fields);
-    if (reply.ok) {
-        statusBar()->showMessage(QStringLiteral("Corte feito. Ctrl+Z desfaz."), 5000);
-    }
-}
 
-void MainWindow::meshBoolean() {
-    if (!bridge_->hasSelection()) {
-        statusBar()->showMessage(QStringLiteral("Selecione o objeto que recebe a operação."), 4000);
-        return;
-    }
-    const quint64 target = bridge_->selection();
 
-    // The tool is the other object: pick it from a searchable list, never a raw number.
-    QDialog dialog(this);
-    dialog.setWindowTitle(QStringLiteral("Booleano: escolha a ferramenta"));
-    dialog.resize(460, 300);
-    auto* layout = new QVBoxLayout(&dialog);
-    auto* hint = new QLabel(
-        QStringLiteral("O objeto selecionado é o que fica. A ferramenta é o que corta, "
-                       "se junta ou se sobrepõe."),
-        &dialog);
-    hint->setWordWrap(true);
-    layout->addWidget(hint);
-    auto* list = new QListWidget(&dialog);
-    list->setAccessibleName(QStringLiteral("Ferramenta do booleano"));
-    for (const QJsonValue& value : bridge_->snapshot().value(QStringLiteral("entities")).toArray()) {
-        const QJsonObject entity = value.toObject();
-        const double id = entity.value(QStringLiteral("id")).toDouble();
-        if (static_cast<quint64>(id) == target || entity.contains(QStringLiteral("owner"))) {
-            continue;
-        }
-        auto* item = new QListWidgetItem(
-            QStringLiteral("#%1 · %2").arg(static_cast<quint64>(id)).arg(
-                entity.value(QStringLiteral("name")).toString()),
-            list);
-        item->setData(Qt::UserRole, id);
-    }
-    if (list->count() == 0) {
-        statusBar()->showMessage(QStringLiteral("Precisa de outro objeto para ser a ferramenta."), 5000);
-        return;
-    }
-    layout->addWidget(list, 1);
-    auto* keepTool = new QCheckBox(QStringLiteral("Manter a ferramenta depois da operação"), &dialog);
-    keepTool->setAccessibleName(keepTool->text());
-    layout->addWidget(keepTool);
-    auto* operations = new QComboBox(&dialog);
-    operations->setAccessibleName(QStringLiteral("Operação booleana"));
-    operations->addItem(QStringLiteral("Fundir (união)"), QStringLiteral("union"));
-    operations->addItem(QStringLiteral("Cortar (diferença)"), QStringLiteral("subtract"));
-    operations->addItem(QStringLiteral("Interseção"), QStringLiteral("intersect"));
-    layout->addWidget(operations);
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-    layout->addWidget(buttons);
-    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    list->setCurrentRow(0);
-    if (dialog.exec() != QDialog::Accepted || list->currentItem() == nullptr) {
-        return;
-    }
-    QJsonObject fields{
-        {QStringLiteral("entity"), static_cast<double>(target)},
-        {QStringLiteral("tool"), list->currentItem()->data(Qt::UserRole).toDouble()},
-        {QStringLiteral("operation"), operations->currentData().toString()},
-        {QStringLiteral("keep_tool"), keepTool->isChecked()},
-    };
-    const Reply reply = perform(QStringLiteral("mesh.boolean"), fields);
-    if (reply.ok) {
-        viewport_->setEditMode(false);
-        bridge_->call(QStringLiteral("mesh.edit_mode"), QJsonObject{{QStringLiteral("active"), false}});
-        syncEditMode();
-        statusBar()->showMessage(QStringLiteral("Booleano aplicado. Ctrl+Z desfaz."), 5000);
-    }
-}
 
-void MainWindow::startMeshPreview(const QString& operation) {
-    // A press right after a release is the auto-repeat pair, not a new drag.
-    if (meshPreviewCommitTimer_ != nullptr && meshPreviewCommitTimer_->isActive()) {
-        meshPreviewCommitTimer_->stop();
-        if (meshPreviewing_) {
-            return;
-        }
-    }
-    if (meshPreviewing_ || !bridge_->hasProject()) {
-        return;
-    }
-    if (!viewport_->isEditMode()) {
-        statusBar()->showMessage(QStringLiteral("Entre no modo de edição (Tab) com uma malha selecionada."), 5000);
-        return;
-    }
-    const double distance = meshDistance_ != nullptr ? meshDistance_->value() : 0.2;
-    QJsonObject fields{{QStringLiteral("operation"), operation.section(QLatin1Char('.'), 1)}};
-    if (operation == QLatin1String("mesh.bevel")) {
-        fields.insert(QStringLiteral("width"), distance);
-        fields.insert(QStringLiteral("segments"), meshSegments_ != nullptr ? meshSegments_->value() : 1);
-    } else if (operation == QLatin1String("mesh.loop_cut")) {
-        fields.insert(QStringLiteral("cuts"), meshCuts_ != nullptr ? meshCuts_->value() : 1);
-    } else {
-        fields.insert(QStringLiteral("distance"), distance);
-    }
-    const Reply reply = bridge_->call(QStringLiteral("mesh.preview"), fields);
-    if (!reply.ok) {
-        showFailure(reply, true);
-        return;
-    }
-    meshPreviewing_ = true;
-    meshPreviewOperation_ = operation;
-    const bool cuts = operation == QLatin1String("mesh.loop_cut");
-    meshPreviewBase_ = cuts ? (meshCuts_ != nullptr ? meshCuts_->value() : 1) : distance;
-    meshPreviewValue_ = meshPreviewBase_;
-    meshPreviewOrigin_ = viewport_->mapFromGlobal(QCursor::pos());
-    statusBar()->showMessage(
-        QStringLiteral("Mova o mouse para ajustar; solte a tecla, clique ou Enter aplica. Esc cancela."),
-        12000);
-}
 
-void MainWindow::updateMeshPreview() {
-    if (!meshPreviewing_) {
-        return;
-    }
-    const QPoint now = viewport_->mapFromGlobal(QCursor::pos());
-    const bool whole_cuts = meshPreviewOperation_ == QLatin1String("mesh.loop_cut");
-    const double delta = (now.x() - meshPreviewOrigin_.x()) * (whole_cuts ? 0.025 : 0.01);
-    const double rounded = std::round(meshPreviewBase_ + delta);
-    const double value = whole_cuts ? qBound(1.0, rounded, 32.0) : qBound(0.01, meshPreviewBase_ + delta, 10.0);
-    if (qAbs(value - meshPreviewValue_) < 0.0005) {
-        return;
-    }
-    meshPreviewValue_ = value;
-    QJsonObject fields{{QStringLiteral("operation"), meshPreviewOperation_.section(QLatin1Char('.'), 1)}};
-    if (meshPreviewOperation_ == QLatin1String("mesh.bevel")) {
-        fields.insert(QStringLiteral("width"), value);
-        fields.insert(QStringLiteral("segments"), meshSegments_ != nullptr ? meshSegments_->value() : 1);
-    } else if (whole_cuts) {
-        fields.insert(QStringLiteral("cuts"), static_cast<int>(value));
-    } else {
-        fields.insert(QStringLiteral("distance"), value);
-    }
-    const Reply reply = bridge_->call(QStringLiteral("mesh.preview"), fields);
-    if (!reply.ok) {
-        showFailure(reply, false);
-        return;
-    }
-    const QJsonObject result = reply.result.toObject();
-    if (whole_cuts && meshCuts_ != nullptr) {
-        const QSignalBlocker blocker(meshCuts_);
-        meshCuts_->setValue(static_cast<int>(value));
-    } else if (meshDistance_ != nullptr) {
-        const QSignalBlocker blocker(meshDistance_);
-        meshDistance_->setValue(value);
-    }
-    if (!result.value(QStringLiteral("valid")).toBool()) {
-        const QJsonObject reason = result.value(QStringLiteral("reason")).toObject();
-        statusBar()->showMessage(reason.value(QStringLiteral("message")).toString(), 5000);
-    }
-}
 
-void MainWindow::endMeshPreview(bool commit) {
-    if (meshPreviewCommitTimer_ != nullptr) {
-        meshPreviewCommitTimer_->stop();
-    }
-    if (!meshPreviewing_) {
-        return;
-    }
-    const Reply reply = bridge_->call(QStringLiteral("mesh.preview_end"),
-                                      QJsonObject{{QStringLiteral("commit"), commit}});
-    meshPreviewing_ = false;
-    if (!reply.ok) {
-        showFailure(reply, true);
-        return;
-    }
-    const bool committed = reply.result.toObject().value(QStringLiteral("committed")).toBool();
-    if (commit && committed) {
-        statusBar()->showMessage(
-            meshPreviewOperation_ == QLatin1String("mesh.loop_cut")
-                ? QStringLiteral("Aplicado (%1 cortes). Ctrl+Z desfaz.").arg(static_cast<int>(meshPreviewValue_))
-                : QStringLiteral("Aplicado (%1 m). Ctrl+Z desfaz.").arg(QLocale().toString(meshPreviewValue_, 'f', 2)),
-            5000);
-    } else {
-        statusBar()->showMessage(QStringLiteral("Prévia cancelada; a malha não mudou."), 4000);
-    }
-    bridge_->refresh();
-}
 
-void MainWindow::startKnifeByClick() {
-    if (meshPreviewing_) {
-        endMeshPreview(true);
-    }
-    if (!viewport_->isEditMode()) {
-        statusBar()->showMessage(QStringLiteral("Entre no modo de edição (Tab) com uma malha selecionada."), 5000);
-        return;
-    }
-    knifeClick_ = true;
-    knifeHasStart_ = false;
-    knifeStart_ = QJsonObject();
-    viewport_->setCursor(Qt::CrossCursor);
-    viewport_->setFocus(Qt::ShortcutFocusReason);
-    statusBar()->showMessage(QStringLiteral("Faca: clique a primeira aresta (Esc cancela)."), 8000);
-}
 
-void MainWindow::cancelKnife() {
-    knifeClick_ = false;
-    knifeHasStart_ = false;
-    knifeStart_ = QJsonObject();
-    viewport_->unsetCursor();
-    statusBar()->showMessage(QStringLiteral("Faca cancelada; a malha não mudou."), 4000);
-}
-
-bool MainWindow::handleKnifeClick(const QPoint& position) {
-    const QJsonObject hit = viewport_->pickMeshPartAt(position);
-    if (hit.isEmpty() || !hit.contains(QStringLiteral("edge"))) {
-        statusBar()->showMessage(QStringLiteral("Nenhuma aresta sob o cursor. Clique mais perto de uma aresta."), 5000);
-        return true;
-    }
-    const QJsonObject point{
-        {QStringLiteral("edge"), hit.value(QStringLiteral("edge"))},
-        {QStringLiteral("fraction"), hit.value(QStringLiteral("edge_fraction"))},
-    };
-    const QJsonArray edge = hit.value(QStringLiteral("edge")).toArray();
-    const QString edge_text = QStringLiteral("%1,%2")
-                                  .arg(edge.at(0).toInt())
-                                  .arg(edge.at(1).toInt());
-    if (!knifeHasStart_) {
-        knifeStart_ = point;
-        knifeHasStart_ = true;
-        statusBar()->showMessage(QStringLiteral("Primeiro ponto na aresta %1. Clique a segunda aresta.").arg(edge_text), 8000);
-        return true;
-    }
-    const QJsonArray start_edge = knifeStart_.value(QStringLiteral("edge")).toArray();
-    const QString start_text = QStringLiteral("%1,%2").arg(start_edge.at(0).toInt()).arg(start_edge.at(1).toInt());
-    const Reply cut = perform(QStringLiteral("mesh.knife"),
-                              QJsonObject{{QStringLiteral("start"), knifeStart_}, {QStringLiteral("end"), point}}, true);
-    knifeClick_ = false;
-    knifeHasStart_ = false;
-    viewport_->unsetCursor();
-    if (cut.ok) {
-        statusBar()->showMessage(QStringLiteral("Faca: face cortada entre as arestas %1 e %2. Ctrl+Z desfaz.")
-                                     .arg(start_text, edge_text),
-                                 8000);
-    }
-    return true;
-}
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
-    if (watched == viewport_ && knifeClick_ && event->type() == QEvent::MouseButtonPress) {
-        auto* mouse = static_cast<QMouseEvent*>(event);
-        if (mouse->button() == Qt::LeftButton) {
-            return handleKnifeClick(mouse->position().toPoint());
-        }
-    }
-    if (watched == viewport_ && meshPreviewing_) {
-        // Leaving the 3D view (choosing an object in the hierarchy, for example) applies the value
-        // shown: otherwise a live edit would keep blocking Save without the person knowing why.
-        if (event->type() == QEvent::FocusOut) {
-            endMeshPreview(true);
-            return false;
-        }
-        if (event->type() == QEvent::MouseMove) {
-            updateMeshPreview();
-            return false;
-        }
-        if (event->type() == QEvent::MouseButtonPress) {
-            endMeshPreview(true);
-            return true;
-        }
-        if (event->type() == QEvent::KeyPress
-            && (static_cast<QKeyEvent*>(event)->key() == Qt::Key_Return
-                || static_cast<QKeyEvent*>(event)->key() == Qt::Key_Enter)) {
-            endMeshPreview(true);
-            return true;
-        }
-    }
+    Q_UNUSED(watched);
     return QMainWindow::eventFilter(watched, event);
 }
 
-void MainWindow::showMeshInfo() {
-    if (!bridge_->hasSelection()) {
-        statusBar()->showMessage(QStringLiteral("Selecione uma malha."), 4000);
-        return;
-    }
-    const Reply reply = perform(QStringLiteral("mesh.info"), QJsonObject{}, false);
-    if (!reply.ok) {
-        showFailure(reply, true);
-        return;
-    }
-    const QJsonObject result = reply.result.toObject();
-    QDialog dialog(this);
-    dialog.setWindowTitle(QStringLiteral("Informações da malha"));
-    auto* layout = new QVBoxLayout(&dialog);
-    const bool solid = result.value(QStringLiteral("solid")).toBool();
-    auto* text = new QLabel(
-        QStringLiteral("%1\n\nVértices: %2\nArestas: %3\nFaces: %4\nTriângulos: %5\n\nSólido fechado: %6")
-            .arg(result.value(QStringLiteral("name")).toString())
-            .arg(static_cast<qint64>(result.value(QStringLiteral("vertices")).toDouble()))
-            .arg(static_cast<qint64>(result.value(QStringLiteral("edges")).toDouble()))
-            .arg(static_cast<qint64>(result.value(QStringLiteral("faces")).toDouble()))
-            .arg(static_cast<qint64>(result.value(QStringLiteral("triangles")).toDouble()))
-            .arg(solid ? QStringLiteral("sim") : QStringLiteral("não — não serve como volume")),
-        &dialog);
-    text->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
-    layout->addWidget(text);
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
-    layout->addWidget(buttons);
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    dialog.exec();
-}
 
-void MainWindow::applyMesh(const QString& operation) {
-    if (!viewport_->isEditMode()) {
-        statusBar()->showMessage(QStringLiteral("Entre no modo de edição (Tab) com uma malha selecionada."), 5000);
-        return;
-    }
-    QJsonObject fields;
-    const double distance = meshDistance_ != nullptr ? meshDistance_->value() : 0.2;
-    if (operation == QLatin1String("mesh.inset") || operation == QLatin1String("mesh.extrude")) {
-        fields.insert(QStringLiteral("distance"), distance);
-    } else if (operation == QLatin1String("mesh.bevel")) {
-        fields.insert(QStringLiteral("width"), distance);
-        fields.insert(QStringLiteral("segments"), meshSegments_ != nullptr ? meshSegments_->value() : 1);
-    } else if (operation == QLatin1String("mesh.loop_cut")) {
-        fields.insert(QStringLiteral("cuts"), meshCuts_ != nullptr ? meshCuts_->value() : 1);
-        fields.insert(QStringLiteral("slide"), meshSlide_ != nullptr ? meshSlide_->value() : 0.0);
-    } else if (operation == QLatin1String("mesh.subdivide")) {
-        fields.insert(QStringLiteral("cuts"), meshCuts_ != nullptr ? meshCuts_->value() : 1);
-    }
-    const Reply reply = perform(operation, fields);
-    if (reply.ok) {
-        statusBar()->showMessage(QStringLiteral("%1 concluído. Ctrl+Z desfaz.").arg(operation), 5000);
-    }
-}
 
-void MainWindow::toggleEditMode() {
-    if (!bridge_->hasProject()) {
-        return;
-    }
-    if (viewport_->isEditMode()) {
-        if (bridge_->hasSelection()) {
-            bridge_->call(QStringLiteral("mesh.select"), QJsonObject{
-                {QStringLiteral("entity"), static_cast<double>(bridge_->selection())},
-                {QStringLiteral("mode"), QStringLiteral("clear")}
-            });
-        }
-        viewport_->setEditMode(false);
-        bridge_->call(QStringLiteral("mesh.edit_mode"), QJsonObject{{QStringLiteral("active"), false}});
-        syncEditMode();
-        statusBar()->showMessage(QStringLiteral("Modo Objeto"), 2000);
-        viewport_->update();
-        return;
-    }
 
-    if (!bridge_->hasSelection()) {
-        statusBar()->showMessage(QStringLiteral("Selecione um objeto para editar malha (Tab)"), 3000);
-        return;
-    }
-
-    const quint64 entity = bridge_->selection();
-    const Reply reply = bridge_->call(QStringLiteral("mesh.convert"), QJsonObject{
-        {QStringLiteral("entity"), static_cast<double>(entity)}
-    });
-    if (reply.ok) {
-        bridge_->refresh();
-    } else if (reply.code != QLatin1String("EDITOR_ALREADY_A_MESH")) {
-        showFailure(reply, true);
-        return;
-    }
-
-    viewport_->setEditMode(true);
-    bridge_->call(QStringLiteral("mesh.edit_mode"), QJsonObject{{QStringLiteral("active"), true}});
-    bridge_->call(QStringLiteral("mesh.component_mode"),
-                  QJsonObject{{QStringLiteral("mode"), componentModeName(viewport_->componentMode())}});
-    syncEditMode();
-    statusBar()->showMessage(QStringLiteral("Modo Edição: 1 Vértice, 2 Aresta, 3 Face"), 3000);
-    viewport_->update();
-}
-
-void MainWindow::setComponentMode(ComponentMode mode) {
-    if (!viewport_->isEditMode()) {
-        return;
-    }
-    viewport_->setComponentMode(mode);
-    bridge_->call(QStringLiteral("mesh.component_mode"),
-                  QJsonObject{{QStringLiteral("mode"), componentModeName(mode)}});
-    syncEditMode();
-    const QString name = (mode == ComponentMode::Vertex) ? QStringLiteral("Vértices (1)")
-                       : (mode == ComponentMode::Edge)   ? QStringLiteral("Arestas (2)")
-                                                         : QStringLiteral("Faces (3)");
-    statusBar()->showMessage(QStringLiteral("Seleção de %1").arg(name), 2000);
-}
 
 void MainWindow::syncEditMode() {
-    const bool inEdit = viewport_->isEditMode();
-    header_->showEditMode(inEdit);
-    header_->showComponentMode(viewport_->componentMode());
-    if (editModeAction_) {
-        editModeAction_->setChecked(inEdit);
-        editModeAction_->setEnabled(bridge_->hasSelection());
-    }
-    if (vertexModeAction_) {
-        vertexModeAction_->setEnabled(inEdit);
-        vertexModeAction_->setChecked(viewport_->componentMode() == ComponentMode::Vertex);
-    }
-    if (edgeModeAction_) {
-        edgeModeAction_->setEnabled(inEdit);
-        edgeModeAction_->setChecked(viewport_->componentMode() == ComponentMode::Edge);
-    }
-    if (faceModeAction_) {
-        faceModeAction_->setEnabled(inEdit);
-        faceModeAction_->setChecked(viewport_->componentMode() == ComponentMode::Face);
-    }
-    if (meshBar_ != nullptr) {
-        meshBar_->setVisible(inEdit);
-    }
-    if (meshValuesBar_ != nullptr) {
-        meshValuesBar_->setVisible(inEdit);
-    }
-    for (QAction* action : std::as_const(meshActions_)) {
-        action->setEnabled(inEdit);
-    }
-    if (knifeAction_ != nullptr) {
-        knifeAction_->setChecked(viewport_->isKnifeArmed());
-    }
-    if (convertMeshAction_ != nullptr) {
-        convertMeshAction_->setEnabled(bridge_->hasSelection());
-    }
     if (booleanAction_ != nullptr) {
         booleanAction_->setEnabled(bridge_->hasSelection());
     }
-    if (toolActions_[4] != nullptr) {
-        toolActions_[4]->setEnabled(inEdit);
-    }
-    if (toolActions_[5] != nullptr) {
-        toolActions_[5]->setEnabled(inEdit);
-    }
-    for (QWidget* tool : std::as_const(editOnlyTools_)) {
-        tool->setVisible(inEdit);
+    if (loopCutAction_ != nullptr) {
+        loopCutAction_->setEnabled(bridge_->hasSelection());
     }
 }
 

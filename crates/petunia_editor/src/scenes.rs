@@ -349,8 +349,6 @@ impl EditorSession {
         self.dispatcher = new_dispatcher()?;
         self.selection = None;
         self.floor = None;
-        self.components = None;
-        self.mesh_edit_mode = false;
         if let Some(project) = self.project.as_mut() {
             project.world = world;
             project.scene_path = scene_path;

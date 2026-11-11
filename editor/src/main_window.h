@@ -38,8 +38,6 @@ class QVBoxLayout;
 class PetuniaSegmented;
 class CommandPalette;
 struct Reply;
-enum class ComponentMode;
-
 class MainWindow : public QMainWindow {
     Q_OBJECT
 
@@ -80,33 +78,16 @@ private:
     void buildSculptBar();
     void syncSculptBar(const QJsonObject& snapshot);
     void buildMeshActions();
-    void buildMeshBar();
-    void applyMesh(const QString& operation);
-    void toggleKnife();
     void showBooleanDialog();
+    void showLoopCutDialog();
     void showCutPlaneDialog();
+    void showPaintFaceDialog();
     void showArrangeLineDialog();
     void showArrangeCircleDialog();
     void showMirrorDialog();
-    void convertSelectionToMesh();
-    void syncMeshPreviewValues();
     void buildNaturalBar();
     void syncNaturalBar(const QJsonObject& snapshot);
     void buildDocks();
-    // Several scenes per project, the automatic save and its recovery.
-    void meshBoolean();
-    void meshKnife();
-    // The knife by clicking: two clicks on the mesh, each naming a point on an edge.
-    void startKnifeByClick();
-    bool handleKnifeClick(const QPoint& position);
-    void cancelKnife();
-    // A mesh operation shown live while the key is held: press shows it, moving the mouse changes
-    // the value, releasing the key (or clicking/Enter) applies it as ONE undo step, Esc cancels.
-    void startMeshPreview(const QString& operation);
-    void updateMeshPreview();
-    void endMeshPreview(bool commit);
-    void showMeshInfo();
-    // Several scenes per project, the automatic save and its recovery.
     void buildSceneActions();
     void chooseOpenScene();
     void chooseNewScene();
@@ -136,8 +117,6 @@ private:
     void showPrimitivesPie();
     // Rebuilds Criar > Prefab do projeto from the prefabs saved in the project folder.
     void refreshProjectPrefabs();
-    void toggleEditMode();
-    void setComponentMode(ComponentMode mode);
     void syncEditMode();
     void showAbout();
 
@@ -221,6 +200,7 @@ private:
     QToolBar* meshValuesBar_ = nullptr;
     QList<QAction*> meshActions_;
     QAction* booleanAction_ = nullptr;
+    QAction* loopCutAction_ = nullptr;
     QAction* convertMeshAction_ = nullptr;
     QComboBox* meshPreviewBox_ = nullptr;
     // Push/pull and extrude belong to edit mode. Hidden while the viewport is in object mode.
@@ -271,6 +251,8 @@ private:
     QPushButton* consolidateButton_ = nullptr;
     QAction* hollowAction_ = nullptr;
     QAction* cutPlaneAction_ = nullptr;
+    QAction* paintFaceAction_ = nullptr;
+    QString componentLabel_;
     QAction* arrangeLineAction_ = nullptr;
     QAction* arrangeCircleAction_ = nullptr;
     QAction* mirrorAction_ = nullptr;

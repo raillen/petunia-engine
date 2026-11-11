@@ -1,10 +1,10 @@
 # Registro de decisões
 
-**Revisão:** 2026-11-02 (`DR-41` câmeras fixas, `DR-42` parentesco, `DR-43` `Vec3`/`Color` e câmera do personagem, `DR-44` interagir e vida; primeiro corte do `DR-13`) · 2026-10-30 (índice completado; `DR-27`/`DR-28` duplicados renumerados para `DR-38`/`DR-39`) · primeira leitura da [especificação anterior](../01-pesquisa/05-especificacao-anterior.md) em 2026-10-24
+**Revisão:** 2026-11-10 (`DR-54` prefabs do próprio projeto) · 2026-11-02 (`DR-41` câmeras fixas, `DR-42` parentesco, `DR-43` `Vec3`/`Color` e câmera do personagem, `DR-44` interagir e vida; primeiro corte do `DR-13`) · 2026-10-30 (índice completado; `DR-27`/`DR-28` duplicados renumerados para `DR-38`/`DR-39`) · primeira leitura da [especificação anterior](../01-pesquisa/05-especificacao-anterior.md) em 2026-10-24
 
 ## Resumo (TL;DR)
 
-São **51 decisões**. Estados possíveis:
+São **54 decisões**. Estados possíveis:
 
 - **HERDADA:** já decidida na especificação anterior (10/10/2026). Esta documentação **mantém**; só reabre com um ADR.
 - **PROPOSTA:** recomendação minha, aguardando você ou um experimento.
@@ -62,7 +62,9 @@ São **51 decisões**. Estados possíveis:
 | **DR-43** | Vetores no script e câmera do personagem | **ACEITA** (2026-11-02, seu pedido) | `Vec3` e `Color` são structs da Aipo; `transform.position` devolve `.x` `.y` `.z`; a tabela `Camera` escolhe primeira pessoa, terceira, isométrica ou fixa |
 | **DR-44** | Interagir e vida | **ACEITA** (2026-11-02, continuação do kit) | Tabela `Interact` (raio, aviso) e tecla E; tabela `Health`; o evento `died` quando a vida chega a zero |
 | **DR-45** | Modo de edição e inspetor | **ACEITA** (2026-11-02, teste na janela) | Empurrar e extrudar só no modo edição; `Camera.mode` é uma lista, inclusive `custom`; interagir com um `Shot` olha por essa câmera |
-| **DR-51** | Prefabs do próprio projeto | **ACEITA** (2026-11-10) | `prefabs/<nome>.prefab.json` com as linhas do objeto e os anexos (colisões, scripts, traços); posição relativa e um desfazer ao criar; revisão é registro, cópias não são reescritas |
+| **DR-52** | Cor por face na caixa | **ACEITA** (2026-11-09) | `brush.paint_face` grava uma cor numa face (0 a 5); a face sem linha usa a cor da caixa; um quadrado 2 mm desenha a cor |
+| **DR-53** | Mapas, materiais e interface | **ACEITA como plano** (2026-11-09) | Cortes A–C feitos: componentes sem modo novo, booleano com vão andável, 5 materiais, clima e skybox; o resto no [plano](../05-roadmap/04-plano-mapas-materiais-e-interface.md) |
+| **DR-54** | Prefabs do próprio projeto | **ACEITA** (2026-11-10) | `prefabs/<nome>.prefab.json` com as linhas do objeto e os anexos (colisões, scripts, traços); posição relativa e um desfazer ao criar; revisão é registro, cópias não são reescritas |
 
 ---
 
@@ -385,7 +387,7 @@ Pool e fade (herdados, `LOCAL`) valem em todas.
 
 **Nível 1 (decidido e feito em 2026-10-24):** **brushes paramétricos** (caixa, rampa, cilindro, cone, esfera, escada) com gizmo de mover, girar e escalar, snap à grade e desfazer por gesto.
 
-**Nível 2 (feito em 2026-11-08):** empurrar/puxar, extrudar, cavar, tornar oco, **cortar com plano**, **arranjo em linha e em círculo** e **espelhar** existem. Falta só redimensionar pelas alças da caixa (cantos e arestas). As quatro operações novas são comandos de dados (`brush.cut_plane`, `brush.arrange_line`, `brush.arrange_circle`, `brush.mirror`), cada uma **um** `world.batch`; aceitam **caixas** (cilindros, escadas e malhas ficam para depois) e estão em **Operações** com `Ctrl+Alt+P`, `Ctrl+Alt+L`, `Ctrl+Alt+O` e `Ctrl+Alt+M`. Verificado na janela (display virtual) e na cena salva; detalhes em [edição de brushes](../02-arquitetura/13-primitivas-e-edicao-de-malha.md#nível-2-edição-de-brushes-feito-em-2026-11-08).
+**Nível 2 (feito):** empurrar/puxar, extrudar, cavar, tornar oco, **cortar com plano**, **arranjo em linha e em círculo**, **espelhar** e **alças de canto e aresta** (`brush.handle_*`, 2026-11-09). As quatro operações de diálogo são comandos de dados, cada uma **um** `world.batch`; aceitam **caixas** e estão em **Operações** com `Ctrl+Alt+P`, `Ctrl+Alt+L`, `Ctrl+Alt+O` e `Ctrl+Alt+M`. As alças aparecem na caixa selecionada (o gizmo ganha o clique) e também fecham em um desfazer. Detalhes em [edição de brushes](../02-arquitetura/13-primitivas-e-edicao-de-malha.md#nível-2-edição-de-brushes-feito-em-2026-11-08).
 
 **Nível 3 (decidido por você em 2026-10-25).** Pedido: "falta você trazer do petunia3d operações booleanas, inset, loopcut e etc…". Respostas à pergunta de modelo de dados:
 
@@ -455,7 +457,7 @@ na pose de repouso).
 
 **Ainda proposta:** os workspaces (Pintura, Animação, Efeitos) e a ordem dos itens 3 a 8.
 
-**Já feito:** andares completos, tornar oco e cavar caixas, **cavernas completas** (blocos de 16³, 5 modos de pincel, caminho, gerador, fundir traços, facetada) e **prefabs do próprio projeto** (`DR-51`). Medido: uma pincelada passou de 54 a 1063 ms para ~1 ms. Detalhes: [workspaces e prioridades](../02-arquitetura/14-workspaces-e-prioridades.md).
+**Já feito:** andares completos, tornar oco e cavar caixas, **cavernas completas** (blocos de 16³, 5 modos de pincel, caminho, gerador, fundir traços, facetada) e **prefabs do próprio projeto** (`DR-54`). Medido: uma pincelada passou de 54 a 1063 ms para ~1 ms. Detalhes: [workspaces e prioridades](../02-arquitetura/14-workspaces-e-prioridades.md).
 
 ---
 
@@ -1195,7 +1197,44 @@ a prévia de `loop_cut`.
 
 ---
 
-## DR-51 — Prefabs do próprio projeto · ACEITA (2026-11-10)
+## DR-51 — Só blocagem e booleano · ACEITA (2026-11-09)
+
+**Pedido:** a edição total de malha não estava ficando boa. Seguir só com blocagem e operação booleana, e apagar a edição de malha completa.
+
+**Decisão:** saem o modo de edição (`Tab`), a escolha de vértice/aresta/face, inset, extrudar de malha, loop cut, bevel, faca, subdividir, dissolver, fundir vértices e a barra **Malha** desses comandos. Ficam os brushes (empurrar, extrudar face, cavar, oco, plano, arranjo, espelho, alças de canto e aresta) e `mesh.boolean` (união, corte, interseção, com rotação e escala). Um brush vira malha gravada quando o booleano precisa; `mesh.convert` continua para pele e script, sem botão. `mesh.info` continua para o inspetor. Malha importada de GLB continua sendo desenhada; não se edita vértice a vértice.
+
+**Reabrir se:** um mapa precisar de um corte que o booleano e a blocagem não fazem.
+
+---
+
+## DR-52 — Cor por face na caixa · ACEITA (2026-11-09)
+
+**Pedido:** continuar a implementação depois de ficar só com blocagem e booleano. A base do mapa já pedia material por face; a tabela `FaceColor` existia e nada desenhava.
+
+**Decisão:** `brush.paint_face` grava uma cor numa face de caixa (0 a 5, na ordem +X, −X, +Y, −Y, +Z, −Z), ou na face sob o mouse. A face sem linha usa a cor da caixa. O desenho é um quadrado 2 mm para fora dessa face, porque o sombreador tem uma cor por objeto; a caixa continua sendo o sólido. Uma segunda pintura da mesma face troca a cor. Menu **Operações > Pintar face…**.
+
+**Reabrir se:** a cor precisar valer em cilindro, escada ou malha gravada, ou o quadrado de 2 mm piscar na face.
+
+---
+
+## DR-53 — Mapas, materiais e interface · ACEITA como plano (2026-11-09)
+
+**Pedido:** treze frentes, de seleção de componente até boas-vindas e UI de jogo, com um documento antes do código.
+
+**Decisão:** o corte e a ordem estão em [plano de mapas, materiais e interface](../05-roadmap/04-plano-mapas-materiais-e-interface.md). Em resumo: a seleção de face, aresta e vértice volta **sem modo novo**; o loop cut volta só na malha gravada; mover, girar e escalar agem no componente; o booleano existente passa a deixar vão andável. Materiais são cinco tipos de dado (`flat`, `standard`, `masked`, `blended`, `post`), sem grafo de nós e sem biblioteca nova. Clima vira entidade e vários se misturam. Skybox é camada com rolagem no relógio do jogo. Rio e estrada ganham junção, alça de largura e material. O 2D ganha plano de rolagem infinita com alfa. Escada ganha pisada e espelho; entram espiral, parede com vãos e arco. O código mostra quem usa o script, insere o exemplo da API e o id da entidade no cursor, e os quadros por segundo do jogo ficam no projeto. A boas-vindas lista projetos recentes e reserva o lugar do PIX e do Ko-fi, sem pagamento. A UI de jogo fica em conversa.
+
+O DR-51 continua valendo para faca, inset, bevel, dissolver, fundir vértices e para o modo `Tab`.
+
+**Progresso (2026-11-10):**
+- Corte A (geometria e mapas: frentes 4, 1, 3 e 2) concluído e verificado. Booleano com vão andável; seleção de componentes sem modo novo; transformação via gizmo por face/aresta/vértice; e loop cut em malhas gravadas com menu/diálogo no Qt.
+- Corte B (materiais: frente 5) concluído e verificado. Tabela `Material` e vínculo em `FaceColor.material`; 5 tipos (`flat`, `standard`, `masked`, `blended`, `post`) sem grafo de nós; amostragem de textura PNG e corte alfa (`cutoff`) em OpenGL; ordenação por transparência.
+- Corte C (clima e skybox: frentes 6 e 7) concluído e verificado. Clima como entidade na tabela `Weather` com suporte a volumes prioritários em caixas e mistura ponderada contínua (`blend_skies`); céu em camadas na tabela `SkyLayer` ordenadas com z-buffer desligado e rolagem animada equirretangular via relógio da cena.
+
+**Reabrir se:** um mapa precisar de pintura em UV, ou a UI de jogo fechar as três perguntas da seção 13 do plano.
+
+---
+
+## DR-54 — Prefabs do próprio projeto · ACEITA (2026-11-10)
 
 **Pedido:** fechar o item “prefabs do próprio projeto” que o [estado da implementação](../05-roadmap/03-estado-da-implementacao.md) listava desde o `DR-31` como o que faltava do bloco de prefabs. O código já existia na `main` consolidada, sem decisão registrada.
 
@@ -1220,7 +1259,7 @@ a prévia de `loop_cut`.
 
 **Fora desta etapa (declarado):** vários objetos num mesmo prefab (o formato já tem `objects`, o salvar grava um), atualizar as cópias já colocadas quando a revisão sobe, miniatura do prefab, prefab de terreno/caverna com geometria pesada e um painel próprio (o submenu de **Criar** basta).
 
-**Verificação:** 3 testes em `petunia_editor` (`a_saved_prefab_comes_back_with_its_colliders_and_one_undo`, `the_prefab_lands_in_front_of_the_camera_not_where_it_was_saved`, `saving_twice_bumps_the_revision_and_bad_files_are_refused`): a caixa com colisor volta com o colisor, `prefab.list` vê 5, criar é **um** desfazer, a cópia nasce longe do lugar onde foi salva, salvar de novo dá revisão 2, e JSON quebrado, nome desconhecido e falta de seleção são recusados com o código certo. O passo novo de `scripts/editor-smoke.sh` salva a caixa selecionada como `smoke`, cria de volta pelo submenu e confere o arquivo (posição zero, revisão 1) e a cópia na cena salva: **18/18** verificações no display virtual (2026-11-10).
+**Verificação:** 3 testes em `petunia_editor` (`a_saved_prefab_comes_back_with_its_colliders_and_one_undo`, `the_prefab_lands_in_front_of_the_camera_not_where_it_was_saved`, `saving_twice_bumps_the_revision_and_bad_files_are_refused`): a caixa com colisor volta com o colisor, `prefab.list` vê 5, criar é **um** desfazer, a cópia nasce longe do lugar onde foi salva, salvar de novo dá revisão 2, e JSON quebrado, nome desconhecido e falta de seleção são recusados com o código certo. O passo novo de `scripts/editor-smoke.sh` salva a caixa selecionada como `smoke`, cria de volta pelo submenu e confere o arquivo (posição zero, revisão 1) e a cópia na cena salva (2 caixas antes, 3 depois): **17/17** verificações no display virtual (2026-11-10).
 
 **Não verificado:** a janela na sua sessão real (tudo em display virtual); leitor de tela; um prefab com vários objetos, que o salvar ainda não produz; e a atualização de cópias existentes, que não existe por decisão.
 

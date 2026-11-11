@@ -75,8 +75,21 @@ impl MeshData {
             normal = -normal;
         }
         let base = self.positions.len() as u32;
-        for corner in corners {
-            self.push_vertex(*corner, normal);
+        let quad_uvs = if corners.len() == 4 {
+            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
+        } else {
+            [[0.0, 0.0]; 4]
+        };
+        for (slot, corner) in corners.iter().enumerate() {
+            let index = self.push_vertex(*corner, normal);
+            let maybe_quad_uv = if corners.len() == 4 {
+                quad_uvs.get(slot).copied()
+            } else {
+                None
+            };
+            if let (Some(uv), Some(slot_uv)) = (maybe_quad_uv, self.uvs.get_mut(index as usize)) {
+                *slot_uv = uv;
+            }
         }
         for step in 1..(corners.len() as u32 - 1) {
             if flipped {
@@ -198,7 +211,8 @@ pub fn build_mesh(shape: Shape, size: Vec3, detail: u32) -> Result<MeshData, Mes
     })
 }
 
-fn box_mesh(half: Vec3) -> MeshData {
+/// Faces of a box, in order: +X, -X, +Y, -Y, +Z, -Z. `brush.paint_face` uses the same order.
+fn box_face_corners(half: Vec3, face: usize) -> Option<[Vec3; 4]> {
     let corner = |sx: f32, sy: f32, sz: f32| Vec3::new(sx * half.x, sy * half.y, sz * half.z);
     let faces: [[Vec3; 4]; 6] = [
         [
@@ -238,11 +252,41 @@ fn box_mesh(half: Vec3) -> MeshData {
             corner(-1.0, 1.0, -1.0),
         ],
     ];
+    faces.get(face).copied()
+}
+
+fn box_mesh(half: Vec3) -> MeshData {
     let mut mesh = MeshData::default();
-    for face in &faces {
-        mesh.push_polygon(face, Vec3::ZERO);
+    for face in 0..6 {
+        let Some(corners) = box_face_corners(half, face) else {
+            continue;
+        };
+        mesh.push_polygon(&corners, Vec3::ZERO);
     }
     mesh
+}
+
+/// How far a painted face sits outside the box.
+/// shortcut: one colour per draw call, so a painted face is a second quad; a vertex colour in the
+/// mesh shader replaces this.
+const FACE_SHELL_METERS: f32 = 0.002;
+
+/// One face of a box, shifted out along its normal so it draws over the brush colour.
+pub(crate) fn box_face_shell(half: Vec3, face: usize) -> Option<MeshData> {
+    let corners = box_face_corners(half, face)?;
+    let normal = match face {
+        0 => Vec3::new(1.0, 0.0, 0.0),
+        1 => Vec3::new(-1.0, 0.0, 0.0),
+        2 => Vec3::new(0.0, 1.0, 0.0),
+        3 => Vec3::new(0.0, -1.0, 0.0),
+        4 => Vec3::new(0.0, 0.0, 1.0),
+        5 => Vec3::new(0.0, 0.0, -1.0),
+        _ => return None,
+    };
+    let lifted = corners.map(|corner| corner + normal * FACE_SHELL_METERS);
+    let mut mesh = MeshData::default();
+    mesh.push_polygon(&lifted, Vec3::ZERO);
+    Some(mesh)
 }
 
 /// Wedge: low edge at the front (+z), high edge at the back (-z).
