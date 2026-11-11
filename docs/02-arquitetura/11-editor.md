@@ -50,7 +50,10 @@ Doctor avisa (`project.method_script` / `project.method_graph`).
 
 Os **prefabs** seguem o método: em `nodes` gravam `<nome>.graph.json`; em `aipo` compilam o mesmo
 grafo para `<nome>.aipo`. Um arquivo que já existe, de qualquer das duas extensões, nunca é
-sobrescrito.
+sobrescrito. Além dos embutidos, o próprio projeto guarda os seus: **Criar ▸ Salvar seleção como
+prefab…** grava o objeto selecionado (com colisões, scripts e traços) em
+`prefabs/<nome>.prefab.json`, e **Criar ▸ Prefab do projeto** o recria na frente da câmera — o
+molde é texto, então difere e pode ser versionado junto do projeto (`DR-51`).
 
 **Não há troca de método**, e não está prevista: a escolha é feita uma vez, ao criar o projeto, e
 vale até o fim (decisão de 2026-10-30). O projeto antigo continua abrindo, porque quem não tem o
@@ -126,8 +129,10 @@ lógica entre métodos, então o arquivo do outro método simplesmente deixa de 
 | `asset.list` | — | Modelos `.glb`/`.gltf` e imagens `.png` em `assets/` (`kind`: `model` ou `image`; caminhos do projeto; não segue links simbólicos) |
 | `asset.import` | `path` | Importa um modelo como **malhas editáveis**, um objeto por nó; copia o arquivo para `assets/` (um desfazer). Devolve `imported`, `names`, `asset`, `warnings` |
 | `asset.import_sprite` | `path` | Importa um `.png` como **sprite** (DR-49): um objeto com a tabela `Sprite`, na frente da câmera, com a proporção da imagem, virado para ela e apoiado no andar atual; copia o arquivo para `assets/` (um desfazer). Devolve `entity`, `asset`, `width`, `height`, `size` |
-| `prefab.list` | — | Os prefabs embutidos: `door` (Porta), `pickup` (Item coletável), `spawn` (Ponto de nascimento) (DR-31) |
-| `prefab.spawn` | `id` | Cria o prefab na frente da câmera, no andar atual, em **um** desfazer; grava os grafos de que precisa em `scripts/` sem sobrescrever os que já existem. Devolve `entity`, `graphs_written`, `graphs_kept` |
+| `prefab.list` | — | Os prefabs embutidos (`kind: builtin`): `door` (Porta), `pickup` (Item coletável), `spawn` (Ponto de nascimento) (DR-31) e `player` (Personagem jogável); e os do projeto (`kind: project`), com revisão, número de objetos e de anexos (DR-51) |
+| `prefab.spawn` | `id` | Cria o prefab na frente da câmera, no andar atual, em **um** desfazer; grava os grafos de que precisa em `scripts/` sem sobrescrever os que já existem. Devolve `entity`, `graphs_written`, `graphs_kept`. Com `id: "project:<nome>"`, cria um prefab salvo do projeto (DR-51) |
+| `prefab.save` | `name` | Grava o objeto selecionado (com colisões, scripts extras e traços) em `prefabs/<nome>.prefab.json`; a posição vira zero e salvar o mesmo nome sobe a `revision`. Devolve `prefab` (`project:<nome>`), `name`, `revision`, `path` (DR-51) |
+| `prefab.spawn_project` | `name` | Cria na frente da câmera, no andar atual, em **um** desfazer, o prefab salvo do projeto; devolve `entity`, `prefab`, a `revision` do arquivo e as listas vazias `graphs_written`/`graphs_kept` (DR-51) |
 | `graph.list` / `graph.new` `name` / `graph.open` `name` / `graph.close` | — | Grafos de nós (`scripts/<nome>.graph.json`, DR-30). Um grafo aberto por vez; cada edição **grava na hora** (atômico) e a primeira de uma abertura guarda o arquivo em `scripts/.backup/` |
 | `graph.view` | — | O grafo aberto como **contorno** (eventos com suas cadeias, entradas com a origem de cada valor, ramos, soltos e diagnósticos) **e** como **canvas** (`canvas`: caixas com posição, pinos, problemas e fios); `layout_problem` quando o `.layout.json` foi ignorado; `can_undo` / `can_redo` |
 | `graph.add` | `kind`, `after`? `{node,pin}`, `into`? `{node,pin}` | Põe um nó (na cadeia, depois de `after`; ou ligando o resultado a uma entrada `into`) |

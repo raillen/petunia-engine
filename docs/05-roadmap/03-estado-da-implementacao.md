@@ -1,6 +1,6 @@
 # Estado da implementação
 
-**Revisão:** 2026-11-09 (linhas consolidadas: cenas, animação, vegetação, outliner, grid, prefabs, interface de malha e 2D) · **Fase atual:** 1 (esqueleto) concluída no código; **fase 2 (editor e construção de mapas) avançou**
+**Revisão:** 2026-11-10 (prefabs do próprio projeto; linhas consolidadas: cenas, animação, vegetação, outliner, grid, prefabs, interface de malha e 2D) · **Fase atual:** 1 (esqueleto) concluída no código; **fase 2 (editor e construção de mapas) avançou**
 
 ## Resumo (TL;DR)
 
@@ -14,9 +14,25 @@ Três análises novas pedem a sua decisão: [paridade da interface](../02-arquit
 
 **Consolidação de 2026-10-27:** os PRs #2 a #7 foram mesclados na `main` (personagem e Jogar, luzes e GLB, grafo de nós N1–N5, prefabs). A `main` tinha **397 testes** antes destas correções; com elas, tem **441 testes, 0 falhas** (2026-10-28), e o editor compila no Qt 6.4.2.
 
-## Etapa atual: módulo `grid` e A\* (2026-11-09)
+## Etapa atual: prefabs do próprio projeto (2026-11-10)
 
-Decisão: [DR-47](../06-decisoes/registro-de-decisoes.md). O desenho existia desde 2026-10-24 ([personagens, UI e grade](../02-arquitetura/09-personagens-ui-e-grade.md) §5) com uma API ilustrativa e nenhuma linha de código; agora as oito funções existem e rodam em script.
+Fecha o item que a fase 2 listava desde o `DR-31` (“prefabs do próprio projeto”). Decisão: [`DR-51`](../06-decisoes/registro-de-decisoes.md).
+
+| Entrega | Evidência |
+|---|---|
+| `prefab.save`: o objeto selecionado vira `prefabs/<nome>.prefab.json` — as linhas do objeto mais as **colisões**, os **scripts extras** e os **traços** que apontam para ele; a posição gravada vira zero, então o molde não guarda o lugar onde foi feito | 3 testes: a caixa com colisor volta com o colisor, `prefab.list` vê 5 e criar é **um** desfazer; a cópia nasce na frente da câmera, não onde foi salva; salvar de novo sobe a revisão e arquivo quebrado, nome desconhecido e falta de seleção são recusados com o motivo |
+| `prefab.spawn_project` e `prefab.spawn` com `id: "project:<nome>"`: cria na frente da câmera, no andar atual, num `world.batch` (um desfazer), já selecionado | os mesmos 3 testes |
+| Janela: **Criar ▸ Salvar seleção como prefab…** (nome no diálogo) e **Criar ▸ Prefab do projeto** (submenu recriado ao abrir, com “(nenhum prefab salvo)” quando vazio) | visto no display virtual; `scripts/editor-smoke.sh` **18/18**: o passo novo salva a malha selecionada como `smoke`, cria a cópia pelo submenu e confere o arquivo (posição zero, revisão 1) e as duas malhas na cena salva |
+
+**Limites declarados:** o molde guarda **um** objeto por arquivo (o formato já aceita `objects` com vários, mas o salvar grava a seleção); sem seleção, não salva. Salvar o mesmo nome sobe a revisão, mas **cópias já colocadas nunca são reescritas** — atualizar o que já está na cena precisa de decisão própria. O prefab guarda o **anexo** de script, não o arquivo: apagar `scripts/<nome>.aipo` deixa o anexo apontando para um arquivo que não existe (o Project Doctor avisa, como para qualquer anexo).
+
+**Não verificado:** a janela na sua sessão real; leitor de tela; um prefab com vários objetos (o formato aceita, o salvar atual grava um); a cópia criada dentro de uma parede ou rocha (nada impede).
+
+**Reabrir se:** o molde precisar de vários objetos, se a revisão tiver de alcançar as cópias já colocadas ou se um prefab precisar levar os arquivos de script junto.
+
+## Antes: módulo `grid` e A\* (2026-11-09)
+
+Decisão: [DR-46](../06-decisoes/registro-de-decisoes.md). O desenho existia desde 2026-10-24 ([personagens, UI e grade](../02-arquitetura/09-personagens-ui-e-grade.md) §5) com uma API ilustrativa e nenhuma linha de código; agora as oito funções existem e rodam em script.
 
 | Entrega | Evidência |
 |---|---|
@@ -59,7 +75,7 @@ Fecha o que faltava do **nível 2** da [edição de brushes](../02-arquitetura/1
 
 **Não verificado:** a janela na sua sessão real; leitor de tela; cilindros/escadas/malhas nessas operações (recusados por projeto).
 
-**Próximo da lista:** material por face e prefabs do próprio projeto. (O `grid`/A\\* foi feito em 2026-11-09, acima; o Event Sheet foi descartado pelo DR-30, que o trocou pelo sistema de nós; as alças no viewport para redimensionar colisões foram feitas em 2026-11-08, abaixo.)
+**Próximo da lista:** material por face. (O `grid`/A\\* foi feito em 2026-11-09, acima; o Event Sheet foi descartado pelo DR-30, que o trocou pelo sistema de nós; os prefabs do próprio projeto foram feitos em 2026-11-10, no topo; as alças no viewport para redimensionar colisões foram feitas em 2026-11-08, abaixo.)
 
 ## Antes: rios, estradas, água e terreno no editor (2026-10-29)
 ## Etapa atual: valor ao vivo e faca por clique (2026-10-30, mesma rodada)
@@ -525,7 +541,7 @@ Decisão: [DR-31](../06-decisoes/registro-de-decisoes.md).
 
 **Não verificado:** a porta e o item **jogando de verdade na janela** com o teclado (só pelo motor de scripts com física e no teste do editor); uma execução isolada do teste de fumaça mostrou 9 de 10 e não vi qual (três repetições deram 10/10); leitor de tela.
 
-**Ainda falta:** prefabs do próprio projeto, porta animada.
+**Ainda falta:** porta animada. (Os prefabs do próprio projeto foram feitos em 2026-11-10, no topo.)
 
 ## Etapa atual: sistema de nós, passos N3 e N5 (2026-10-26)
 
@@ -544,7 +560,7 @@ A **tela de caixas e fios** (workspace **Lógica**, alternador Contorno | Caixas
 
 **Não verificado:** leitor de tela no canvas (o contorno continua sendo a interface acessível; **não ouvi** nenhum dos dois); grafo grande no canvas; o `F7` com teclado real.
 
-**Ainda falta:** prefabs do próprio projeto, porta animada, spawn de criaturas, pontuação do item (declarados fora do DR-31).
+**Ainda falta:** porta animada, spawn de criaturas, pontuação do item (declarados fora do DR-31); os prefabs do próprio projeto vieram depois, em 2026-11-10 (topo).
 
 ## Etapa atual: sistema de nós, passo N2 (2026-10-26)
 
@@ -611,7 +627,7 @@ Bloco 1 do pedido "pendências e fases 1 a 6": fecha o essencial da fase 3. Deci
 
 **Não verificado:** a sua sessão real; o jogo no `petunia run` numa janela; teclado e mouse reais no modo Jogar (só `xdotool` no display virtual); leitor de tela. (As alças para redimensionar colisões foram vistas e exercidas no display virtual: caixa de 1 m redimensionada para 2 m num arrasto, com centro movendo 0,5 m; `Ctrl+Z` reverteu.)
 
-**Ainda falta do bloco:** material por face; prefabs do próprio projeto. (O Event Sheet foi descartado pelo DR-30, que o trocou pelo sistema de nós; o módulo `grid`/A\\* foi feito em 2026-11-09; Porta, Item coletável e Ponto de nascimento foram feitos no passo N4, em 2026-10-26; as alças no viewport para redimensionar colisões foram feitas em 2026-11-08: as quatro faces de uma colisão caixa viram quadrados brancos, arrastar uma delas muda `size` e `center` juntos com o desfazer de um passo; colisões esféricas, em cápsula e convexas ficam para depois.)
+**Ainda falta do bloco:** material por face. (O Event Sheet foi descartado pelo DR-30, que o trocou pelo sistema de nós; o módulo `grid`/A\\* foi feito em 2026-11-09; Porta, Item coletável e Ponto de nascimento foram feitos no passo N4, em 2026-10-26; os prefabs do próprio projeto foram feitos em 2026-11-10, no topo; as alças no viewport para redimensionar colisões foram feitas em 2026-11-08: as quatro faces de uma colisão caixa viram quadrados brancos, arrastar uma delas muda `size` e `center` juntos com o desfazer de um passo; colisões esféricas, em cápsula e convexas ficam para depois.)
 
 ## Antes: contorno girado e colisão com física (2026-10-25)
 

@@ -4,7 +4,7 @@
 
 ## Resumo (TL;DR)
 
-São **50 decisões**. Estados possíveis:
+São **51 decisões**. Estados possíveis:
 
 - **HERDADA:** já decidida na especificação anterior (10/10/2026). Esta documentação **mantém**; só reabre com um ADR.
 - **PROPOSTA:** recomendação minha, aguardando você ou um experimento.
@@ -47,7 +47,7 @@ São **50 decisões**. Estados possíveis:
 | **DR-30** | Sistema de nós (no lugar do Event Sheet) | **ACEITA** (2026-10-26, "tudo aprovado"; N1 implementado) | Grafo tipado 1:1 com a API; compila para Aipo; vista em contorno completa como primeira entrega; tela de nós própria sem biblioteca nova |
 | **DR-31** | Prefabs embutidos e o nó Esperar | **ACEITA** (2026-10-26, "prossiga com a implementação"; N4 implementado) | Porta, Item coletável e Ponto de nascimento como moldes de linhas + grafos; `Esperar` compila para uma função por espera |
 | **DR-32** | Tela de caixas e fios e depuração (N3 e N5) | **ACEITA** (2026-10-26) | O canvas é mais uma vista do mesmo grafo, com as mesmas operações; o contorno continua sendo a interface acessível; marcas de depuração no compilador e "por que esta condição falhou?" |
-| **DR-24** | Workspaces e prioridades antes da API | **EM PARTE ACEITA** (andares, cavernas B) | Mapa (com Jogar), Pintura sem UV, Animação, Efeitos por nós; antes da API: andares, cavernas, terreno, prefabs, Jogar ([análise](../02-arquitetura/14-workspaces-e-prioridades.md)) |
+| **DR-24** | Workspaces e prioridades antes da API | **EM PARTE ACEITA** (andares, cavernas B, prefabs) | Mapa (com Jogar), Pintura sem UV, Animação, Efeitos por nós; antes da API: andares, cavernas, terreno, prefabs, Jogar ([análise](../02-arquitetura/14-workspaces-e-prioridades.md)) |
 | **DR-33** | Vários scripts por objeto | **ACEITA** (2026-10-27, "prossiga") | Primeiro script na linha legada; os seguintes são entidades-filhas com `owner` e `order`; todos rodam |
 | **DR-34** | Intercâmbio Aipo ⇄ IR | **EM IMPLEMENTAÇÃO** (2026-10-28, "continue") | IR com subconjunto explícito; recusa o resto com diagnóstico; uma VM por anexo |
 | **DR-35** | Schema de grafo v2 e migração | **DECIDIDA** (2026-10-28, "continue") | `SCHEMA_VERSION` 2; grafos v1 são lidos e migrados ao abrir; nós de laço e `with_index` |
@@ -62,6 +62,7 @@ São **50 decisões**. Estados possíveis:
 | **DR-43** | Vetores no script e câmera do personagem | **ACEITA** (2026-11-02, seu pedido) | `Vec3` e `Color` são structs da Aipo; `transform.position` devolve `.x` `.y` `.z`; a tabela `Camera` escolhe primeira pessoa, terceira, isométrica ou fixa |
 | **DR-44** | Interagir e vida | **ACEITA** (2026-11-02, continuação do kit) | Tabela `Interact` (raio, aviso) e tecla E; tabela `Health`; o evento `died` quando a vida chega a zero |
 | **DR-45** | Modo de edição e inspetor | **ACEITA** (2026-11-02, teste na janela) | Empurrar e extrudar só no modo edição; `Camera.mode` é uma lista, inclusive `custom`; interagir com um `Shot` olha por essa câmera |
+| **DR-51** | Prefabs do próprio projeto | **ACEITA** (2026-11-10) | `prefabs/<nome>.prefab.json` com as linhas do objeto e os anexos (colisões, scripts, traços); posição relativa e um desfazer ao criar; revisão é registro, cópias não são reescritas |
 
 ---
 
@@ -454,7 +455,7 @@ na pose de repouso).
 
 **Ainda proposta:** os workspaces (Pintura, Animação, Efeitos) e a ordem dos itens 3 a 8.
 
-**Já feito:** andares completos, tornar oco e cavar caixas, **cavernas completas** (blocos de 16³, 5 modos de pincel, caminho, gerador, fundir traços, facetada). Medido: uma pincelada passou de 54 a 1063 ms para ~1 ms. Detalhes: [workspaces e prioridades](../02-arquitetura/14-workspaces-e-prioridades.md).
+**Já feito:** andares completos, tornar oco e cavar caixas, **cavernas completas** (blocos de 16³, 5 modos de pincel, caminho, gerador, fundir traços, facetada) e **prefabs do próprio projeto** (`DR-51`). Medido: uma pincelada passou de 54 a 1063 ms para ~1 ms. Detalhes: [workspaces e prioridades](../02-arquitetura/14-workspaces-e-prioridades.md).
 
 ---
 
@@ -1191,6 +1192,39 @@ a prévia de `loop_cut`.
 **Não verificado:** a animação correndo na janela (o relógio do modo Jogar é o mesmo do passo de física, mas nenhuma captura mostra dois quadros diferentes no tempo) e a sessão real.
 
 **Reabrir se:** o jogo precisar escolher a animação por estado (entra uma tabela de estados + transições) ou de quadros de tamanho diferente do retângulo da folha (entra `frame_size` em pixels).
+
+---
+
+## DR-51 — Prefabs do próprio projeto · ACEITA (2026-11-10)
+
+**Pedido:** fechar o item “prefabs do próprio projeto” que o [estado da implementação](../05-roadmap/03-estado-da-implementacao.md) listava desde o `DR-31` como o que faltava do bloco de prefabs. O código já existia na `main` consolidada, sem decisão registrada.
+
+**O problema real (LOCAL).** O `prefab.spawn` só conhecia os quatro moldes embutidos (`door`, `pickup`, `spawn`, `player`), escritos no código; quem montava uma porta com colisão, um objeto com script ou uma peça esculpida não tinha como repetir o conjunto sem duplicar e depois editar cada cópia à mão. Duplicar (`Ctrl+D`) copia as linhas do objeto, mas não as **entidades que apontam para ele** (colisores nomeados, scripts extras, traços de escultura), que ficariam órfãs ou apontando para o original.
+
+**Opções**
+
+1. **Uma cena reduzida** (`scenes/<nome>.prefab.json`) lida pelo carregador de cena. Reaproveita o leitor, mas traz junto câmera, andares e o que mais a cena tiver; separar o subconjunto seria uma segunda regra de validação.
+2. **Uma tabela `Prefab` na cena** apontando para o arquivo. Cria estado de execução e duas fontes de verdade para o que é molde de edição; o Jogar e o `petunia run` passariam a carregar algo que não usam.
+3. **Um arquivo de texto em `prefabs/` com as mesmas linhas de uma entidade e os anexos** (escolhida): grava no mesmo formato de tabela da cena, sem carregador novo; colocar é um `world.batch` de `world.create`, um desfazer.
+
+**Decisão (opção 3), em partes**
+
+1. **Formato `prefabs/<nome>.prefab.json`**, texto e difável: `format: 1`, `name`, `revision` e `objects: [{rows, attachments}]`. `rows` é a tabela por nome (`Transform`, `Brush`, `Mesh`, `Health`…), igual à da cena; `attachments` é `[{table, reference, row}]`, e `reference` é a coluna que aponta para o objeto (`Collider` → `owner`, `SculptStroke` → `volume`, `Script` → `owner`).
+2. **A posição gravada vira zero.** O molde não guarda o lugar onde foi feito: ao criar, a posição é relativa ao ponto em frente à câmera, no andar atual (5 m), como os embutidos. Sem isso, um prefab salvo num canto do mapa sempre voltaria para lá.
+3. **Salvar é a seleção, com o que aponta para ela.** `prefab.save` grava o objeto selecionado; se a seleção for um colisor ou um script, grava o **dono**. Vão junto os colisores, os scripts extras (os que têm `owner` e `order`) e os traços de escultura. Mais de 128 anexos recusam com `PREFAB_TOO_BIG`; o arquivo é lido com teto de 4 MiB.
+4. **Nome seguro.** Letras, dígitos, `-`, `_` e `.`, até 60 caracteres; o resto vira `_`, e a pasta é resolvida com `resolve_inside` (nada de `..` nem caminho absoluto). O nome do arquivo é o nome do prefab; a interface mostra o nome limpo.
+5. **Revisão é registro, não atualização.** Salvar o mesmo nome de novo sobe `revision` no arquivo. Cópias já colocadas **nunca** são reescritas: mudar objetos que a pessoa já moveu precisa de decisão própria (o que fazer com posições, nomes e referências?). Por enquanto a revisão só aparece na lista e na mensagem.
+6. **Três portas, um caminho.** `prefab.save` grava; `prefab.spawn_project` cria pelo nome; e `prefab.spawn` aceita `id: "project:<nome>"`, que é o que a janela usa. `prefab.list` passa a trazer os embutidos com `kind: "builtin"` e os do projeto com `kind: "project"`, revisão, número de objetos e de anexos. A janela monta **Criar ▸ Prefab do projeto** ao abrir o submenu (arquivo salvo por fora aparece) e **Criar ▸ Salvar seleção como prefab…** abre o diálogo de nome.
+7. **Dados hostis são recusados, não adivinhados.** JSON inválido ou `format` de outra versão recusa com `PREFAB_FILE`; arquivo ausente, `PREFAB_UNKNOWN`; sem seleção, `PREFAB_NO_SELECTION`. Links simbólicos não são seguidos nem ao listar nem ao ler.
+8. **Nada de script novo em disco.** O prefab guarda o **anexo** de script (nome e ordem), não o texto do script: o arquivo continua sendo o de `scripts/`, um só. Apagar o script deixa o anexo apontando para um arquivo que não existe — o Project Doctor já avisa disso, como para qualquer anexo.
+
+**Fora desta etapa (declarado):** vários objetos num mesmo prefab (o formato já tem `objects`, o salvar grava um), atualizar as cópias já colocadas quando a revisão sobe, miniatura do prefab, prefab de terreno/caverna com geometria pesada e um painel próprio (o submenu de **Criar** basta).
+
+**Verificação:** 3 testes em `petunia_editor` (`a_saved_prefab_comes_back_with_its_colliders_and_one_undo`, `the_prefab_lands_in_front_of_the_camera_not_where_it_was_saved`, `saving_twice_bumps_the_revision_and_bad_files_are_refused`): a caixa com colisor volta com o colisor, `prefab.list` vê 5, criar é **um** desfazer, a cópia nasce longe do lugar onde foi salva, salvar de novo dá revisão 2, e JSON quebrado, nome desconhecido e falta de seleção são recusados com o código certo. O passo novo de `scripts/editor-smoke.sh` salva a caixa selecionada como `smoke`, cria de volta pelo submenu e confere o arquivo (posição zero, revisão 1) e a cópia na cena salva: **18/18** verificações no display virtual (2026-11-10).
+
+**Não verificado:** a janela na sua sessão real (tudo em display virtual); leitor de tela; um prefab com vários objetos, que o salvar ainda não produz; e a atualização de cópias existentes, que não existe por decisão.
+
+**Reabrir se:** o molde precisar guardar mais de um objeto, se a revisão tiver de alcançar as cópias já colocadas, ou se um prefab precisar levar os **arquivos** de script junto (projeto que compartilha prefab entre pastas).
 
 ---
 

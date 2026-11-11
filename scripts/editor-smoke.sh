@@ -8,6 +8,7 @@
 #   radial menu, duplicate, create a box, walk with the arrow keys, look around with the right button,
 #   go up a floor (creates the floors) and build a box there, come back down, create a cave and
 #   carve it with the sculpting tool, dig a tunnel with the path tool, save, open the history tab,
+#   save the selected object as a prefab of the project and create it back from the Criar menu,
 #   open the Código workspace (tab), create a script, type it (auto-indent) and save it,
 #   open the Lógica workspace (F7), create a node graph, add an event and an action from the palettes,
 #   wire an input to the event's dt and look at the generated code,
@@ -132,6 +133,21 @@ xdotool mousemove 990 431 click 1;               sleep 0.4   # pick component
 xdotool key 3;                                   sleep 0.4   # switch to face mode
 xdotool mousemove 990 431 click 1;               sleep 0.4   # pick component
 xdotool key Tab;                                 sleep 0.6   # exit Edit Mode (remains a mesh)
+# Prefabs of the project (DR-51): the selected mesh becomes prefabs/smoke.prefab.json and comes
+# back from Criar > Prefab do projeto. The menu is walked with Up, which is steadier than clicking:
+# the first Up lands on the last item (Sol), and eight presses reach Salvar seleção como prefab…
+# (Luz, Importar imagem, Importar modelo, aleatória, Caverna, Terreno), nine reach Prefab do projeto.
+xdotool key alt+c;                               sleep 0.6
+for _ in 1 2 3 4 5 6 7 8; do xdotool key Up; sleep 0.1; done
+xdotool key Return;                              sleep 0.8   # the name dialog
+xdotool type --delay 40 "smoke"; xdotool key Return; sleep 1.4
+# The modal dialog leaves the menu bar without focus: a click on the status bar gives it back
+# without changing the selection.
+xdotool mousemove 700 790 click 1;               sleep 0.4
+xdotool key alt+c;                               sleep 0.6
+for _ in 1 2 3 4 5 6 7 8 9; do xdotool key Up; sleep 0.1; done
+xdotool key Right;                               sleep 0.5   # "Prefab do projeto"
+xdotool key Return;                              sleep 1.0   # the only saved prefab: smoke
 xdotool key ctrl+s;                              sleep 0.6   # save the scene
 xdotool mousemove 385 649 click 1;               sleep 0.4   # open the history tab
 xdotool mousemove 599 17 click 1;                sleep 1.4   # the Código workspace tab (Cena | Código | Jogar)
@@ -176,7 +192,7 @@ fi
 
 # The gizmo drag must have moved crate #9 along X only, onto the 0.5 m grid.
 set +e
-python3 -I - "$output.scene.json" "$aipo_has_graph" <<'PY'
+python3 -I - "$output.scene.json" "$aipo_has_graph" "$workdir/sala" <<'PY'
 import json, sys
 scene = json.load(open(sys.argv[1]))
 crate = next(e for e in scene["entities"] if e["id"] == 9)
@@ -209,12 +225,32 @@ converted_to_mesh = any(
     for e in scene["entities"]
 )
 print("verificação: modo de edição converteu caixa para malha editável ->", "ok" if converted_to_mesh else "FALHOU")
+# Prefabs of the project (DR-51): the menu saved the selection as text with the position zeroed,
+# and created a copy back in the scene (the original mesh plus the copy).
+prefab_path = os.path.join(sys.argv[3], "prefabs", "smoke.prefab.json")
+prefab = json.load(open(prefab_path)) if os.path.exists(prefab_path) else {}
+objects = prefab.get("objects", [])
+prefab_ok = (
+    prefab.get("format") == 1
+    and prefab.get("name") == "smoke"
+    and prefab.get("revision") == 1
+    and len(objects) == 1
+    and "Mesh" in objects[0].get("rows", {})
+    and objects[0]["rows"]["Transform"]["position"] == {"x": 0.0, "y": 0.0, "z": 0.0}
+)
+print("verificação: prefab salvo em prefabs/smoke.prefab.json com a posição zerada ->", "ok" if prefab_ok else "FALHOU")
+mesh_copies = [
+    e for e in scene["entities"]
+    if e["rows"].get("Name", {}).get("text") == "Caixa" and "Mesh" in e["rows"]
+]
+prefab_spawned = len(mesh_copies) >= 2
+print(f"verificação: Criar > Prefab do projeto criou uma cópia na cena ({len(mesh_copies)} malhas 'Caixa') ->", "ok" if prefab_spawned else "FALHOU")
 hero_free = not any(e["rows"].get("Name", {}).get("text") == "Jogador" for e in scene["entities"]) and not any("Character" in e["rows"] for e in scene["entities"])
 print("verificação: Jogar (F6) e parar (Esc) não deixaram o herói de reserva na cena salva ->", "ok" if hero_free else "FALHOU")
 # Phase 2, below, proves the pNodes side. Here an Aipo project must not have produced a graph.
 no_graph_in_aipo = sys.argv[2] == "0"
 print("verificação: projeto Aipo não criou grafo (a aba Lógica não é oferecida) ->", "ok" if no_graph_in_aipo else "FALHOU")
-phase1_ok = moved and added and on_cursor and built_up and carved and dug and scripted and converted_to_mesh and hero_free and no_graph_in_aipo
+phase1_ok = moved and added and on_cursor and built_up and carved and dug and scripted and converted_to_mesh and prefab_ok and prefab_spawned and hero_free and no_graph_in_aipo
 sys.exit(0 if phase1_ok else 1)
 PY
 phase1_failed=$?
